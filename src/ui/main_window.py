@@ -4593,16 +4593,36 @@ class MangaOCRApp(QMainWindow):
 
         return enhancements
     
-    # [DIUBAH] Fungsi abstrak untuk memanggil AI
+    # [DIUBAH] Fungsi abstrak untuk memanggil AI dengan perulangan percobaan hingga 5x
     def translate_with_ai(self, text_to_translate, target_lang, provider, model_name, settings, is_enhanced=False, ocr_results=None):
-        if provider == 'Gemini':
-            return self.translate_with_gemini(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
-        elif provider == 'OpenAI':
-            return self.translate_with_openai(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
-        elif provider == 'OpenRouter':
-            model_info = self.AI_PROVIDERS.get('OpenRouter', {}).get(model_name, {})
-            return self.translate_with_openrouter(text_to_translate, target_lang, model_name, settings, model_info, is_enhanced, ocr_results)
-        return f"[ERROR: Unknown AI provider '{provider}']"
+        import time
+        max_attempts = 5
+        last_exc = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if provider == 'Gemini':
+                    result = self.translate_with_gemini(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
+                elif provider == 'OpenAI':
+                    result = self.translate_with_openai(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
+                elif provider == 'OpenRouter':
+                    model_info = self.AI_PROVIDERS.get('OpenRouter', {}).get(model_name, {})
+                    result = self.translate_with_openrouter(text_to_translate, target_lang, model_name, settings, model_info, is_enhanced, ocr_results)
+                else:
+                    return f"[ERROR: Unknown AI provider '{provider}']"
+
+                # Cek apakah hasil menunjukkan kegagalan/error
+                if isinstance(result, str) and any(err in result for err in ("[ERROR]", "[FAILED]", "[GEMINI ERROR]", "[GEMINI FAILED]", "[OPENAI ERROR]", "[OPENROUTER ERROR]", "[OPENROUTER REQUEST ERROR")):
+                    raise Exception(f"AI Provider error: {result}")
+                
+                return result
+            except Exception as e:
+                last_exc = e
+                print(f"[AI TRANSLATE] Percobaan {attempt}/{max_attempts} gagal untuk provider {provider}: {e}")
+                if attempt < max_attempts:
+                    time.sleep(1.0)
+        
+        # Setelah 5x gagal, lemparkan exception agar penangan fallback di worker terpicu
+        raise Exception(f"Seluruh {max_attempts} percobaan terjemahan AI gagal. Error terakhir: {last_exc}")
     
     # [DIUBAH] Fungsi terjemahan Gemini yang dimodifikasi
     def translate_with_gemini(

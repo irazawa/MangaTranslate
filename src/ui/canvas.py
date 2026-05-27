@@ -764,6 +764,25 @@ class SelectableImageLabel(QLabel):
         self.panning = False
         self.pan_last_mouse_pos = QPoint()
 
+    def restore_active_cursor(self):
+        try:
+            mode = self.get_selection_mode()
+            manual_polygon = "Manual Text (Pen)" in mode
+            pen_mode = (mode == "Pen Tool") or manual_polygon
+            rect_mode = ("Rect" in mode or "Oval" in mode) and not manual_polygon
+            transform_mode = (mode == "Transform (Hand)")
+            
+            if pen_mode:
+                if not getattr(self.main_window, 'pen_cursor', None):
+                    self.main_window.pen_cursor = self.main_window.create_pen_cursor()
+                self.setCursor(self.main_window.pen_cursor)
+            elif transform_mode:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.CrossCursor if rect_mode else Qt.PointingHandCursor)
+        except Exception:
+            self.setCursor(Qt.CrossCursor)
+
     def _set_active_transform(self, transform_data):
         self.active_transform = transform_data
         try:
@@ -1655,7 +1674,7 @@ class SelectableImageLabel(QLabel):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton and getattr(self, 'panning', False):
             self.panning = False
-            self.setCursor(Qt.CrossCursor)
+            self.restore_active_cursor()
             event.accept()
             return
 

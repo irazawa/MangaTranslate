@@ -19,3 +19,8 @@ __pycache__/
 # User custom/local files
 .env
 .env.*
+
+# Local temporary folders
+temp/
+src/ui/temp/
+

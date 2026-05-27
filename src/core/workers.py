@@ -371,7 +371,10 @@ class QueueProcessorWorker(QObject):
                 return processed_text, None
             
             # Dapatkan hasil terjemahan dari AI yang dipilih (Gemini atau OpenAI)
-            translated_text = self.main_app.translate_with_ai(processed_text, settings['target_lang'], provider, model_name, settings)
+            try:
+                translated_text = self.main_app.translate_with_ai(processed_text, settings['target_lang'], provider, model_name, settings)
+            except Exception as exc:
+                translated_text = f"[AI TRANSLATION FAILED: {exc}]"
             return processed_text, translated_text
 
         # Opsi 2: DeepL-Only Translate
@@ -414,15 +417,18 @@ class QueueProcessorWorker(QObject):
             return original_text, None
 
         # [DIUBAH] Gunakan fungsi abstrak translate_with_ai
-        translated_text = self.main_app.translate_with_ai(
-            original_text, 
-            settings['target_lang'], 
-            provider, 
-            model_name, 
-            settings,
-            is_enhanced=True, 
-            ocr_results={'manga_ocr': manga_ocr_text, 'tesseract': tesseract_text}
-        )
+        try:
+            translated_text = self.main_app.translate_with_ai(
+                original_text, 
+                settings['target_lang'], 
+                provider, 
+                model_name, 
+                settings,
+                is_enhanced=True, 
+                ocr_results={'manga_ocr': manga_ocr_text, 'tesseract': tesseract_text}
+            )
+        except Exception as exc:
+            translated_text = f"[AI TRANSLATION FAILED: {exc}]"
         return original_text, translated_text
 
 
