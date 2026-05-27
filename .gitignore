@@ -1,0 +1,21 @@
+# Virtual environment
+venv/
+
+# Local settings and keys
+settings.json
+
+# Manga images/data directory
+Manga/
+
+# Local cache
+.cache/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# User custom/local files
+.env
+.env.*
