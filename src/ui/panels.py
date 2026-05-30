@@ -486,6 +486,9 @@ class APIManagerPanel(QWidget):
         for provider, widgets in self.ocr_provider_widgets.items():
             provider_cfg = ocr_settings.setdefault(provider, {})
             url = widgets['url_edit'].text().strip()
+            if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+                url = "https://" + url[7:]
+                widgets['url_edit'].setText(url)
             api_key = widgets['api_key_edit'].text().strip()
             provider_cfg['url'] = url
             provider_cfg['api_key'] = api_key
@@ -737,7 +740,11 @@ class OpenRouterSettingsPanel(QWidget):
         save_settings(SETTINGS)
 
     def export_settings(self):
-        self.data['url'] = self.url_edit.text().strip() or "https://openrouter.ai/api/v1/chat/completions"
+        url = self.url_edit.text().strip() or "https://openrouter.ai/api/v1/chat/completions"
+        if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+            url = "https://" + url[7:]
+            self.url_edit.setText(url)
+        self.data['url'] = url
         self.data['api_key'] = self.api_key_edit.text().strip()
         try:
             self.data['timeout'] = int(self.timeout_spin.value())

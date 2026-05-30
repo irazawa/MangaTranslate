@@ -197,7 +197,7 @@ class QueueProcessorWorker(QObject):
                 if not job:
                     break  # hentikan worker jika tidak ada pekerjaan
 
-                self.signals.queue_status.emit(len(self.main_app.processing_queue))
+                self.signals.queue_status.emit(self.main_app.get_queue_length())
 
                 image_path = job['image_path']
                 cropped_cv_img = job['cropped_cv_img']
@@ -208,18 +208,15 @@ class QueueProcessorWorker(QObject):
                 original_text, translated_text = self.process_job(cropped_cv_img, settings, pre_detected_text)
 
                 if translated_text:
-                    new_area = self.main_app._create_typeset_area(
-                        job['rect'],
-                        translated_text,
-                        settings,
-                        polygon=job.get('polygon'),
-                        original_text=original_text
-                    )
-                    if settings.get('ai_model_label'):
-                        if not isinstance(new_area.review_notes, dict):
-                            new_area.review_notes = {}
-                        new_area.review_notes['ai_model'] = settings.get('ai_model_label')
-                    self.signals.job_complete.emit(image_path, new_area, original_text, translated_text)
+                    area_payload = {
+                        'rect': job['rect'],
+                        'text': translated_text,
+                        'settings': settings,
+                        'polygon': job.get('polygon'),
+                        'original_text': original_text,
+                        'ai_model_label': settings.get('ai_model_label')
+                    }
+                    self.signals.job_complete.emit(image_path, area_payload, original_text, translated_text)
 
             except Exception as e:
                 print(f"Error in Worker {self.worker_id}: {e}")
@@ -632,27 +629,15 @@ Your final output must ONLY be the translated {target_lang} text, with each tran
                 if self.settings.get('safe_mode') and translated_text:
                     translated_text = self.main_app.apply_safe_mode(translated_text)
                 if translated_text and "[N/A]" not in translated_text:
-                    new_area = TypesetArea(
-                        job['rect'], translated_text,
-                        self.settings['font'], self.settings['color'],
-                        job.get('polygon'),
-                        orientation=self.settings.get('orientation_mode', 'horizontal'),
-                        effect=self.settings.get('text_effect', 'none'),
-                        effect_intensity=self.settings.get('effect_intensity', 20.0),
-                        bezier_points=self.settings.get('bezier_points'),
-                        bubble_enabled=self.settings.get('create_bubble', False),
-                        alignment=self.settings.get('alignment', 'center'),
-                        line_spacing=self.settings.get('line_spacing', 1.1),
-                        char_spacing=self.settings.get('char_spacing', 100.0),
-                        margins=self.settings.get('margins', {'top': 0, 'right': 0, 'bottom': 0, 'left': 0}),
-                        original_text=ocr_texts[i],
-                        translation_style=self.settings.get('translation_style', '')
-                    )
-                    if self.settings.get('ai_model_label'):
-                        if not isinstance(new_area.review_notes, dict):
-                            new_area.review_notes = {}
-                        new_area.review_notes['ai_model'] = self.settings.get('ai_model_label')
-                    self.signals.batch_job_complete.emit(image_path, new_area, ocr_texts[i], translated_text)
+                    area_payload = {
+                        'rect': job['rect'],
+                        'text': translated_text,
+                        'settings': self.settings,
+                        'polygon': job.get('polygon'),
+                        'original_text': ocr_texts[i],
+                        'ai_model_label': self.settings.get('ai_model_label')
+                    }
+                    self.signals.batch_job_complete.emit(image_path, area_payload, ocr_texts[i], translated_text)
 
         except Exception as e:
             self.signals.error.emit(
@@ -661,12 +646,14 @@ Your final output must ONLY be the translated {target_lang} text, with each tran
 
 # --- Baru: Worker untuk Batch Save ---
 class BatchSaveWorker(QObject):
-    def __init__(self, main_app, files_to_save, fmt='PNG', quality=-1):
+    def __init__(self, main_app, files_to_save, fmt='PNG', quality=-1, settings=None, typeset_data=None):
         super().__init__()
         self.main_app = main_app
         self.files_to_save = files_to_save
         self.fmt = fmt.upper()
         self.quality = quality
+        self.settings = settings
+        self.typeset_data = typeset_data if typeset_data is not None else {}
         self.signals = BatchSaveSignals()
         self.is_cancelled = False
 
@@ -696,7 +683,7 @@ class BatchSaveWorker(QObject):
 
                 # Dapatkan data typeset untuk gambar ini
                 data_key = self.main_app.get_current_data_key(path=file_path)
-                typeset_data = self.main_app.all_typeset_data.get(data_key, {'areas': []})
+                typeset_data = self.typeset_data.get(data_key, {'areas': []})
                 areas = typeset_data['areas']
 
                 if not areas:
@@ -708,7 +695,7 @@ class BatchSaveWorker(QObject):
                     painter.begin(qimage)
                     for area in areas:
                         # Panggil draw_single_area dengan flag for_saving=True untuk mencegah pembaruan UI
-                        self.main_app.draw_single_area(painter, area, pil_image, for_saving=True)
+                        self.main_app.draw_single_area(painter, area, pil_image, for_saving=True, settings=self.settings)
                 finally:
                     try:
                         painter.end()

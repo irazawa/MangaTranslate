@@ -859,7 +859,7 @@ class SelectableImageLabel(QLabel):
         image_point = self._widget_point_to_image(pos)
         if image_point is None:
             return None
-        for area in reversed(getattr(self.main_window, 'typeset_areas', [])):
+        for area in reversed(list(getattr(self.main_window, 'typeset_areas', []))):
             if not getattr(area, 'visible', True):
                 continue
             if self._point_in_area(area, image_point):
@@ -953,7 +953,7 @@ class SelectableImageLabel(QLabel):
         if not self.transform_mode:
             return
         area = getattr(self.main_window, 'selected_typeset_area', None)
-        if not area or area not in getattr(self.main_window, 'typeset_areas', []) or not getattr(area, 'visible', True):
+        if not area or area not in list(getattr(self.main_window, 'typeset_areas', [])) or not getattr(area, 'visible', True):
             return
         polygon = self._area_polygon_widget(area)
         if len(polygon) < 4:
@@ -1375,7 +1375,7 @@ class SelectableImageLabel(QLabel):
             super().wheelEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        if not self.main_window.original_pixmap: return
+        if not self.main_window or not getattr(self.main_window, 'original_pixmap', None): return
         try:
             if getattr(self.main_window, 'dispatch_mouse_shortcut', None):
                 if self.main_window.dispatch_mouse_shortcut('double', event.button()):
@@ -1386,13 +1386,13 @@ class SelectableImageLabel(QLabel):
         unzoomed_pos = self.main_window.unzoom_coords(event.pos(), as_point=True)
         if unzoomed_pos:
             posf = QPointF(unzoomed_pos) if isinstance(unzoomed_pos, QPoint) else unzoomed_pos
-            for area in reversed(self.main_window.typeset_areas):
+            for area in reversed(list(self.main_window.typeset_areas)):
                 if self._point_in_area(area, posf):
                     self.areaDoubleClicked.emit(area)
                     return
 
     def mousePressEvent(self, event):
-        if not self.main_window.original_pixmap: return
+        if not self.main_window or not getattr(self.main_window, 'original_pixmap', None): return
 
         # 1. Ctrl + Middle Click -> Save typeset image
         if event.button() == Qt.MiddleButton and event.modifiers() == Qt.ControlModifier:
@@ -1631,7 +1631,7 @@ class SelectableImageLabel(QLabel):
                 new_hover_area = None
                 if unzoomed_pos:
                     posf = QPointF(unzoomed_pos) if isinstance(unzoomed_pos, QPoint) else unzoomed_pos
-                    for area in reversed(self.main_window.typeset_areas):
+                    for area in reversed(list(self.main_window.typeset_areas)):
                         if not getattr(area, 'visible', True):
                             continue
                         if self._point_in_area(area, posf):
@@ -1728,7 +1728,7 @@ class SelectableImageLabel(QLabel):
                     self.update()
     def paintEvent(self, event):
         super().paintEvent(event)
-        if not self.main_window.original_pixmap: return
+        if not self.main_window or not getattr(self.main_window, 'original_pixmap', None): return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
@@ -1872,7 +1872,7 @@ class SelectableImageLabel(QLabel):
 
         # Draw override or lock badges for areas that are locked
         try:
-            for area in (self.main_window.typeset_areas or []):
+            for area in list(self.main_window.typeset_areas or []):
                 if not getattr(area, 'visible', True):
                     continue
                 is_locked = getattr(area, 'locked', False)
@@ -1911,7 +1911,7 @@ class SelectableImageLabel(QLabel):
             pass
 
         selected_area = getattr(self.main_window, 'selected_typeset_area', None)
-        if selected_area and selected_area in getattr(self.main_window, 'typeset_areas', []) and getattr(selected_area, 'visible', True):
+        if selected_area and selected_area in list(getattr(self.main_window, 'typeset_areas', [])) and getattr(selected_area, 'visible', True):
             try:
                 polygon_points = self._area_polygon_widget(selected_area)
                 if polygon_points:

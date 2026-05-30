@@ -148,12 +148,24 @@ def default_settings() -> dict:
 
 
 def save_settings(settings: dict, path: str = SETTINGS_PATH):
+    tmp_path = path + '.tmp'
     try:
         # Encrypt API keys before writing to disk
         encrypted = encrypt_settings_keys(settings)
-        with open(path, 'w', encoding='utf-8') as fh:
+        with open(tmp_path, 'w', encoding='utf-8') as fh:
             json.dump(encrypted, fh, ensure_ascii=False, indent=2)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        os.replace(tmp_path, path)
     except Exception as e:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
         print(f"Failed to save settings.json: {e}", file=sys.stderr)
 
 

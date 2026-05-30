@@ -4,6 +4,13 @@
 # ==============================
 import os
 import sys
+
+# Tambahkan folder bin ke environment PATH agar system dependencies (FFmpeg & Deno) terdeteksi otomatis
+root_dir = os.path.dirname(os.path.abspath(__file__))
+bin_dir = os.path.join(root_dir, "bin")
+if os.path.exists(bin_dir) and bin_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
 import time
 import json
 import re

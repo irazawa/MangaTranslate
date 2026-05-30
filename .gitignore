@@ -3,6 +3,7 @@ venv/
 
 # Local settings and keys
 settings.json
+.secret.key
 
 # Manga images/data directory
 Manga/
@@ -24,3 +25,11 @@ __pycache__/
 temp/
 src/ui/temp/
 
+# Large binary tools and executables
+bin/*.exe
+bin/*.wav
+
+# Data assets and logs
+src/data/video/
+src/data/chat_history/
+src/data/music/

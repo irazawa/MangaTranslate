@@ -3461,8 +3461,8 @@ class TesseractInstallWorker(QThread):
         try:
             if sys.platform.startswith('win'):
                 self.progress.emit("Running winget install UB-Mannheim.TesseractOCR...")
-                cmd = "winget install UB-Mannheim.TesseractOCR --accept-source-agreements --accept-package-agreements --silent"
-                proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                cmd = ["winget", "install", "UB-Mannheim.TesseractOCR", "--accept-source-agreements", "--accept-package-agreements", "--silent"]
+                proc = subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 stdout, stderr = proc.communicate()
                 
                 default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"

@@ -54,7 +54,7 @@ class ResultCache:
     def compute_hash(img_bytes):
         if not img_bytes:
             return ''
-        return hashlib.md5(img_bytes).hexdigest()
+        return hashlib.sha256(img_bytes).hexdigest()
 
     def get(self, image_hash):
         if not image_hash:

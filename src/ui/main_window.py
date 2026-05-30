@@ -8,7 +8,6 @@ import time
 import json
 import re
 import hashlib
-import pickle
 import configparser
 import base64
 from datetime import date
@@ -79,6 +78,8 @@ from src.utils.geometry import *
 from src.core.models import EnhancedResult
 
 class MangaOCRApp(QMainWindow):
+    api_cost_signal = pyqtSignal(int, int, str, str)
+    snippet_translated_signal = pyqtSignal()
     DARK_THEME_STYLESHEET = """
         QMainWindow, QDialog {
             background-color: #090a0f;
@@ -335,6 +336,9 @@ class MangaOCRApp(QMainWindow):
             
     def __init__(self):
         super().__init__()
+        self.usage_mutex = QMutex(QMutex.Recursive)
+        self.api_cost_signal.connect(self.add_api_cost)
+        self.snippet_translated_signal.connect(self.increment_translated_count)
         self._action_shortcut_map = {}
         self._shortcut_callbacks = {}
         self._active_shortcuts = {}
@@ -581,7 +585,7 @@ class MangaOCRApp(QMainWindow):
         self.pdf_document = None
         self.current_pdf_page = -1
 
-        self.usage_file_path = os.path.join(os.path.expanduser("~"), "manga_ocr_usage_v16.dat")
+        self.usage_file_path = os.path.join(os.path.expanduser("~"), "manga_ocr_usage_v16.json")
         self.usage_data = {}
         self.api_limit_timer = QTimer(self)
         self.api_limit_timer.setInterval(1000)
@@ -968,7 +972,13 @@ class MangaOCRApp(QMainWindow):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(2, 0)
-        self.splitter.setSizes([260, 960, 420])
+
+        # Load saved splitter sizes if present
+        saved_sizes = SETTINGS.get('splitter_sizes')
+        if saved_sizes and len(saved_sizes) == 3:
+            self.splitter.setSizes(saved_sizes)
+        else:
+            self.splitter.setSizes([260, 960, 420])
 
         main_layout.addWidget(self.splitter)
         self._apply_right_panel_styles()
@@ -997,17 +1007,45 @@ class MangaOCRApp(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
         # Add tabs in preferred order
+        # Import chatbot widget here to avoid circular import at module level
+        try:
+            from src.ui.chat_widget import AIChatWidget
+            self._chat_widget = AIChatWidget(main_app=self, parent=None)
+            _chat_widget_ok = True
+        except Exception as _chat_err:
+            print(f"[ChatWidget] Failed to load: {_chat_err}")
+            self._chat_widget = None
+            _chat_widget_ok = False
+
         tab_order = [
             (self._create_translate_tab(), "Translate"),
+        ]
+        if self._chat_widget is not None:
+            tab_order.append((self._chat_widget, "🤖 AI Chat / Video"))
+            
+        tab_order.extend([
             (self._create_typeset_tab(), "Typeset"),
             (self._create_layers_tab(), "Layers"),
             (self._create_cleanup_tab(), "Cleanup"),
             (self._create_history_tab(), "History"),
             (self._create_scene_tab(), "Scenes"),
             (self._create_ai_hardware_tab(), "AI Hardware"),
-        ]
+        ])
+        
         for widget, label in tab_order:
-            self.tabs.addTab(widget, label)
+            if widget == self._chat_widget:
+                # Add AI Chat/Video directly (it manages its own scroll)
+                self.tabs.addTab(widget, label)
+            elif not isinstance(widget, QScrollArea):
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.NoFrame)
+                scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+                scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                scroll.setWidget(widget)
+                self.tabs.addTab(scroll, label)
+            else:
+                self.tabs.addTab(widget, label)
 
         # Tidy tab bar appearance
         tab_bar = self.tabs.tabBar()
@@ -1050,8 +1088,8 @@ class MangaOCRApp(QMainWindow):
 
         # Use a vertical splitter so the user gets 70% tabs and 30% actions proportionally, and can still drag it.
         from PyQt5.QtWidgets import QSplitter
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.addWidget(tabs_frame)
+        self.right_splitter = QSplitter(Qt.Vertical)
+        self.right_splitter.addWidget(tabs_frame)
         
         # Expandable bottom area inside scroll area so controls remain accessible on small screens
         bottom_scroll = QScrollArea()
@@ -1149,12 +1187,23 @@ class MangaOCRApp(QMainWindow):
         bottom_container.setLayout(bottom_layout)
         bottom_scroll.setWidget(bottom_container)
         
-        right_splitter.addWidget(bottom_scroll)
-        right_splitter.setStretchFactor(0, 5)
-        right_splitter.setStretchFactor(1, 5)
-        right_splitter.setSizes([500, 500]) # Fallback ratio
+        # Remove size limits so the splitter can drag all the way up and down without restriction
+        tabs_frame.setMinimumHeight(0)
+        self.tabs.setMinimumHeight(0)
+        bottom_scroll.setMinimumHeight(0)
+        
+        self.right_splitter.addWidget(bottom_scroll)
+        self.right_splitter.setStretchFactor(0, 5)
+        self.right_splitter.setStretchFactor(1, 5)
 
-        main_layout.addWidget(right_splitter, 1)
+        # Load saved right splitter sizes if present
+        saved_right_sizes = SETTINGS.get('right_splitter_sizes')
+        if saved_right_sizes and len(saved_right_sizes) == 2:
+            self.right_splitter.setSizes(saved_right_sizes)
+        else:
+            self.right_splitter.setSizes([500, 500]) # Fallback ratio
+
+        main_layout.addWidget(self.right_splitter, 1)
 
         return main_layout
 
@@ -1596,7 +1645,7 @@ class MangaOCRApp(QMainWindow):
         self.layers_list_widget.blockSignals(True)
         self.layers_list_widget.clear()
         
-        for idx, area in enumerate(self.typeset_areas):
+        for idx, area in enumerate(list(self.typeset_areas)):
             # Create a list item
             item = QListWidgetItem()
             item.setSizeHint(QSize(100, 48))
@@ -4109,6 +4158,12 @@ class MangaOCRApp(QMainWindow):
         self.ai_model_combo.blockSignals(False)
         if self.ai_model_combo.count() > 0 and self.ai_model_combo.currentIndex() < 0:
             self.ai_model_combo.setCurrentIndex(0)
+        # Also refresh the chatbot model list so OpenRouter models appear there
+        try:
+            if getattr(self, '_chat_widget', None) is not None:
+                self._chat_widget.refresh_models()
+        except Exception:
+            pass
 
     def _load_openrouter_models(self):
         translate_cfg = SETTINGS.get('translate', {})
@@ -4259,9 +4314,10 @@ class MangaOCRApp(QMainWindow):
         self._manga_ocr_installer_worker = worker
 
     # [BARU] Inisialisasi on-demand untuk model inpainting
-    def initialize_inpaint_engine(self):
+    def initialize_inpaint_engine(self, settings=None):
         """Menginisialisasi engine inpainting LaMa yang dipilih."""
-        settings = self.get_current_settings()
+        if settings is None:
+            settings = self.get_current_settings()
         model_key = settings.get('inpaint_model_key')
 
         # Jika pengguna memilih mode OpenCV (atau tidak memilih model LaMa sama sekali),
@@ -4287,13 +4343,15 @@ class MangaOCRApp(QMainWindow):
             self.current_inpaint_model_key = None
             return
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.statusBar().showMessage(f"Initializing inpainting model: {model_key}...")
+        is_gui_thread = (QThread.currentThread() == self.thread())
+        if is_gui_thread:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.statusBar().showMessage(f"Initializing inpainting model: {model_key}...")
         
         try:
             # Tentukan device (CPU/GPU)
-            use_gpu = self.use_gpu_checkbox.isChecked() and self.is_gpu_available
-            device = "cuda" if use_gpu else "cpu"
+            use_gpu = settings.get('use_gpu', False)
+            device = "cuda" if use_gpu and self.is_gpu_available else "cpu"
             
             # Inisialisasi model manager
             from lama_cleaner.model_manager import ModelManager
@@ -4320,7 +4378,10 @@ class MangaOCRApp(QMainWindow):
             # Bungkus model menjadi callable yang selalu mengembalikan PIL.Image
             self.inpaint_model = lambda pil_img, pil_mask: self._run_lama_inpaint(loaded_model, pil_img, pil_mask)
             self.current_inpaint_model_key = model_key
-            self.statusBar().showMessage(f"Inpainting model {model_key} initialized on {device.upper()}.", 3000)
+            if is_gui_thread:
+                self.statusBar().showMessage(f"Inpainting model {model_key} initialized on {device.upper()}.", 3000)
+            else:
+                print(f"Inpainting model {model_key} initialized on {device.upper()} (background thread).")
             
         except Exception as e:
             print(f"Error initializing inpainting model {model_key}: {e}")
@@ -4328,7 +4389,8 @@ class MangaOCRApp(QMainWindow):
             self.current_inpaint_model_key = None
             
         finally:
-            QApplication.restoreOverrideCursor()
+            if is_gui_thread:
+                QApplication.restoreOverrideCursor()
 
     def _run_lama_inpaint(self, model, pil_image, pil_mask):
         """
@@ -4409,43 +4471,52 @@ class MangaOCRApp(QMainWindow):
             print(f"Error running inpaint model: {e}")
             return None
 
+    def increment_translated_count(self):
+        self.translated_count += 1
+        if hasattr(self, "translated_label"):
+            self.translated_label.setText(f"Translated Snippets: {self.translated_count}")
+
     def add_api_cost(self, input_tokens, output_tokens, provider, model_name):
         """
         Hitung biaya API berdasarkan jumlah token input/output.
         Update juga info token real-time & akumulasi.
         """
-        provider_models = self.AI_PROVIDERS.get(provider, {})
-        model_info = provider_models.get(model_name, {})
-        pricing = model_info.get('pricing', {'input': 0.0, 'output': 0.0})
-        # Hitung biaya total (USD)
-        cost = (input_tokens * pricing['input']) + (output_tokens * pricing['output'])
-        self.total_cost += cost
+        self.usage_mutex.lock()
+        try:
+            provider_models = self.AI_PROVIDERS.get(provider, {})
+            model_info = provider_models.get(model_name, {})
+            pricing = model_info.get('pricing', {'input': 0.0, 'output': 0.0})
+            # Hitung biaya total (USD)
+            cost = (input_tokens * pricing['input']) + (output_tokens * pricing['output'])
+            self.total_cost += cost
 
-        # ?? Update akumulasi token
-        if not hasattr(self, "total_input_tokens"):
-            self.total_input_tokens = 0
-        if not hasattr(self, "total_output_tokens"):
-            self.total_output_tokens = 0
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
+            # ?? Update akumulasi token
+            if not hasattr(self, "total_input_tokens"):
+                self.total_input_tokens = 0
+            if not hasattr(self, "total_output_tokens"):
+                self.total_output_tokens = 0
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
 
-        # ?? Update status detail
-        self.provider_label.setText(f"Provider: {provider}")
-        model_display = model_info.get('display') or model_info.get('name') or model_name
-        self.model_label.setText(f"Model: {model_display}")
-        self.input_tokens_label.setText(
-            f"Input Tokens: {input_tokens:,} (Total: {self.total_input_tokens:,})"
-        )
-        self.output_tokens_label.setText(
-            f"Output Tokens: {output_tokens:,} (Total: {self.total_output_tokens:,})"
-        )
-        self.rate_label_input.setText(f"Rate Input: ${pricing['input']:.9f} / token")
-        self.rate_label_output.setText(f"Rate Output: ${pricing['output']:.9f} / token")
+            # ?? Update status detail
+            self.provider_label.setText(f"Provider: {provider}")
+            model_display = model_info.get('display') or model_info.get('name') or model_name
+            self.model_label.setText(f"Model: {model_display}")
+            self.input_tokens_label.setText(
+                f"Input Tokens: {input_tokens:,} (Total: {self.total_input_tokens:,})"
+            )
+            self.output_tokens_label.setText(
+                f"Output Tokens: {output_tokens:,} (Total: {self.total_output_tokens:,})"
+            )
+            self.rate_label_input.setText(f"Rate Input: ${pricing['input']:.9f} / token")
+            self.rate_label_output.setText(f"Rate Output: ${pricing['output']:.9f} / token")
 
-        # Update tampilan cost
-        self.update_cost_display()
-        # Simpan ke file/log
-        self.save_usage_data()
+            # Update tampilan cost
+            self.update_cost_display()
+            # Simpan ke file/log
+            self.save_usage_data()
+        finally:
+            self.usage_mutex.unlock()
 
 
     def update_cost_display(self):
@@ -4614,6 +4685,18 @@ class MangaOCRApp(QMainWindow):
                 if isinstance(result, str) and any(err in result for err in ("[ERROR]", "[FAILED]", "[GEMINI ERROR]", "[GEMINI FAILED]", "[OPENAI ERROR]", "[OPENROUTER ERROR]", "[OPENROUTER REQUEST ERROR")):
                     raise Exception(f"AI Provider error: {result}")
                 
+                # Pasca-proses: Hapus tanda titik tunggal di akhir baris/kalimat agar tidak kelihatan seperti hasil AI kaku
+                if isinstance(result, str) and result:
+                    processed_lines = []
+                    for line in result.splitlines():
+                        stripped = line.rstrip()
+                        if stripped.endswith('。'):
+                            stripped = stripped[:-1].rstrip()
+                        elif stripped.endswith('.') and not stripped.endswith('..'):
+                            stripped = stripped[:-1].rstrip()
+                        processed_lines.append(stripped)
+                    result = '\n'.join(processed_lines)
+                
                 return result
             except Exception as e:
                 last_exc = e
@@ -4701,12 +4784,12 @@ class MangaOCRApp(QMainWindow):
             )
 
             if response.parts:
-                self.add_api_cost(len(prompt), len(response.text), 'Gemini', model_name)
+                if hasattr(self, "api_cost_signal"):
+                    self.api_cost_signal.emit(len(prompt), len(response.text), 'Gemini', model_name)
 
                 # ? Update counter
-                self.translated_count += 1
-                if hasattr(self, "translated_label"):
-                    self.translated_label.setText(f"Translated Snippets: {self.translated_count}")
+                if hasattr(self, "snippet_translated_signal"):
+                    self.snippet_translated_signal.emit()
 
                 return response.text.strip()
             return "[GEMINI FAILED]"
@@ -4829,13 +4912,12 @@ class MangaOCRApp(QMainWindow):
             if hasattr(response, "usage"):
                 in_tokens = response.usage.prompt_tokens
                 out_tokens = response.usage.completion_tokens
-                if hasattr(self, "add_api_cost"):
-                    self.add_api_cost(in_tokens, out_tokens, "OpenAI", model_name)
+                if hasattr(self, "api_cost_signal"):
+                    self.api_cost_signal.emit(in_tokens, out_tokens, "OpenAI", model_name)
 
             # ? Update counter
-            self.translated_count += 1
-            if hasattr(self, "translated_label"):
-                self.translated_label.setText(f"Translated Snippets: {self.translated_count}")
+            if hasattr(self, "snippet_translated_signal"):
+                self.snippet_translated_signal.emit()
 
             return output_text or ""
 
@@ -4869,6 +4951,8 @@ class MangaOCRApp(QMainWindow):
             return "[OPENROUTER API KEY NOT CONFIGURED]"
 
         url = provider_cfg.get('url', '').strip() or "https://openrouter.ai/api/v1/chat/completions"
+        if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+            url = "https://" + url[7:]
 
         # --- Dynamic prompt ---
         mode = settings.get('mode') if settings else None
@@ -4951,7 +5035,8 @@ class MangaOCRApp(QMainWindow):
             return "[OPENROUTER ERROR: Empty response]"
 
         usage = data.get('usage') or {}
-        self.add_api_cost(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), 'OpenRouter', model_id)
+        if hasattr(self, "api_cost_signal"):
+            self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), 'OpenRouter', model_id)
         return output_text.strip()
 
     def apply_safe_mode(self, text: str) -> str:
@@ -5077,11 +5162,24 @@ class MangaOCRApp(QMainWindow):
             thread.wait()
             self.update_active_workers_label()
 
-    def manage_worker_pool(self):
+    def get_queue_length(self):
         self.queue_mutex.lock()
-        queue_size = len(self.processing_queue)
-        self.queue_mutex.unlock()
+        try:
+            return len(self.processing_queue)
+        finally:
+            self.queue_mutex.unlock()
 
+    def add_job_to_queue(self, job):
+        self.queue_mutex.lock()
+        try:
+            self.processing_queue.append(job)
+            count = len(self.processing_queue)
+        finally:
+            self.queue_mutex.unlock()
+        self.update_queue_status(count)
+
+    def manage_worker_pool(self):
+        queue_size = self.get_queue_length()
         active_workers = len(self.worker_pool)
 
         if queue_size > 0 and active_workers == 0:
@@ -5091,11 +5189,12 @@ class MangaOCRApp(QMainWindow):
 
     def get_job_from_queue(self):
         self.queue_mutex.lock()
-        job = None
-        if self.processing_queue:
-            job = self.processing_queue.pop(0)
-        self.queue_mutex.unlock()
-        return job
+        try:
+            if self.processing_queue:
+                return self.processing_queue.pop(0)
+            return None
+        finally:
+            self.queue_mutex.unlock()
 
     def on_queue_job_complete(self, image_path, new_area, original_text, translated_text):
         self.ui_update_mutex.lock()
@@ -5118,18 +5217,38 @@ class MangaOCRApp(QMainWindow):
                 return
 
             current_key = self.get_current_data_key()
+            
+            # Convert dictionary payloads to TypesetArea objects safely on GUI thread
+            converted_queue = []
+            for image_path, area_payload, original_text, translated_text in self.ui_update_queue:
+                if isinstance(area_payload, dict):
+                    area = self._create_typeset_area(
+                        area_payload['rect'],
+                        area_payload['text'],
+                        area_payload['settings'],
+                        polygon=area_payload.get('polygon'),
+                        original_text=area_payload.get('original_text', ''),
+                    )
+                    if area_payload.get('ai_model_label'):
+                        if not isinstance(area.review_notes, dict):
+                            area.review_notes = {}
+                        area.review_notes['ai_model'] = area_payload.get('ai_model_label')
+                else:
+                    area = area_payload
+                converted_queue.append((image_path, area, original_text, translated_text))
+
+            self.ui_update_queue.clear()
+            self.ui_update_mutex.unlock()
+
             relevant_updates = [
                 (path, area, original, translated)
-                for path, area, original, translated in self.ui_update_queue
+                for path, area, original, translated in converted_queue
                 if path == current_key
             ]
 
             updates_by_image = {}
-            for image_path, new_area, original_text, translated_text in self.ui_update_queue:
-                updates_by_image.setdefault(image_path, []).append((new_area, original_text, translated_text))
-
-            self.ui_update_queue.clear()
-            self.ui_update_mutex.unlock()
+            for image_path, area, original_text, translated_text in converted_queue:
+                updates_by_image.setdefault(image_path, []).append((area, original_text, translated_text))
 
             for image_path, entries in updates_by_image.items():
                 image_record = self.all_typeset_data.setdefault(image_path, {'areas': [], 'redo': []})
@@ -5259,6 +5378,17 @@ class MangaOCRApp(QMainWindow):
             return False
 
     def _create_typeset_area(self, rect, text, settings, polygon=None, original_text="", translation_style=None, manual_inpaint=None, is_manual=False):
+        if not is_manual and isinstance(text, str) and text:
+            processed_lines = []
+            for line in text.splitlines():
+                stripped = line.rstrip()
+                if stripped.endswith('。'):
+                    stripped = stripped[:-1].rstrip()
+                elif stripped.endswith('.') and not stripped.endswith('..'):
+                    stripped = stripped[:-1].rstrip()
+                processed_lines.append(stripped)
+            text = '\n'.join(processed_lines)
+
         area = TypesetArea(
             rect,
             text,
@@ -5578,7 +5708,8 @@ class MangaOCRApp(QMainWindow):
                 text = getattr(response, 'text', '') or ''
                 text = text.strip()
                 if text:
-                    self.add_api_cost(len(prompt), len(text), 'Gemini', model_name)
+                    if hasattr(self, "api_cost_signal"):
+                        self.api_cost_signal.emit(len(prompt), len(text), 'Gemini', model_name)
                 return text or ""
             except Exception as exc:
                 return f"[GEMINI ERROR: {exc}]"
@@ -5616,7 +5747,8 @@ class MangaOCRApp(QMainWindow):
                 if hasattr(response, 'usage'):
                     in_tokens = getattr(response.usage, 'prompt_tokens', 0)
                     out_tokens = getattr(response.usage, 'completion_tokens', 0)
-                    self.add_api_cost(in_tokens, out_tokens, 'OpenAI', model_name)
+                    if hasattr(self, "api_cost_signal"):
+                        self.api_cost_signal.emit(in_tokens, out_tokens, 'OpenAI', model_name)
                 return output_text
             except Exception as exc:
                 return f"[OPENAI ERROR: {exc}]"
@@ -5733,6 +5865,8 @@ class MangaOCRApp(QMainWindow):
             'margins': {'top': 0, 'right': 0, 'bottom': 0, 'left': 0},
             'manga_use_easy_detection': bool(getattr(self, 'manga_use_easy_detection_checkbox', None) and self.manga_use_easy_detection_checkbox.isChecked()),
             'tesseract_use_easy_detection': bool(getattr(self, 'tesseract_use_easy_detection_checkbox', None) and self.tesseract_use_easy_detection_checkbox.isChecked()),
+            'use_auto_text_color': bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True)),
+            'constrain_text': bool(SETTINGS.get('cleanup', {}).get('constrain_text', False)),
         }
 
     def _default_cleanup_value(self, key: str):
@@ -5918,10 +6052,11 @@ class MangaOCRApp(QMainWindow):
         return "[No translation performed: use AI providers]"
 
     def load_usage_data(self):
+        self.usage_mutex.lock()
         try:
             if os.path.exists(self.usage_file_path):
-                with open(self.usage_file_path, 'rb') as f:
-                    self.usage_data = pickle.load(f)
+                with open(self.usage_file_path, 'r', encoding='utf-8') as f:
+                    self.usage_data = json.load(f)
             else:
                 self.usage_data = {}
 
@@ -5952,48 +6087,71 @@ class MangaOCRApp(QMainWindow):
                 self.usage_data['provider_usage'][provider] = {}
                 for model_name in models:
                     self.usage_data['provider_usage'][provider][model_name] = {'daily_count': 0, 'minute_count': 0, 'current_minute': ''}
+        finally:
+            self.usage_mutex.unlock()
 
     def save_usage_data(self):
+        self.usage_mutex.lock()
+        tmp_path = self.usage_file_path + '.tmp'
         try:
             self.usage_data['total_cost'] = self.total_cost
-            with open(self.usage_file_path, 'wb') as f: pickle.dump(self.usage_data, f)
-        except Exception as e: print(f"Could not save usage data: {e}")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.usage_data, f, ensure_ascii=False, indent=2)
+            if os.path.exists(self.usage_file_path):
+                try:
+                    os.remove(self.usage_file_path)
+                except Exception:
+                    pass
+            os.replace(tmp_path, self.usage_file_path)
+        except Exception as e:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            print(f"Could not save usage data: {e}")
+        finally:
+            self.usage_mutex.unlock()
 
     def check_and_increment_usage(self, provider, model_name):
-        now = time.time()
-        current_minute_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(now))
+        self.usage_mutex.lock()
+        try:
+            now = time.time()
+            current_minute_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(now))
 
-        # Safely ensure provider and model_name dictionaries are initialized
-        self.usage_data.setdefault('provider_usage', {}).setdefault(provider, {}).setdefault(model_name, {'daily_count': 0, 'minute_count': 0, 'current_minute': ''})
-        model_usage = self.usage_data['provider_usage'][provider][model_name]
-        
-        model_info = self.AI_PROVIDERS.get(provider, {}).get(model_name, {})
-        model_limits = model_info.get('limits', {'rpm': 300, 'rpd': 20000})
+            # Safely ensure provider and model_name dictionaries are initialized
+            self.usage_data.setdefault('provider_usage', {}).setdefault(provider, {}).setdefault(model_name, {'daily_count': 0, 'minute_count': 0, 'current_minute': ''})
+            model_usage = self.usage_data['provider_usage'][provider][model_name]
+            
+            model_info = self.AI_PROVIDERS.get(provider, {}).get(model_name, {})
+            model_limits = model_info.get('limits', {'rpm': 300, 'rpd': 20000})
 
-        if self.usage_data.get('date') != str(date.today()):
-            self.usage_data['date'] = str(date.today())
-            for p, models in self.usage_data['provider_usage'].items():
-                for m in models:
-                    self.usage_data['provider_usage'][p][m]['daily_count'] = 0
-                    self.usage_data['provider_usage'][p][m]['minute_count'] = 0
+            if self.usage_data.get('date') != str(date.today()):
+                self.usage_data['date'] = str(date.today())
+                for p, models in self.usage_data['provider_usage'].items():
+                    for m in models:
+                        self.usage_data['provider_usage'][p][m]['daily_count'] = 0
+                        self.usage_data['provider_usage'][p][m]['minute_count'] = 0
 
-        if model_usage.get('current_minute') != current_minute_str:
-            model_usage['current_minute'] = current_minute_str
-            model_usage['minute_count'] = 0
+            if model_usage.get('current_minute') != current_minute_str:
+                model_usage['current_minute'] = current_minute_str
+                model_usage['minute_count'] = 0
 
-        if model_usage.get('daily_count', 0) >= model_limits['rpd']:
-            QTimer.singleShot(0, self.check_limits_and_update_ui)
-            return False
-        if model_usage.get('minute_count', 0) >= model_limits['rpm']:
-            QTimer.singleShot(0, self.check_limits_and_update_ui)
-            return False
+            if model_usage.get('daily_count', 0) >= model_limits['rpd']:
+                QTimer.singleShot(0, self.check_limits_and_update_ui)
+                return False
+            if model_usage.get('minute_count', 0) >= model_limits['rpm']:
+                QTimer.singleShot(0, self.check_limits_and_update_ui)
+                return False
 
-        model_usage['daily_count'] += 1
-        model_usage['minute_count'] += 1
+            model_usage['daily_count'] += 1
+            model_usage['minute_count'] += 1
 
-        self.save_usage_data()
-        QTimer.singleShot(0, self.update_usage_display)
-        return True
+            self.save_usage_data()
+            QTimer.singleShot(0, self.update_usage_display)
+            return True
+        finally:
+            self.usage_mutex.unlock()
 
     def update_usage_display(self):
         provider, model_name = self.get_selected_model_name()
@@ -6107,7 +6265,7 @@ class MangaOCRApp(QMainWindow):
         if os.name == 'nt':
             abs_candidate = os.path.abspath(candidate)
             if len(abs_candidate) >= 245:
-                digest = hashlib.sha1(abs_candidate.encode('utf-8')).hexdigest()[:10]
+                digest = hashlib.sha256(abs_candidate.encode('utf-8')).hexdigest()[:10]
                 candidate = os.path.join(base_dir, f"project_{digest}.manga_proj")
                 note = f"Project filename shortened to avoid Windows path limit (using {os.path.basename(candidate)})."
         return candidate, note
@@ -7410,9 +7568,7 @@ class MangaOCRApp(QMainWindow):
             if self.batch_mode_checkbox.isChecked():
                 self.add_to_batch_queue(job)
             else:
-                self.processing_queue.append(job)
-                self.update_queue_status(len(self.processing_queue))
-                self.manage_worker_pool()
+                self.add_job_to_queue(job)
         finally:
             self.is_processing_selection = False
 
@@ -7490,9 +7646,7 @@ class MangaOCRApp(QMainWindow):
             if self.batch_mode_checkbox.isChecked():
                 self.add_to_batch_queue(job)
             else:
-                self.processing_queue.append(job)
-                self.update_queue_status(len(self.processing_queue))
-                self.manage_worker_pool()
+                self.add_job_to_queue(job)
         finally:
             self.is_processing_selection = False
         
@@ -7572,6 +7726,7 @@ class MangaOCRApp(QMainWindow):
                 pass
         self.paint_mutex.lock()
         try:
+            settings = self.get_current_settings()
             use_preview = (
                 self.is_transform_preview
                 and self._transform_preview_pixmap is not None
@@ -7593,7 +7748,7 @@ class MangaOCRApp(QMainWindow):
                     self.typeset_pixmap = base_pixmap.copy()
                     painter = QPainter(self.typeset_pixmap)
                     try:
-                        self.draw_single_area(painter, self.selected_typeset_area, self.current_image_pil)
+                        self.draw_single_area(painter, self.selected_typeset_area, self.current_image_pil, settings=settings)
                     finally:
                         try:
                             painter.end()
@@ -7606,10 +7761,10 @@ class MangaOCRApp(QMainWindow):
                 self.typeset_pixmap = self.original_pixmap.copy()
                 painter = QPainter(self.typeset_pixmap)
                 try:
-                    for area in self.typeset_areas:
+                    for area in list(self.typeset_areas):
                         if not getattr(area, 'visible', True):
                             continue
-                        self.draw_single_area(painter, area, self.current_image_pil)
+                        self.draw_single_area(painter, area, self.current_image_pil, settings=settings)
                 finally:
                     try:
                         painter.end()
@@ -7635,13 +7790,14 @@ class MangaOCRApp(QMainWindow):
         try:
             base_pixmap = self.original_pixmap.copy()
             painter = QPainter(base_pixmap)
+            settings = self.get_current_settings()
             try:
-                for area in self.typeset_areas:
+                for area in list(self.typeset_areas):
                     if area is selected:
                         continue
                     if not getattr(area, 'visible', True):
                         continue
-                    self.draw_single_area(painter, area, self.current_image_pil, for_saving=True)
+                    self.draw_single_area(painter, area, self.current_image_pil, for_saving=True, settings=settings)
             finally:
                 try:
                     painter.end()
@@ -7749,7 +7905,7 @@ class MangaOCRApp(QMainWindow):
         cv2.drawContours(final_mask, [shifted_contour], -1, 255, thickness=cv2.FILLED)
         return final_mask
 
-    def _run_onnx_inference(self, model_key, full_cv_image):
+    def _run_onnx_inference(self, model_key, full_cv_image, settings=None):
         if not self.is_onnx_available: return None
         model_info = self.dl_models[model_key]
         if model_info['instance'] is None:
@@ -7757,7 +7913,12 @@ class MangaOCRApp(QMainWindow):
             try: 
                 # [BARU] Pilih provider CPU/GPU
                 providers = ['CPUExecutionProvider']
-                if self.use_gpu_checkbox.isChecked() and self.is_gpu_available:
+                use_gpu = False
+                if settings is not None:
+                    use_gpu = settings.get('use_gpu', False)
+                elif hasattr(self, 'use_gpu_checkbox'):
+                    use_gpu = self.use_gpu_checkbox.isChecked()
+                if use_gpu and self.is_gpu_available:
                     providers.insert(0, 'CUDAExecutionProvider')
                 model_info['instance'] = onnxruntime.InferenceSession(model_info['path'], providers=providers)
             except Exception as e: print(f"Error loading ONNX model: {e}"); return None
@@ -7790,7 +7951,7 @@ class MangaOCRApp(QMainWindow):
         except Exception as e:
             print(f"Error during ONNX inference: {e}"); return None
 
-    def _run_yolov8_inference(self, model_key, full_cv_image):
+    def _run_yolov8_inference(self, model_key, full_cv_image, settings=None):
         if not self.is_yolo_available: return None
         model_info = self.dl_models[model_key]
         if model_info['instance'] is None:
@@ -7801,7 +7962,12 @@ class MangaOCRApp(QMainWindow):
         model = model_info['instance']
         try:
             # [BARU] Pilih device CPU/GPU
-            device = "cuda" if self.use_gpu_checkbox.isChecked() and self.is_gpu_available else "cpu"
+            use_gpu = False
+            if settings is not None:
+                use_gpu = settings.get('use_gpu', False)
+            elif hasattr(self, 'use_gpu_checkbox'):
+                use_gpu = self.use_gpu_checkbox.isChecked()
+            device = "cuda" if use_gpu and self.is_gpu_available else "cpu"
             results = model(full_cv_image, verbose=False, device=device)
             if not results or not results[0].masks: return None
 
@@ -7827,8 +7993,8 @@ class MangaOCRApp(QMainWindow):
         if not model_key: return None
         model_type = self.dl_models[model_key]['type']
 
-        if model_type == 'onnx': return self._run_onnx_inference(model_key, full_cv_image)
-        elif model_type == 'yolo': return self._run_yolov8_inference(model_key, full_cv_image)
+        if model_type == 'onnx': return self._run_onnx_inference(model_key, full_cv_image, settings)
+        elif model_type == 'yolo': return self._run_yolov8_inference(model_key, full_cv_image, settings)
         return None
 
     def find_speech_bubble_mask(self, full_cv_image, text_rect, settings, for_saving=False):
@@ -7854,7 +8020,7 @@ class MangaOCRApp(QMainWindow):
             QApplication.processEvents()
         return self._find_speech_bubble_mask_contour(full_cv_image, text_rect)
 
-    def draw_single_area(self, painter, area, source_pil_image, for_saving=False):
+    def draw_single_area(self, painter, area, source_pil_image, for_saving=False, settings=None):
         if not area or not getattr(area, 'visible', True):
             return
         try:
@@ -7862,18 +8028,19 @@ class MangaOCRApp(QMainWindow):
             opacity = getattr(area, 'opacity', 1.0)
             painter.setOpacity(old_opacity * opacity)
             try:
-                self._draw_single_area_impl(painter, area, source_pil_image, for_saving=for_saving)
+                self._draw_single_area_impl(painter, area, source_pil_image, for_saving=for_saving, settings=settings)
             finally:
                 painter.setOpacity(old_opacity)
         except Exception:
             traceback.print_exc()
 
-    def _draw_single_area_impl(self, painter, area, source_pil_image, for_saving=False):
-        settings = self.get_current_settings()
+    def _draw_single_area_impl(self, painter, area, source_pil_image, for_saving=False, settings=None):
+        if settings is None:
+            settings = self.get_current_settings()
         notes = area.review_notes if isinstance(getattr(area, "review_notes", {}), dict) else {}
 
-        default_inpaint = self._default_cleanup_value('use_inpaint')
-        default_background_box = self._default_cleanup_value('use_background_box')
+        default_inpaint = settings.get('use_inpaint', True)
+        default_background_box = settings.get('use_background_box', True)
 
         manual_inpaint_override = notes.get("manual_inpaint")
         if manual_inpaint_override is not None:
@@ -7967,7 +8134,7 @@ class MangaOCRApp(QMainWindow):
                 try:
                     if (self.inpaint_model is None or
                         self.current_inpaint_model_key != model_key):
-                        self.initialize_inpaint_engine()
+                        self.initialize_inpaint_engine(settings)
 
                     if self.inpaint_model:
                         pil_original = Image.fromarray(cv2.cvtColor(cv_original, cv2.COLOR_BGR2RGB))
@@ -9115,37 +9282,30 @@ class MangaOCRApp(QMainWindow):
             image_thread = QThread()
             image_worker.moveToThread(image_thread)
 
-            def _on_img_started():
-                try:
-                    image_worker.run()
-                except Exception as e:
-                    try:
-                        image_worker.error.emit(str(e))
-                    except Exception:
-                        pass
-
-            def _img_finished(success, message):
-                try:
-                    image_thread.quit(); image_thread.wait()
-                except Exception:
-                    pass
-                self.image_save_thread = None
-                self.image_save_worker = None
-                if success:
-                    QMessageBox.information(self, "Success", message)
-                else:
-                    QMessageBox.critical(self, "Error", message)
-
-            def _img_error(msg):
-                self.statusBar().showMessage(f"Image save error: {msg}", 5000)
-
-            image_worker.finished.connect(_img_finished)
-            image_worker.error.connect(_img_error)
+            image_worker.finished.connect(self.on_image_save_finished)
+            image_worker.error.connect(self.on_image_save_error)
 
             self.image_save_worker = image_worker
             self.image_save_thread = image_thread
-            image_thread.started.connect(_on_img_started)
+            image_thread.started.connect(image_worker.run)
             image_thread.start()
+
+    def on_image_save_finished(self, success, message):
+        if self.image_save_thread:
+            try:
+                self.image_save_thread.quit()
+                self.image_save_thread.wait()
+            except Exception:
+                pass
+            self.image_save_thread = None
+        self.image_save_worker = None
+        if success:
+            QMessageBox.information(self, "Success", message)
+        else:
+            QMessageBox.critical(self, "Error", message)
+
+    def on_image_save_error(self, msg):
+        self.statusBar().showMessage(f"Image save error: {msg}", 5000)
 
     def delete_typeset_area(self, area_to_delete):
         if area_to_delete in self.typeset_areas:
@@ -9257,47 +9417,10 @@ class MangaOCRApp(QMainWindow):
     
     
     def _read_project_file(self, file_path):
-        try:
-            with open(file_path, 'r', encoding='utf-8') as handle:
-                data = json.load(handle)
-            return data, 'json'
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
-        with open(file_path, 'rb') as handle:
-            data = pickle.load(handle)
-        return data, 'pickle'
+        with open(file_path, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data, 'json'
 
-    def _migrate_legacy_project(self, legacy_data):
-        typeset_font_info = legacy_data.get('font') or {}
-        migrated_font = TypesetArea.font_to_dict(TypesetArea.font_from_dict(typeset_font_info)) if isinstance(typeset_font_info, dict) else TypesetArea.font_to_dict(self.typeset_font)
-        migrated = {
-            'schema_version': 1,
-            'project_dir': legacy_data.get('project_dir'),
-            'current_image_path': legacy_data.get('current_path'),
-            'current_pdf_page': -1,
-            'typeset_data': {},
-            'history_entries': [],
-            'proofreader_entries': [],
-            'quality_entries': [],
-            'history_counter': 0,
-            'typeset_font': migrated_font,
-            'typeset_color': legacy_data.get('color', '#000000'),
-            'settings': {},
-            'config': {
-                'theme': self.current_theme,
-                'autosave_interval_ms': int(self.autosave_timer.interval()) if getattr(self, 'autosave_timer', None) else None,
-            },
-            'app_version': 'legacy',
-            'saved_at': time.time(),
-        }
-        for key, payload in (legacy_data.get('all_data') or {}).items():
-            areas = payload.get('areas') or []
-            redo = payload.get('redo') or []
-            migrated['typeset_data'][key] = {
-                'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
-                'redo': [area.to_payload() if isinstance(area, TypesetArea) else area for area in redo],
-            }
-        return migrated
 
     def _deserialize_typeset_map(self, serialized_map, fallback_font, fallback_color):
         result = {}
@@ -9632,8 +9755,6 @@ class MangaOCRApp(QMainWindow):
 
     def _load_project_from_path(self, file_path, *, show_dialogs=True):
         warnings = []
-        legacy_loaded = False
-
         # Auto-save current project before switching
         self.save_project(is_auto=True)
 
@@ -9653,14 +9774,7 @@ class MangaOCRApp(QMainWindow):
         try:
             payload, fmt = self._read_project_file(file_path)
 
-            if fmt == 'pickle':
-                payload = self._migrate_legacy_project(payload)
-                legacy_loaded = True
-
             warnings = self._apply_project_payload(payload, file_path)
-
-            if legacy_loaded:
-                warnings.append("Loaded legacy project format; saving will upgrade it.")
 
             # Update judul window
             self.setWindowTitle(
@@ -9793,51 +9907,48 @@ class MangaOCRApp(QMainWindow):
                 QMessageBox.information(self, "Save In Progress", "A project save is already in progress.")
             return False
 
+        # Store save state
+        self.project_save_is_auto = is_auto
+
         # Start background worker to write the project file
         worker = ProjectSaveWorker(self.current_project_path, snapshot)
         thread = QThread()
         worker.moveToThread(thread)
 
-        def _on_thread_started():
-            try:
-                worker.run()
-            except Exception as e:
-                # emit error via worker signals
-                try:
-                    worker.error.emit(str(e))
-                except Exception:
-                    pass
-
-        def _on_finished(success, message):
-            # Cleanup thread/worker
-            try:
-                thread.quit(); thread.wait()
-            except Exception:
-                pass
-            self.project_save_thread = None
-            self.project_save_worker = None
-            if not is_auto:
-                if success:
-                    QMessageBox.information(self, "Success", message)
-                else:
-                    QMessageBox.critical(self, "Error", message)
-
-        def _on_error(msg):
-            self.statusBar().showMessage(f"Error saving project: {msg}", 5000)
-
-        worker.finished.connect(_on_finished)
-        worker.error.connect(_on_error)
+        worker.finished.connect(self.on_project_save_finished)
+        worker.error.connect(self.on_project_save_error)
 
         # store references so we can cancel/inspect
         self.project_save_worker = worker
         self.project_save_thread = thread
 
-        thread.started.connect(_on_thread_started)
+        thread.started.connect(worker.run)
         thread.start()
         # Let autosave or UI continue; indicate to user
         if not is_auto:
             self.statusBar().showMessage("Saving project in background...", 3000)
         return True
+
+    def on_project_save_finished(self, success, message):
+        # Cleanup thread/worker
+        if self.project_save_thread:
+            try:
+                self.project_save_thread.quit()
+                self.project_save_thread.wait()
+            except Exception:
+                pass
+            self.project_save_thread = None
+        self.project_save_worker = None
+        
+        is_auto = getattr(self, 'project_save_is_auto', False)
+        if not is_auto:
+            if success:
+                QMessageBox.information(self, "Success", message)
+            else:
+                QMessageBox.critical(self, "Error", message)
+
+    def on_project_save_error(self, msg):
+        self.statusBar().showMessage(f"Error saving project: {msg}", 5000)
     
     def auto_save_project(self):
         if QApplication.activeModalWidget() is not None:
@@ -10354,8 +10465,27 @@ class MangaOCRApp(QMainWindow):
         self.overall_progress_bar.setVisible(True); self.overall_progress_bar.setValue(0)
         self.statusBar().showMessage("Starting batch save...")
 
+        # Get current settings dictionary on the main GUI thread safely
+        current_settings = self.get_current_settings()
+
+        # Prepare a clean copy of the needed typeset data
+        typeset_data_snapshot = {}
+        for path in files_to_save:
+            key = self.get_current_data_key(path=path)
+            if key in self.all_typeset_data:
+                typeset_data_snapshot[key] = {
+                    'areas': list(self.all_typeset_data[key].get('areas', []))
+                }
+
         self.batch_save_thread = QThread()
-        self.batch_save_worker = BatchSaveWorker(self, files_to_save, fmt=save_fmt, quality=save_qual)
+        self.batch_save_worker = BatchSaveWorker(
+            self,
+            files_to_save,
+            fmt=save_fmt,
+            quality=save_qual,
+            settings=current_settings,
+            typeset_data=typeset_data_snapshot
+        )
         self.batch_save_worker.moveToThread(self.batch_save_thread)
         self.batch_save_worker.signals.progress.connect(self.update_overall_progress)
         self.batch_save_worker.signals.file_saved.connect(self.on_batch_file_saved)
@@ -10603,6 +10733,15 @@ class MangaOCRApp(QMainWindow):
                                 pass
         except Exception as e:
             print(f"Error during temp cleanup: {e}")
+
+        # Save splitter states
+        try:
+            SETTINGS['splitter_sizes'] = self.splitter.sizes()
+            if hasattr(self, 'right_splitter'):
+                SETTINGS['right_splitter_sizes'] = self.right_splitter.sizes()
+            save_settings(SETTINGS)
+        except Exception as e:
+            print(f"Error saving splitter sizes: {e}")
 
         event.accept()
     
@@ -11412,6 +11551,8 @@ class MangaOCRApp(QMainWindow):
 
         provider_cfg = SETTINGS.get('ocr', {}).get(provider_key, {})
         url = (provider_cfg.get('url') or '').strip()
+        if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+            url = "https://" + url[7:]
         api_key = (provider_cfg.get('api_key') or '').strip()
 
         if not url:
@@ -11430,7 +11571,7 @@ class MangaOCRApp(QMainWindow):
         data_url = f"data:image/png;base64,{image_b64}"
         
         # [CACHE SYSTEM]
-        cache_key = hashlib.md5((image_b64 + prompt_text + model_id).encode('utf-8')).hexdigest()
+        cache_key = hashlib.sha256((image_b64 + prompt_text + model_id).encode('utf-8')).hexdigest()
         cache_file = os.path.join(self.cache_dir, f"aiocr_{cache_key}.json")
         
         if os.path.exists(cache_file):

@@ -3,6 +3,7 @@ setlocal EnableExtensions
 
 REM Pindah ke folder tempat launcher .bat berada
 cd /d "%~dp0"
+set "PATH=%~dp0bin;%PATH%"
 
 echo =====================================
 echo    INITIALIZING VIRTUAL ENVIRONMENT
@@ -46,6 +47,52 @@ if not exist "venv" (
     echo [INFO] Mengaktifkan virtual environment venv...
     call "venv\Scripts\activate.bat"
 )
+
+echo.
+echo =====================================
+echo    CHECKING WORKFLOW DEPENDENCIES
+echo =====================================
+echo.
+
+REM Ensure required libraries for Youtube Player are installed
+echo [INFO] Memeriksa pustaka YouTube (yt-dlp ^& yt-dlp-ejs)...
+python -c "import yt_dlp" >nul 2>nul
+set "YTDL_MISSING=%ERRORLEVEL%"
+python -c "import yt_dlp_ejs" >nul 2>nul
+set "EJS_MISSING=%ERRORLEVEL%"
+
+if %YTDL_MISSING% neq 0 (
+    echo [INFO] Pustaka yt-dlp belum terpasang. Memasang yt-dlp otomatis...
+    pip install yt-dlp
+)
+if %EJS_MISSING% neq 0 (
+    echo [INFO] Pustaka yt-dlp-ejs belum terpasang. Memasang yt-dlp-ejs otomatis...
+    pip install yt-dlp-ejs
+)
+echo [INFO] Pustaka YouTube siap digunakan.
+
+REM Ensure FFmpeg and Deno are installed
+where ffmpeg >nul 2>nul
+set "FFMPEG_FOUND=%ERRORLEVEL%"
+where deno >nul 2>nul
+set "DENO_FOUND=%ERRORLEVEL%"
+
+if %FFMPEG_FOUND% neq 0 (
+    set "NEED_INSTALL=1"
+) else if %DENO_FOUND% neq 0 (
+    set "NEED_INSTALL=1"
+) else (
+    set "NEED_INSTALL=0"
+)
+
+if %NEED_INSTALL% neq 0 (
+    echo [INFO] Menjalankan installer otomatis FFmpeg dan Deno...
+    powershell -ExecutionPolicy Bypass -File bin\install_ffmpeg.ps1
+) else (
+    echo [INFO] FFmpeg dan Deno terdeteksi dan siap digunakan.
+)
+echo.
+pause
 
 :menu
 cls
