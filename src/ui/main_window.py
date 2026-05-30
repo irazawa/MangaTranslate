@@ -585,7 +585,14 @@ class MangaOCRApp(QMainWindow):
         self.pdf_document = None
         self.current_pdf_page = -1
 
-        self.usage_file_path = os.path.join(os.path.expanduser("~"), "manga_ocr_usage_v16.json")
+        # Ensure root-level .cache directory exists
+        root_cache_dir = os.path.join(ROOT_DIR, '.cache')
+        if not os.path.exists(root_cache_dir):
+            try:
+                os.makedirs(root_cache_dir)
+            except Exception:
+                pass
+        self.usage_file_path = os.path.join(root_cache_dir, "manga_ocr_usage_v16.json")
         self.usage_data = {}
         self.api_limit_timer = QTimer(self)
         self.api_limit_timer.setInterval(1000)
@@ -6054,6 +6061,17 @@ class MangaOCRApp(QMainWindow):
     def load_usage_data(self):
         self.usage_mutex.lock()
         try:
+            # Migration from legacy home directory path to root-level .cache path
+            legacy_path = os.path.join(os.path.expanduser("~"), "manga_ocr_usage_v16.json")
+            if os.path.exists(legacy_path) and not os.path.exists(self.usage_file_path):
+                try:
+                    import shutil
+                    shutil.copy2(legacy_path, self.usage_file_path)
+                    os.remove(legacy_path)
+                    print(f"[MIGRATION] Migrated usage stats file from {legacy_path} to {self.usage_file_path}")
+                except Exception as ex:
+                    print(f"[MIGRATION ERROR] Failed to migrate usage file: {ex}")
+
             if os.path.exists(self.usage_file_path):
                 with open(self.usage_file_path, 'r', encoding='utf-8') as f:
                     self.usage_data = json.load(f)

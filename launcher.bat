@@ -173,7 +173,7 @@ REM ================================
 REM Helper: start inpainting pada window baru
 REM ================================
 :start_inpainting_window
-set "INPAINT_PATH=E:\Gabut\Manga\Project\Inpainting"
+set "INPAINT_PATH=%~dp0Inpainting"
 set "INPAINT_VENV=%INPAINT_PATH%\venv\Scripts\activate.bat"
 set "INPAINT_BAT=%INPAINT_PATH%\run.bat"
 
@@ -201,9 +201,8 @@ if not exist "%INPAINT_BAT%" (
 )
 
 echo Membuka Inpainting di window baru...
-REM /k supaya window inpainting tetap hidup (server tetap jalan)
-start "Inpainting Server" cmd /k ^
-"cd /d ""%INPAINT_PATH%"" ^& call ""%INPAINT_VENV%"" ^& call ""%INPAINT_BAT%"""
+REM Cukup panggil run.bat langsung - dia sudah handle venv dan semua setup
+start "Inpainting Server" cmd /k ""%INPAINT_BAT%""
 
 goto :eof
 

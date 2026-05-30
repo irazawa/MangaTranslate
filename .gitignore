@@ -33,3 +33,6 @@ bin/*.wav
 src/data/video/
 src/data/chat_history/
 src/data/music/
+
+# Local/external tools and folders
+Inpainting/
