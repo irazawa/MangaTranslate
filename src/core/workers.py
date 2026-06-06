@@ -99,9 +99,21 @@ class ProjectSaveWorker(QObject):
                 except ValueError:
                     rel_image_path = None
 
+            # --- Schema v4: store typeset_data with basename keys ---
+            # Keys were previously full absolute paths (100+ chars each).
+            # In v4 we use just the filename (e.g. "2.webp") and record the
+            # canonical order in image_order so load can reconstruct full paths.
+            raw_typeset = self.snapshot.get('typeset_data', {})
+            compact_typeset = {}
+            image_order = []
+            for abs_key, record in raw_typeset.items():
+                basename = os.path.basename(abs_key)
+                compact_typeset[basename] = record
+                image_order.append(basename)
+
             # Build payload from already-serialized snapshot (snapshot['typeset_data'] contains primitive dicts)
             payload = {
-                'schema_version': 3,
+                'schema_version': 4,
                 # Relative paths (primary — used for portability)
                 'project_dir_rel': rel_project_dir,
                 'current_image_path_rel': rel_image_path,
@@ -109,7 +121,8 @@ class ProjectSaveWorker(QObject):
                 'project_dir': abs_project_dir,
                 'current_image_path': abs_image_path,
                 'current_pdf_page': int(self.snapshot.get('current_pdf_page', -1)) if isinstance(self.snapshot.get('current_pdf_page'), int) else int(self.snapshot.get('current_pdf_page', -1)),
-                'typeset_data': copy.deepcopy(self.snapshot.get('typeset_data', {})),
+                'image_order': image_order,
+                'typeset_data': copy.deepcopy(compact_typeset),
                 'history_entries': copy.deepcopy(self.snapshot.get('history_entries', [])),
                 'proofreader_entries': copy.deepcopy(self.snapshot.get('proofreader_entries', [])),
                 'quality_entries': copy.deepcopy(self.snapshot.get('quality_entries', [])),
@@ -121,9 +134,11 @@ class ProjectSaveWorker(QObject):
                 'app_version': self.snapshot.get('app_version', '16.1.0'),
             }
 
-            # Write to temporary file then replace atomically
+            # Write to temporary file then replace atomically.
+            # Use indent=1 (vs legacy indent=2) for slightly more compact output.
+            # The major savings come from compact polygon encoding in the area payloads.
             with open(tmp_path, 'w', encoding='utf-8') as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                json.dump(payload, handle, ensure_ascii=False, indent=1)
             os.replace(tmp_path, self.target_path)
 
             self.finished.emit(True, "Project saved.")
@@ -135,6 +150,7 @@ class ProjectSaveWorker(QObject):
                 pass
             self.error.emit(str(exc))
             self.finished.emit(False, f"Failed to save project: {exc}")
+
 
 
 # Worker untuk menyimpan gambar (save image) di background

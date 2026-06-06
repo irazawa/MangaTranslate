@@ -1861,11 +1861,15 @@ class MangaOCRApp(QMainWindow):
 
         if hasattr(self, 'font_size_spin'):
             with QSignalBlocker(self.font_size_spin):
-                self.font_size_spin.setValue(int(area.font_info.get('size', 12)))
+                font_size = area.font_info.get('pointSize', area.font_info.get('size'))
+                if font_size is None:
+                    font_size = SETTINGS.get('general', {}).get('default_font_size', 14)
+                self.font_size_spin.setValue(float(font_size))
 
         if hasattr(self, 'bold_toggle'):
             with QSignalBlocker(self.bold_toggle):
-                self.bold_toggle.setChecked(bool(area.font_info.get('bold', False)))
+                is_bold = bool(area.font_info.get('bold', False)) or (area.font_info.get('weight', QFont.Normal) >= QFont.Bold)
+                self.bold_toggle.setChecked(is_bold)
 
         if hasattr(self, 'italic_toggle'):
             with QSignalBlocker(self.italic_toggle):
@@ -3841,6 +3845,10 @@ class MangaOCRApp(QMainWindow):
                 self.style_combo.setCurrentIndex(idx)
                 
         # 4. Typesetting Defaults
+        # Update the font template used for NEW areas only.
+        # We do NOT force-override the live typeset panel controls if the user
+        # is already editing (i.e. an area is selected), because those controls
+        # reflect the SELECTED AREA's properties, not the global default.
         default_font_family = gen_cfg.get('default_font_family', '')
         if default_font_family and self.font_manager:
             new_font = self.font_manager.create_qfont(default_font_family)
@@ -3849,24 +3857,57 @@ class MangaOCRApp(QMainWindow):
             new_font = self.font_manager.create_qfont(default_display) if self.font_manager else QFont('Arial')
             
         default_size = gen_cfg.get('default_font_size', 14)
-        new_font.setPointSize(default_size)
+        new_font.setPointSize(int(default_size))
         
         default_bold = gen_cfg.get('default_font_bold', False)
         new_font.setWeight(QFont.Bold if default_bold else QFont.Normal)
         new_font.setLetterSpacing(QFont.PercentageSpacing, 100.0)
         
-        self.typeset_font = new_font
-        
-        # Synchronize typeset controls
-        if hasattr(self, 'font_dropdown'):
-            self._populate_typeset_font_dropdown() # refresh dropdown to show default
-            display_name = self.font_manager.display_name_for_font(self.typeset_font) if self.font_manager else ''
-            if display_name:
-                self.font_dropdown.setCurrentText(display_name)
-        if hasattr(self, 'font_size_spin'):
-            self.font_size_spin.setValue(default_size)
-        if hasattr(self, 'bold_button'):
-            self.bold_button.setChecked(default_bold)
+        # Store as the font template for new areas.
+        # Only replace self.typeset_font if there is NO active area selected
+        # (to avoid stomping a font the user explicitly chose for a selected area).
+        has_selection = getattr(self, 'selected_typeset_area', None) is not None
+        if not has_selection:
+            self.typeset_font = new_font
+
+        # Update the in-memory typeset_defaults so future areas inherit these settings.
+        # This dict is what _create_typeset_area reads for new areas.
+        self.typeset_defaults = {
+            'font_display': (self.font_manager.display_name_for_font(new_font) if self.font_manager else ''),
+            'font_size': float(default_size),
+            'bold': bool(default_bold),
+            'italic': new_font.italic(),
+            'underline': new_font.underline(),
+            'line_spacing': float(getattr(self, 'typeset_line_spacing_value', 1.1)),
+            'char_spacing': float(getattr(self, 'typeset_char_spacing_value', 100.0)),
+            'alignment': getattr(self, 'typeset_alignment', 'center'),
+            'orientation': getattr(self, 'typeset_orientation', 'horizontal'),
+            'outline': bool(getattr(self, 'typeset_outline_enabled', False)),
+            'outline_width': float(getattr(self, 'typeset_outline_width', 2.0)),
+            'outline_color': (self.typeset_outline_color.name() if isinstance(getattr(self, 'typeset_outline_color', None), QColor) else '#000000'),
+            'outline_style': getattr(self, 'typeset_outline_style', 'stroke'),
+            'color': (self.typeset_color.name() if isinstance(getattr(self, 'typeset_color', None), QColor) else '#000000'),
+            'gradient_enabled': bool(getattr(self, 'typeset_gradient_enabled', False)),
+            'gradient_angle': float(getattr(self, 'typeset_gradient_angle', 0.0)),
+            'gradient_colors': list(getattr(self, 'typeset_gradient_colors', ["#FF0000", "#0000FF"])),
+        }
+
+        # Only update the live typeset panel UI if nothing is selected.
+        # When a text area IS selected, the panel shows that area's properties
+        # and should not be disturbed by a settings change.
+        if not has_selection:
+            if hasattr(self, 'font_dropdown'):
+                self._populate_typeset_font_dropdown()
+                display_name = self.font_manager.display_name_for_font(new_font) if self.font_manager else ''
+                if display_name:
+                    with QSignalBlocker(self.font_dropdown):
+                        self.font_dropdown.setCurrentText(display_name)
+            if hasattr(self, 'font_size_spin'):
+                with QSignalBlocker(self.font_size_spin):
+                    self.font_size_spin.setValue(float(default_size))
+            if hasattr(self, 'bold_toggle'):
+                with QSignalBlocker(self.bold_toggle):
+                    self.bold_toggle.setChecked(bool(default_bold))
 
     def setup_shortcuts(self):
         self._shortcut_callbacks = {
@@ -3876,6 +3917,7 @@ class MangaOCRApp(QMainWindow):
             'confirm_pen': self.confirm_pen_via_shortcut,
             'next': self.on_next_clicked,
             'prev': self.load_prev_image,
+            'emergency_close': self.emergency_save_and_exit,
         }
         for idx in range(len(SELECTION_MODE_LABELS)):
             self._shortcut_callbacks[f'selection_mode_{idx}'] = partial(self.set_selection_mode_by_index, idx)
@@ -3884,6 +3926,178 @@ class MangaOCRApp(QMainWindow):
     def on_next_clicked(self):
         """Called when user clicks Next; navigate to the next image without forcing an auto-save."""
         self.load_next_image()
+
+    def emergency_save_and_exit(self):
+        try:
+            if getattr(self, 'project_dir', None):
+                # Commit active typeset areas to in-memory dictionary
+                if getattr(self, 'current_image_path', None):
+                    key = self.get_current_data_key()
+                    self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+
+                if not getattr(self, 'current_project_path', None):
+                    self.current_project_path, _ = self._make_project_file_path()
+
+                if self.current_project_path:
+                    from src.ui.canvas import TypesetArea
+                    self.paint_mutex.lock()
+                    try:
+                        serialized_typeset = {}
+                        for k, rec in (self.all_typeset_data or {}).items():
+                            try:
+                                areas = rec.get('areas', []) or []
+                                redo = rec.get('redo', []) or []
+                                serialized_typeset[k] = {
+                                    'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
+                                    'redo': [r.to_payload() if isinstance(r, TypesetArea) else r for r in redo],
+                                }
+                            except Exception:
+                                serialized_typeset[k] = {'areas': [], 'redo': []}
+
+                        snapshot = {
+                            'project_dir': self.project_dir,
+                            'current_image_path': self.current_image_path,
+                            'current_pdf_page': int(self.current_pdf_page) if isinstance(self.current_pdf_page, int) else -1,
+                            'typeset_data': serialized_typeset,
+                            'history_entries': list(self.history_entries) if getattr(self, 'history_entries', None) is not None else [],
+                            'proofreader_entries': list(self.proofreader_entries) if getattr(self, 'proofreader_entries', None) is not None else [],
+                            'quality_entries': list(self.quality_entries) if getattr(self, 'quality_entries', None) is not None else [],
+                            'history_counter': int(self.history_counter) if getattr(self, 'history_counter', None) is not None else 0,
+                            'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
+                            'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
+                            'settings': self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {},
+                            'app_version': '16.1.0',
+                        }
+                    finally:
+                        self.paint_mutex.unlock()
+
+                    project_file_dir = os.path.dirname(os.path.abspath(self.current_project_path))
+                    abs_project_dir = os.path.abspath(snapshot.get('project_dir')) if snapshot.get('project_dir') else None
+                    abs_image_path = snapshot.get('current_image_path')
+
+                    rel_project_dir = None
+                    rel_image_path = None
+                    if abs_project_dir:
+                        try:
+                            rel_project_dir = os.path.relpath(abs_project_dir, project_file_dir)
+                        except ValueError:
+                            rel_project_dir = None
+                    if abs_image_path:
+                        try:
+                            rel_image_path = os.path.relpath(abs_image_path, project_file_dir)
+                        except ValueError:
+                            rel_image_path = None
+
+                    raw_typeset = snapshot.get('typeset_data', {})
+                    compact_typeset = {}
+                    image_order = []
+                    for abs_key, record in raw_typeset.items():
+                        basename = os.path.basename(abs_key)
+                        compact_typeset[basename] = record
+                        image_order.append(basename)
+
+                    payload = {
+                        'schema_version': 4,
+                        'project_dir_rel': rel_project_dir,
+                        'current_image_path_rel': rel_image_path,
+                        'project_dir': abs_project_dir,
+                        'current_image_path': abs_image_path,
+                        'current_pdf_page': int(snapshot.get('current_pdf_page', -1)),
+                        'image_order': image_order,
+                        'typeset_data': compact_typeset,
+                        'history_entries': snapshot.get('history_entries', []),
+                        'proofreader_entries': snapshot.get('proofreader_entries', []),
+                        'quality_entries': snapshot.get('quality_entries', []),
+                        'history_counter': int(snapshot.get('history_counter', 0)),
+                        'typeset_font': snapshot.get('typeset_font'),
+                        'typeset_color': snapshot.get('typeset_color'),
+                        'settings': snapshot.get('settings', {}),
+                        'saved_at': time.time(),
+                        'app_version': snapshot.get('app_version', '16.1.0'),
+                    }
+
+                    target_dir = os.path.dirname(self.current_project_path) or self.project_dir
+                    if target_dir:
+                        os.makedirs(target_dir, exist_ok=True)
+
+                    tmp_path = self.current_project_path + '.tmp'
+                    with open(tmp_path, 'w', encoding='utf-8') as handle:
+                        json.dump(payload, handle, ensure_ascii=False, indent=1)
+                    os.replace(tmp_path, self.current_project_path)
+        except Exception as e:
+            print(f"Error in emergency save: {e}", file=sys.stderr)
+
+        try:
+            ec_cfg = SETTINGS.get('emergency_close', {})
+            action_type = ec_cfg.get('action_type', 'url')
+            target = ec_cfg.get('target', 'https://youtube.com').strip()
+
+            if action_type == 'url':
+                if not (target.startswith("http://") or target.startswith("https://")):
+                    target = "https://" + target
+                
+                brave_paths = [
+                    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                    r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe")
+                ]
+                
+                brave_opened = False
+                for path in brave_paths:
+                    if os.path.exists(path):
+                        try:
+                            subprocess.Popen([path, target], creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                            brave_opened = True
+                            break
+                        except Exception:
+                            pass
+                
+                if not brave_opened:
+                    import webbrowser
+                    webbrowser.open(target)
+
+            elif action_type == 'app':
+                if target:
+                    try:
+                        subprocess.Popen(target, shell=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                    except Exception as e:
+                        print(f"Error launching app {target}: {e}", file=sys.stderr)
+
+            elif action_type == 'focus':
+                if target and os.name == 'nt':
+                    try:
+                        import ctypes
+                        
+                        def focus_window(title_sub):
+                            EnumWindows = ctypes.windll.user32.EnumWindows
+                            EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_pointer, ctypes.c_pointer)
+                            GetWindowText = ctypes.windll.user32.GetWindowTextW
+                            GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
+                            IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+                            ShowWindow = ctypes.windll.user32.ShowWindow
+                            SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
+
+                            def foreach_window(hwnd, lParam):
+                                if IsWindowVisible(hwnd):
+                                    length = GetWindowTextLength(hwnd)
+                                    buff = ctypes.create_unicode_buffer(length + 1)
+                                    GetWindowText(hwnd, buff, length + 1)
+                                    title = buff.value
+                                    if title_sub.lower() in title.lower():
+                                        ShowWindow(hwnd, 9)
+                                        SetForegroundWindow(hwnd)
+                                        return False
+                                return True
+
+                            EnumWindows(EnumWindowsProc(foreach_window), 0)
+                            
+                        focus_window(target)
+                    except Exception as e:
+                        print(f"Error focusing window {target}: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error in emergency action execution: {e}", file=sys.stderr)
+
+        os._exit(0)
 
     def dispatch_mouse_shortcut(self, event_type: str, button: Qt.MouseButton):
         """Dispatch a mouse shortcut if configured. event_type in {'press','release','double'}.
@@ -5229,10 +5443,18 @@ class MangaOCRApp(QMainWindow):
             converted_queue = []
             for image_path, area_payload, original_text, translated_text in self.ui_update_queue:
                 if isinstance(area_payload, dict):
+                    # Use the CURRENT font/color from the panel instead of the one
+                    # captured when the job was dispatched.  This ensures that font
+                    # changes the user made while the translation was in progress are
+                    # reflected in the resulting area.
+                    live_settings = area_payload['settings'].copy()
+                    live_settings['font'] = self._build_current_font()
+                    if hasattr(self, 'typeset_color') and isinstance(self.typeset_color, QColor):
+                        live_settings['color'] = QColor(self.typeset_color)
                     area = self._create_typeset_area(
                         area_payload['rect'],
                         area_payload['text'],
-                        area_payload['settings'],
+                        live_settings,
                         polygon=area_payload.get('polygon'),
                         original_text=area_payload.get('original_text', ''),
                     )
@@ -5271,7 +5493,12 @@ class MangaOCRApp(QMainWindow):
                 self.redo_stack = self.all_typeset_data.get(current_key, {'redo': []})['redo']
                 self.redraw_all_typeset_areas()
                 newest_area = relevant_updates[-1][1]
-                self.set_selected_area(newest_area, notify=True)
+                # Use notify=False so the typeset panel is NOT auto-synced to the new
+                # area's font.  The user may have already adjusted font size / bold in
+                # the panel while the translation was running; we must not overwrite
+                # those changes.  The panel stays as-is; if the user clicks the new
+                # area themselves the panel will sync then.
+                self.set_selected_area(newest_area, notify=False)
                 self.update_undo_redo_buttons_state()
 
             if updates_by_image:
@@ -9440,7 +9667,14 @@ class MangaOCRApp(QMainWindow):
         return data, 'json'
 
 
-    def _deserialize_typeset_map(self, serialized_map, fallback_font, fallback_color):
+    def _deserialize_typeset_map(self, serialized_map, fallback_font, fallback_color, project_dir=None):
+        """Deserialize the typeset data map.
+
+        Supports both schema v4 (basename keys, e.g. ``"2.webp"``) and legacy
+        schema v1-v3 (absolute path keys).  When *project_dir* is provided and
+        a key appears to be a basename (no directory separator), it is expanded
+        to a full path by joining with *project_dir*.
+        """
         result = {}
         warnings = []
         fallback_font = fallback_font or QFont('Arial', 9, QFont.Bold)
@@ -9449,6 +9683,13 @@ class MangaOCRApp(QMainWindow):
             if not isinstance(payload, dict):
                 warnings.append(f"Ignored invalid typeset block for {key}.")
                 continue
+
+            # --- Schema v4: resolve basename key to full absolute path ---
+            resolved_key = key
+            if project_dir and os.path.basename(key) == key:
+                # key is a bare filename; reconstruct the full path
+                resolved_key = os.path.join(project_dir, key)
+
             areas = []
             for area_data in payload.get('areas') or []:
                 try:
@@ -9469,7 +9710,7 @@ class MangaOCRApp(QMainWindow):
                     redo_items.append(redo_obj)
                 except Exception as exc:
                     warnings.append(f"Failed to load redo entry in {key}: {exc}")
-            result[key] = {'areas': areas, 'redo': redo_items}
+            result[resolved_key] = {'areas': areas, 'redo': redo_items}
         return result, warnings
 
     def _sanitize_history_entries(self, history_data, area_lookup, warnings):
@@ -9509,7 +9750,13 @@ class MangaOCRApp(QMainWindow):
                 if record['translation_style']:
                     area.translation_style = record['translation_style']
                 if record['translated_text']:
-                    area.update_plain_text(record['translated_text'])
+                    # Only populate text from history when the area has no text of
+                    # its own (e.g. area created without going through the normal
+                    # translation pipeline).  When typeset_data already loaded a
+                    # non-empty text into the area, trust that value — it reflects
+                    # any manual edits the user made after the AI translation.
+                    if not (area.text or '').strip():
+                        area.update_plain_text(record['translated_text'])
             else:
                 if 'image_key' not in record:
                     warnings.append(f"History entry {hist_id} has no matching area.")
@@ -9618,7 +9865,11 @@ class MangaOCRApp(QMainWindow):
             self._sync_cleanup_controls_from_selection()
 
         serialized_typeset = payload.get('typeset_data') or payload.get('all_data') or {}
-        typeset_map, type_warnings = self._deserialize_typeset_map(serialized_typeset, self.typeset_font, self.typeset_color)
+        # Pass project_dir so schema-v4 basename keys can be resolved to full paths
+        typeset_map, type_warnings = self._deserialize_typeset_map(
+            serialized_typeset, self.typeset_font, self.typeset_color,
+            project_dir=self.project_dir,
+        )
         warnings.extend(type_warnings)
         self.all_typeset_data = typeset_map
 
@@ -10033,15 +10284,30 @@ class MangaOCRApp(QMainWindow):
                     area.color_info = first_segment.get('color', area.color_info)
 
                 area.ensure_defaults()
+
+                # --- Fix: sync history entry so text edits survive save/load ---
+                # Without this, _sanitize_history_entries on load would overwrite
+                # the edited area.text with the old translated_text from history.
+                hist_id = getattr(area, 'history_id', None)
+                if hist_id:
+                    for entry in getattr(self, 'history_entries', []):
+                        if entry.get('history_id') == hist_id or entry.get('id') == hist_id:
+                            entry['translated_text'] = area.text
+                            break
+
                 try:
                     self.redo_stack.clear()
                 except Exception:
                     pass
                 self.redraw_all_typeset_areas()
                 self.update_undo_redo_buttons_state()
+                # NOTE: Do NOT call _sync_typeset_controls_from_selection() here.
+                # Advanced Text Edit modifies only the area's text/segments.
+                # The typeset panel should keep whatever values the user set there.
                 self.statusBar().showMessage("Text updated", 2000)
         except Exception:
             traceback.print_exc()
+
 
     def zoom_coords(self, unzoomed_rect):
         pixmap = self.image_label.pixmap()

@@ -399,14 +399,24 @@ class TypesetArea:
                 by = coerce_float(pt[1])
                 bezier_points.append({'x': bx, 'y': by})
         bezier_points = bezier_points or None
-        return {
+
+        # --- Compact polygon serialisation (schema v4) ---
+        # Encode as [[x,y],...] instead of [{"x":x,"y":y},...]
+        # cleanup_polygon is ALWAYS stored explicitly — it represents the
+        # inpainting/cleanup region which is semantically separate from the
+        # text placement polygon and may differ intentionally.
+        poly_list = polygon_to_list(self.polygon, compact=True)
+        cleanup_poly = self.get_cleanup_polygon() or self.polygon
+        cpoly_list = polygon_to_list(cleanup_poly, compact=True)
+
+        payload = {
             'rect': rect_to_dict(self.rect),
             'cleanup_rect': rect_to_dict(self.get_cleanup_rect()),
             'text': self.text or '',
             'font': base_font,
             'color': self.color_info,
-            'polygon': polygon_to_list(self.polygon),
-            'cleanup_polygon': polygon_to_list(self.get_cleanup_polygon() or self.polygon),
+            'polygon': poly_list,
+            'cleanup_polygon': cpoly_list,
             'orientation': self.get_orientation(),
             'effect': self.get_effect(),
             'effect_intensity': float(self.get_effect_intensity()),
@@ -430,25 +440,43 @@ class TypesetArea:
             'translation_style': self.translation_style or '',
             'review_notes': copy.deepcopy(self.review_notes if isinstance(self.review_notes, dict) else {}),
             'overrides': copy.deepcopy(self.get_overrides() if isinstance(self.get_overrides(), dict) else {}),
-            'gradient_enabled': getattr(self, 'gradient_enabled', False),
-            'gradient_colors': getattr(self, 'gradient_colors', None),
-            'gradient_angle': getattr(self, 'gradient_angle', 0.0),
-            'gradient_direction': getattr(self, 'gradient_direction', 'Left -> Right'),
-            'shadow_enabled': bool(self.shadow_enabled),
-            'shadow_color': str(self.shadow_color),
-            'shadow_blur': float(self.shadow_blur),
-            'shadow_offset_x': float(self.shadow_offset_x),
-            'shadow_offset_y': float(self.shadow_offset_y),
-            'shadow_opacity': float(self.shadow_opacity),
-            'outline_layers': copy.deepcopy(self.outline_layers),
-            'pattern_fill_enabled': bool(self.pattern_fill_enabled),
-            'pattern_type': str(self.pattern_type),
-            'pattern_scale': float(self.pattern_scale),
-            'smart_fit_enabled': bool(self.smart_fit_enabled),
             'visible': bool(self.visible),
             'locked': bool(self.locked),
             'name': str(self.name or ''),
         }
+
+        # --- Omit fields that equal their defaults to reduce file size ---
+        # These are restored to defaults in from_payload() when absent.
+        _gradient_enabled = getattr(self, 'gradient_enabled', False)
+        if _gradient_enabled:
+            payload['gradient_enabled'] = True
+            payload['gradient_colors'] = getattr(self, 'gradient_colors', None)
+            payload['gradient_angle'] = getattr(self, 'gradient_angle', 0.0)
+            payload['gradient_direction'] = getattr(self, 'gradient_direction', 'Left -> Right')
+
+        _shadow_enabled = bool(self.shadow_enabled)
+        if _shadow_enabled:
+            payload['shadow_enabled'] = True
+            payload['shadow_color'] = str(self.shadow_color)
+            payload['shadow_blur'] = float(self.shadow_blur)
+            payload['shadow_offset_x'] = float(self.shadow_offset_x)
+            payload['shadow_offset_y'] = float(self.shadow_offset_y)
+            payload['shadow_opacity'] = float(self.shadow_opacity)
+
+        _pattern_fill_enabled = bool(self.pattern_fill_enabled)
+        if _pattern_fill_enabled:
+            payload['pattern_fill_enabled'] = True
+            payload['pattern_type'] = str(self.pattern_type)
+            payload['pattern_scale'] = float(self.pattern_scale)
+
+        if bool(self.smart_fit_enabled):
+            payload['smart_fit_enabled'] = True
+
+        _outline_layers = self.outline_layers
+        if _outline_layers:
+            payload['outline_layers'] = copy.deepcopy(_outline_layers)
+
+        return payload
     
     @classmethod
     def from_payload(cls, data, fallback_font=None, fallback_color=None):

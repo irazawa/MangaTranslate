@@ -143,6 +143,10 @@ def default_settings() -> dict:
         "autosave": {
             "enabled": False,
             "interval_ms": 300000
+        },
+        "emergency_close": {
+            "action_type": "url",
+            "target": "https://youtube.com"
         }
     }
 
@@ -266,6 +270,11 @@ def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
         except Exception:
             interval = autosave_defaults.get('interval_ms', 300000)
         autosave_settings['interval_ms'] = max(5000, interval)
+        
+        emergency_defaults = base.get('emergency_close', {})
+        emergency_settings = merged.setdefault('emergency_close', {})
+        for key, value in emergency_defaults.items():
+            emergency_settings.setdefault(key, value)
 
         # Migrate duplicate OpenRouter keys to centralized location
         _migrate_openrouter_key(merged)
@@ -440,6 +449,7 @@ DEFAULT_SHORTCUTS = {
     'save_image': 'Ctrl+Shift+S',
     'undo': 'Ctrl+Z',
     'redo': 'Ctrl+Y',
+    'emergency_close': 'MOUSE:double:Right',
 }
 
 for idx, default_key in enumerate(SELECTION_MODE_SHORTCUT_KEYS):
@@ -454,6 +464,7 @@ SHORTCUT_DEFINITIONS = [
     ('confirm_pen', "Confirm Pen Selection", "Selection Actions"),
     ('next', "Next Image/Page", "Navigation"),
     ('prev', "Previous Image/Page", "Navigation"),
+    ('emergency_close', "Emergency Close & Exit", "General"),
 ]
 
 for idx, label in enumerate(SELECTION_MODE_LABELS):

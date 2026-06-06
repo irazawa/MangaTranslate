@@ -66,23 +66,42 @@ def dict_to_rect(d):
     h = d.get('height', d.get('h', 0))
     return QRectF(x, y, w, h)
 
-def polygon_to_list(polygon):
+def polygon_to_list(polygon, compact=True):
+    """Serialize a polygon to a list.
+
+    When *compact* is True (default, schema v4+), each point is stored as a
+    two-element list ``[x, y]`` which is much more space-efficient than the
+    legacy ``{"x": x, "y": y}`` object form.  The legacy form is retained for
+    explicit opt-out (e.g. migration helpers).
+    """
     if polygon is None:
         return []
-    pts = []
-    for i in range(polygon.count()):
-        pt = polygon.at(i)
-        pts.append({'x': pt.x(), 'y': pt.y()})
-    return pts
+    if compact:
+        return [
+            [int(polygon.at(i).x()), int(polygon.at(i).y())]
+            for i in range(polygon.count())
+        ]
+    # Legacy format (schema v1–v3)
+    return [
+        {'x': polygon.at(i).x(), 'y': polygon.at(i).y()}
+        for i in range(polygon.count())
+    ]
 
 def list_to_polygon(pts):
+    """Deserialize a polygon from a list.
+
+    Supports both the compact ``[[x, y], ...]`` format (schema v4+) and the
+    legacy ``[{"x": x, "y": y}, ...]`` format (schema v1–v3) transparently.
+    """
     if not pts:
         return QPolygonF()
     poly = QPolygonF()
     for pt in pts:
         if isinstance(pt, dict):
+            # Legacy format: {"x": x, "y": y}
             poly.append(QPointF(pt.get('x', 0.0), pt.get('y', 0.0)))
         elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
+            # Compact format: [x, y]
             poly.append(QPointF(pt[0], pt[1]))
     return poly
 

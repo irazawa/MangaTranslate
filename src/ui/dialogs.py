@@ -538,6 +538,74 @@ class SettingsCenterDialog(QDialog):
             self.default_font_bold_checkbox))
 
         layout.addWidget(def_card)
+
+        # ── Emergency Close card ──────────────────────────────────────────
+        ec_card = QGroupBox("🚨  Emergency Close")
+        ec_card.setObjectName("settings-card")
+        ec_vbox = QVBoxLayout(ec_card)
+        ec_vbox.setSpacing(4)
+        ec_vbox.setContentsMargins(0, 8, 0, 8)
+
+        self.ec_action_combo = QComboBox()
+        self.ec_action_combo.addItems(["Open URL", "Launch Application", "Focus Existing Window"])
+        self.ec_action_combo.setFixedWidth(180)
+        
+        ec_cfg = SETTINGS.get('emergency_close', {})
+        current_type = ec_cfg.get('action_type', 'url')
+        type_map = {'url': "Open URL", 'app': "Launch Application", 'focus': "Focus Existing Window"}
+        self.ec_action_combo.setCurrentText(type_map.get(current_type, "Open URL"))
+
+        self.ec_target_edit = QLineEdit()
+        self.ec_target_edit.setPlaceholderText("e.g., https://youtube.com or notepad.exe")
+        self.ec_target_edit.setText(ec_cfg.get('target', 'https://youtube.com'))
+
+        # Browse button for application path
+        self.ec_browse_btn = QPushButton("Browse...")
+        self.ec_browse_btn.setFixedWidth(80)
+        
+        def _on_browse_app():
+            from PyQt5.QtWidgets import QFileDialog
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Select Application", "", 
+                "Executable Files (*.exe);;All Files (*)"
+            )
+            if file_path:
+                self.ec_target_edit.setText(os.path.abspath(file_path))
+
+        self.ec_browse_btn.clicked.connect(_on_browse_app)
+
+        # Container for edit and browse button
+        target_widget = QWidget()
+        target_layout = QHBoxLayout(target_widget)
+        target_layout.setContentsMargins(0, 0, 0, 0)
+        target_layout.setSpacing(6)
+        target_layout.addWidget(self.ec_target_edit, 1)
+        target_layout.addWidget(self.ec_browse_btn)
+
+        # Connect combobox index change to adjust placeholder text and browse visibility
+        def _on_ec_type_changed(text):
+            if text == "Open URL":
+                self.ec_target_edit.setPlaceholderText("e.g., https://youtube.com")
+                self.ec_browse_btn.setVisible(False)
+            elif text == "Launch Application":
+                self.ec_target_edit.setPlaceholderText("e.g., C:\\Windows\\notepad.exe")
+                self.ec_browse_btn.setVisible(True)
+            else:
+                self.ec_target_edit.setPlaceholderText("e.g., Brave, Discord, Chrome, Spotify")
+                self.ec_browse_btn.setVisible(False)
+
+        self.ec_action_combo.currentTextChanged.connect(_on_ec_type_changed)
+        _on_ec_type_changed(self.ec_action_combo.currentText())
+
+        ec_vbox.addWidget(self._make_option_row(
+            "Action Type", "Choose what to do when emergency close is triggered.",
+            self.ec_action_combo))
+
+        ec_vbox.addWidget(self._make_option_row(
+            "Target Destination", "Specify the URL, app path, or window title.",
+            target_widget))
+
+        layout.addWidget(ec_card)
         layout.addStretch(1)
 
         self.autosave_checkbox.setChecked(self._initial_autosave_enabled)
@@ -1169,6 +1237,11 @@ class SettingsCenterDialog(QDialog):
         gen_cfg['default_font_family'] = self.default_font_combo.currentText()
         gen_cfg['default_font_size'] = self.default_font_size_spin.value()
         gen_cfg['default_font_bold'] = bool(self.default_font_bold_checkbox.isChecked())
+
+        ec_cfg = SETTINGS.setdefault('emergency_close', {})
+        action_map_reverse = {"Open URL": "url", "Launch Application": "app", "Focus Existing Window": "focus"}
+        ec_cfg['action_type'] = action_map_reverse.get(self.ec_action_combo.currentText(), 'url')
+        ec_cfg['target'] = self.ec_target_edit.text().strip()
 
         cleanup_cfg = SETTINGS.setdefault('cleanup', {})
         prev_auto_color = bool(cleanup_cfg.get('auto_text_color', True))
