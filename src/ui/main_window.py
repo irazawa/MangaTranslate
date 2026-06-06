@@ -52,6 +52,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QAction, QDialog, QDialogButtonBox, QCheckBox, QStatusBar, QAbstractItemView, QSpinBox,
     QInputDialog,
     QTabWidget, QGroupBox, QGridLayout, QFrame, QSplitter, QRadioButton, QToolButton, QButtonGroup,
+    QStackedWidget,
     QFormLayout,
     QFontComboBox, QDoubleSpinBox, QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
     QKeySequenceEdit
@@ -991,231 +992,314 @@ class MangaOCRApp(QMainWindow):
         self._apply_right_panel_styles()
 
     def setup_right_panel(self):
-        # Modernized right-panel layout
+        """Modern icon-sidebar + stacked-widget layout untuk Tools & Workflows panel."""
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Top header
+        # ── Header bar ──────────────────────────────────────────────────────────
+        header_bar = QWidget()
+        header_bar.setObjectName("rp-header-bar")
+        header_bar.setFixedHeight(46)
+        header_h = QHBoxLayout(header_bar)
+        header_h.setContentsMargins(14, 0, 14, 0)
+        header_h.setSpacing(8)
+
+        header_icon = QLabel("⚡")
+        header_icon.setStyleSheet("font-size:16px; background:transparent; color:#38bdf8;")
+        header_h.addWidget(header_icon)
+
         header = QLabel("Tools & Workflows")
         header.setObjectName("panel-title")
-        header.setStyleSheet("font-size:16px; font-weight:700; padding:4px 6px;")
-        main_layout.addWidget(header)
+        header_h.addWidget(header)
+        header_h.addStretch()
+        main_layout.addWidget(header_bar)
 
-        # Tabs area
-        tabs_frame = QFrame()
-        tabs_frame.setFrameShape(QFrame.NoFrame)
-        tabs_layout = QVBoxLayout(tabs_frame)
-        tabs_layout.setContentsMargins(0, 0, 0, 0)
-        tabs_layout.setSpacing(6)
+        # ── Separator ────────────────────────────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setObjectName("rp-sep")
+        main_layout.addWidget(sep)
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("main-tabs")
-        self.tabs.setDocumentMode(True)
-        self.tabs.setMovable(True)
-        # Add tabs in preferred order
-        # Import chatbot widget here to avoid circular import at module level
+        # ── Body: icon sidebar (left) + stacked content (right) ─────────────────
+        body_widget = QWidget()
+        body_h = QHBoxLayout(body_widget)
+        body_h.setContentsMargins(0, 0, 0, 0)
+        body_h.setSpacing(0)
+
+        # ── Icon sidebar ─────────────────────────────────────────────────────────
+        sidebar = QWidget()
+        sidebar.setObjectName("rp-sidebar")
+        sidebar.setFixedWidth(58)
+        sidebar_v = QVBoxLayout(sidebar)
+        sidebar_v.setContentsMargins(4, 8, 4, 8)
+        sidebar_v.setSpacing(2)
+
+        # Build chat widget first
         try:
             from src.ui.chat_widget import AIChatWidget
             self._chat_widget = AIChatWidget(main_app=self, parent=None)
-            _chat_widget_ok = True
         except Exception as _chat_err:
             print(f"[ChatWidget] Failed to load: {_chat_err}")
             self._chat_widget = None
-            _chat_widget_ok = False
 
-        tab_order = [
-            (self._create_translate_tab(), "Translate"),
+        # Tab definitions: (label_short, emoji, tooltip, widget_builder)
+        tab_defs = [
+            ("OCR",      "🔍", "Translate & OCR settings",     self._create_translate_tab),
+            ("Typeset",  "✏️", "Typography & text styling",    self._create_typeset_tab),
+            ("Layers",   "🗂️", "Canvas layer manager",         self._create_layers_tab),
+            ("Cleanup",  "🧹", "Inpainting & detection tools",  self._create_cleanup_tab),
+            ("History",  "📋", "Translation history log",       self._create_history_tab),
+            ("Scenes",   "🎬", "Scene / dialogue manager",      self._create_scene_tab),
+            ("AI Cfg",   "🤖", "AI models & hardware config",   self._create_ai_hardware_tab),
         ]
         if self._chat_widget is not None:
-            tab_order.append((self._chat_widget, "🤖 AI Chat / Video"))
-            
-        tab_order.extend([
-            (self._create_typeset_tab(), "Typeset"),
-            (self._create_layers_tab(), "Layers"),
-            (self._create_cleanup_tab(), "Cleanup"),
-            (self._create_history_tab(), "History"),
-            (self._create_scene_tab(), "Scenes"),
-            (self._create_ai_hardware_tab(), "AI Hardware"),
-        ])
-        
-        for widget, label in tab_order:
-            if widget == self._chat_widget:
-                # Add AI Chat/Video directly (it manages its own scroll)
-                self.tabs.addTab(widget, label)
-            elif not isinstance(widget, QScrollArea):
-                scroll = QScrollArea()
-                scroll.setWidgetResizable(True)
-                scroll.setFrameShape(QFrame.NoFrame)
-                scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-                scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-                scroll.setWidget(widget)
-                self.tabs.addTab(scroll, label)
+            # Insert chat after OCR
+            tab_defs.insert(1, ("Chat", "💬", "AI Chat & Video", None))
+
+        # QStackedWidget as content area
+        self.right_stack = QStackedWidget()
+        self.right_stack.setObjectName("rp-stack")
+
+        # Compatibility alias so code referencing self.tabs still works for tab switching
+        # We create a minimal shim object
+        class _TabShim:
+            """Shim so legacy `self.tabs.setCurrentIndex(n)` calls still work."""
+            def __init__(self, stack):
+                self._stack = stack
+            def setCurrentIndex(self, i):
+                self._stack.setCurrentIndex(i)
+            def currentIndex(self):
+                return self._stack.currentIndex()
+            def addTab(self, w, label):
+                self._stack.addWidget(w)
+            def tabBar(self):
+                class _FakeBar:
+                    def setExpanding(self, v): pass
+                    def setUsesScrollButtons(self, v): pass
+                    def setElideMode(self, v): pass
+                    def setToolTip(self, v): pass
+                return _FakeBar()
+            def setStyleSheet(self, s): pass
+            def setDocumentMode(self, v): pass
+            def setMovable(self, v): pass
+        self.tabs = _TabShim(self.right_stack)
+
+        self._sidebar_buttons = []
+        self._stack_page_map = {}  # page_index -> btn
+
+        def _make_sidebar_btn(emoji, label, tip, page_idx):
+            btn = QToolButton()
+            btn.setObjectName("rp-nav-btn")
+            btn.setText(f"{emoji}\n{label}")
+            btn.setToolTip(tip)
+            btn.setCheckable(True)
+            btn.setFixedSize(50, 52)
+            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            btn.setProperty("page", page_idx)
+            btn.clicked.connect(lambda checked, idx=page_idx: self._on_sidebar_nav(idx))
+            sidebar_v.addWidget(btn)
+            self._sidebar_buttons.append(btn)
+            self._stack_page_map[page_idx] = btn
+            return btn
+
+        page_idx = 0
+        for short_label, emoji, tip, builder in tab_defs:
+            if builder is None:
+                # Chat widget — already built
+                widget = self._chat_widget
+                page = widget
             else:
-                self.tabs.addTab(widget, label)
+                widget = builder()
+                if isinstance(widget, QScrollArea):
+                    page = widget
+                else:
+                    scroll = QScrollArea()
+                    scroll.setWidgetResizable(True)
+                    scroll.setFrameShape(QFrame.NoFrame)
+                    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+                    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                    scroll.setWidget(widget)
+                    page = scroll
 
-        # Tidy tab bar appearance
-        tab_bar = self.tabs.tabBar()
-        try:
-            tab_bar.setExpanding(False)
-            tab_bar.setUsesScrollButtons(True)
-            tab_bar.setElideMode(Qt.ElideNone)
-            tab_bar.setToolTip('Seret tab untuk ubah urutan')
-        except Exception:
-            pass
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane { 
-                border-top: 1px solid #1f2b3b;
-                background: transparent;
-                margin-top: -1px;
-            }
-            QTabBar::tab {
-                background: transparent;
-                color: #7f8ba7;
-                padding: 10px 14px;
-                margin: 0px 4px 0px 0px;
-                font-size: 13px;
-                font-weight: 600;
-                border: none;
-                border-bottom: 3px solid transparent;
-            }
-            QTabBar::tab:selected {
-                color: #3ba1ff;
-                border-bottom: 3px solid #3ba1ff;
-            }
-            QTabBar::tab:hover:!selected {
-                color: #cfd9e6;
-                border-bottom: 3px solid #2a3a52;
-            }
-        """)
+            self.right_stack.addWidget(page)
+            _make_sidebar_btn(emoji, short_label, tip, page_idx)
+            page_idx += 1
 
-        tabs_layout.addWidget(self.tabs)
+        sidebar_v.addStretch()
+        body_h.addWidget(sidebar)
 
-        # Scrollbar index yang lama dihapus agar desain lebih simpel dan memercayakan ke tab-bar scrolling bawaan.
+        # ── Vertical separator ───────────────────────────────────────────────────
+        vsep = QFrame()
+        vsep.setFrameShape(QFrame.VLine)
+        vsep.setObjectName("rp-vsep")
+        body_h.addWidget(vsep)
 
-        # Use a vertical splitter so the user gets 70% tabs and 30% actions proportionally, and can still drag it.
-        from PyQt5.QtWidgets import QSplitter
-        self.right_splitter = QSplitter(Qt.Vertical)
-        self.right_splitter.addWidget(tabs_frame)
-        
-        # Expandable bottom area inside scroll area so controls remain accessible on small screens
-        bottom_scroll = QScrollArea()
-        bottom_scroll.setWidgetResizable(True)
-        bottom_container = QWidget()
-        bottom_layout = QVBoxLayout(bottom_container)
-        bottom_layout.setContentsMargins(6, 6, 6, 6)
-        bottom_layout.setSpacing(8)
+        # ── Content area ─────────────────────────────────────────────────────────
+        body_h.addWidget(self.right_stack, 1)
 
-        # Actions section
-        actions_frame = QFrame()
-        actions_frame.setFrameShape(QFrame.NoFrame)
-        actions_frame.setProperty("panelCard", True)
-        actions_layout = QVBoxLayout(actions_frame)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(6)
+        main_layout.addWidget(body_widget, 1)
 
-        actions_label = QLabel("Actions")
-        actions_label.setStyleSheet("font-size:13px; font-weight:600;")
-        actions_layout.addWidget(actions_label)
+        # ── Bottom status & actions bar ──────────────────────────────────────────
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setObjectName("rp-sep")
+        main_layout.addWidget(sep2)
 
-        # Buttons (kept same names for compatibility)
-        self.process_batch_button = QPushButton("Process Batch Now (0 items)")
+        bottom_bar = QWidget()
+        bottom_bar.setObjectName("rp-bottom-bar")
+        bottom_v = QVBoxLayout(bottom_bar)
+        bottom_v.setContentsMargins(10, 8, 10, 8)
+        bottom_v.setSpacing(6)
+
+        # ── Batch action row ────────────────────────────────────────────────────
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(6)
+        self.process_batch_button = QPushButton("⚡ Batch Now")
+        self.process_batch_button.setObjectName("rp-action-btn")
+        self.process_batch_button.setToolTip("Process batch queue now")
         self.process_batch_button.clicked.connect(self.start_batch_processing)
-        actions_layout.addWidget(self.process_batch_button)
+        batch_row.addWidget(self.process_batch_button)
+
+        self.batch_process_button = QPushButton("🔍 Detect All")
+        self.batch_process_button.setObjectName("rp-action-btn")
+        self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder")
+        self.batch_process_button.clicked.connect(self.start_interactive_batch_detection)
+        batch_row.addWidget(self.batch_process_button)
+        bottom_v.addLayout(batch_row)
         self.on_batch_mode_changed(False)
 
-        self.batch_process_button = QPushButton("Detect All Files")
-        self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder, lets you confirm, then processes them.")
-        self.batch_process_button.clicked.connect(self.start_interactive_batch_detection)
-        actions_layout.addWidget(self.batch_process_button)
-
-        btns_row = QHBoxLayout()
-        self.confirm_items_button = QPushButton("Confirm Items (0)")
+        # ── Confirm/Cancel detection (hidden by default) ──────────────────────
+        detect_row = QHBoxLayout()
+        detect_row.setSpacing(6)
+        self.confirm_items_button = QPushButton("✔ Confirm (0)")
+        self.confirm_items_button.setObjectName("rp-confirm-btn")
         self.confirm_items_button.clicked.connect(self.process_confirmed_detections)
         self.confirm_items_button.setVisible(False)
-        btns_row.addWidget(self.confirm_items_button)
-        self.cancel_detection_button = QPushButton("Cancel Detection")
+        detect_row.addWidget(self.confirm_items_button)
+        self.cancel_detection_button = QPushButton("✕ Cancel")
+        self.cancel_detection_button.setObjectName("rp-danger-btn")
         self.cancel_detection_button.clicked.connect(self.cancel_interactive_batch)
         self.cancel_detection_button.setVisible(False)
-        btns_row.addWidget(self.cancel_detection_button)
-        actions_layout.addLayout(btns_row)
+        detect_row.addWidget(self.cancel_detection_button)
+        bottom_v.addLayout(detect_row)
 
-        # Undo/Redo and Save/Reset compact row
-        ctrl_row = QHBoxLayout()
-        self.undo_button = QPushButton("Undo"); self.undo_button.clicked.connect(self.undo_last_action); self.undo_button.setEnabled(False)
-        self.redo_button = QPushButton("Redo"); self.redo_button.clicked.connect(self.redo_last_action); self.redo_button.setEnabled(False)
-        ctrl_row.addWidget(self.undo_button); ctrl_row.addWidget(self.redo_button)
-        actions_layout.addLayout(ctrl_row)
+        # ── Edit action row ─────────────────────────────────────────────────────
+        edit_row = QHBoxLayout()
+        edit_row.setSpacing(6)
+        self.undo_button = QPushButton("↩ Undo")
+        self.undo_button.setObjectName("rp-action-btn")
+        self.undo_button.clicked.connect(self.undo_last_action)
+        self.undo_button.setEnabled(False)
+        edit_row.addWidget(self.undo_button)
 
-        save_row = QHBoxLayout()
-        self.reset_button = QPushButton("Reset Image"); self.reset_button.clicked.connect(self.reset_view_to_original)
-        self.save_button = QPushButton("Save Image"); self.save_button.clicked.connect(self.save_image)
-        save_row.addWidget(self.reset_button); save_row.addWidget(self.save_button)
-        actions_layout.addLayout(save_row)
+        self.redo_button = QPushButton("↪ Redo")
+        self.redo_button.setObjectName("rp-action-btn")
+        self.redo_button.clicked.connect(self.redo_last_action)
+        self.redo_button.setEnabled(False)
+        edit_row.addWidget(self.redo_button)
 
-        bottom_layout.addWidget(actions_frame)
+        self.reset_button = QPushButton("🔄 Reset")
+        self.reset_button.setObjectName("rp-action-btn")
+        self.reset_button.clicked.connect(self.reset_view_to_original)
+        edit_row.addWidget(self.reset_button)
 
-        # API Status section (compact grid)
-        api_frame = QFrame(); api_frame.setFrameShape(QFrame.NoFrame); api_frame.setProperty("panelCard", True)
-        api_layout = QGridLayout(api_frame)
-        api_layout.setContentsMargins(0,0,0,0)
-        api_layout.setSpacing(6)
+        self.save_button = QPushButton("💾 Save")
+        self.save_button.setObjectName("rp-save-btn")
+        self.save_button.clicked.connect(self.save_image)
+        edit_row.addWidget(self.save_button)
+        bottom_v.addLayout(edit_row)
 
-        api_layout.addWidget(QLabel("Active Workers:"), 0, 0); self.active_workers_label = QLabel("0"); api_layout.addWidget(self.active_workers_label, 0, 1)
-        api_layout.addWidget(QLabel("RPM:"), 1, 0); self.rpm_label = QLabel("0 / 0"); api_layout.addWidget(self.rpm_label, 1, 1)
-        api_layout.addWidget(QLabel("RPD:"), 2, 0); self.rpd_label = QLabel("0 / 0"); api_layout.addWidget(self.rpd_label, 2, 1)
-        api_layout.addWidget(QLabel("Cost (USD):"), 3, 0); self.cost_label = QLabel("$0.0000"); api_layout.addWidget(self.cost_label, 3, 1)
-        api_layout.addWidget(QLabel("Cost (IDR):"), 4, 0); self.cost_idr_label = QLabel("Rp 0"); api_layout.addWidget(self.cost_idr_label, 4, 1)
-        api_layout.addWidget(QLabel("Provider:"), 5, 0); self.provider_label = QLabel("-"); api_layout.addWidget(self.provider_label, 5, 1)
-        api_layout.addWidget(QLabel("Model:"), 6, 0); self.model_label = QLabel("-"); api_layout.addWidget(self.model_label, 6, 1)
+        # ── Status metrics (compact 2-row grid) ─────────────────────────────────
+        metrics_widget = QWidget()
+        metrics_widget.setObjectName("rp-metrics")
+        metrics_grid = QGridLayout(metrics_widget)
+        metrics_grid.setContentsMargins(8, 6, 8, 6)
+        metrics_grid.setHorizontalSpacing(16)
+        metrics_grid.setVerticalSpacing(3)
 
-        bottom_layout.addWidget(api_frame)
+        def _mlabel(text, bold=False):
+            lbl = QLabel(text)
+            lbl.setObjectName("rp-metric-key" if not bold else "rp-metric-val")
+            return lbl
 
-        # Small status labels
-        self.input_tokens_label = QLabel("Input Tokens: 0")
-        self.output_tokens_label = QLabel("Output Tokens: 0")
-        tokens_row = QHBoxLayout(); tokens_row.addWidget(self.input_tokens_label); tokens_row.addWidget(self.output_tokens_label)
-        bottom_layout.addLayout(tokens_row)
+        # Row 0
+        metrics_grid.addWidget(_mlabel("Workers"), 0, 0)
+        self.active_workers_label = QLabel("0"); self.active_workers_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.active_workers_label, 0, 1)
 
-        self.rate_label_input = QLabel("Rate Input: $0.0000000")
-        self.rate_label_output = QLabel("Rate Output: $0.0000000")
-        rates_row = QHBoxLayout(); rates_row.addWidget(self.rate_label_input); rates_row.addWidget(self.rate_label_output)
-        bottom_layout.addLayout(rates_row)
+        metrics_grid.addWidget(_mlabel("RPM"), 0, 2)
+        self.rpm_label = QLabel("0/0"); self.rpm_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.rpm_label, 0, 3)
 
-        self.translated_label = QLabel("Translated Snippets: 0")
-        bottom_layout.addWidget(self.translated_label)
+        metrics_grid.addWidget(_mlabel("RPD"), 0, 4)
+        self.rpd_label = QLabel("0/0"); self.rpd_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.rpd_label, 0, 5)
 
-        self.countdown_label = QLabel("Cooldown: 60s")
-        self.countdown_label.setStyleSheet("color: #ffc107;"); self.countdown_label.setVisible(False)
-        bottom_layout.addWidget(self.countdown_label)
+        # Row 1
+        metrics_grid.addWidget(_mlabel("Cost"), 1, 0)
+        self.cost_label = QLabel("$0.0000"); self.cost_label.setObjectName("rp-cost-val")
+        metrics_grid.addWidget(self.cost_label, 1, 1)
 
-        bottom_layout.addStretch()
+        metrics_grid.addWidget(_mlabel("IDR"), 1, 2)
+        self.cost_idr_label = QLabel("Rp 0"); self.cost_idr_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.cost_idr_label, 1, 3)
 
-        bottom_container.setLayout(bottom_layout)
-        bottom_scroll.setWidget(bottom_container)
-        
-        # Remove size limits so the splitter can drag all the way up and down without restriction
-        tabs_frame.setMinimumHeight(0)
-        self.tabs.setMinimumHeight(0)
-        bottom_scroll.setMinimumHeight(0)
-        
-        self.right_splitter.addWidget(bottom_scroll)
-        self.right_splitter.setStretchFactor(0, 5)
-        self.right_splitter.setStretchFactor(1, 5)
+        metrics_grid.addWidget(_mlabel("Snippets"), 1, 4)
+        self.translated_label = QLabel("0"); self.translated_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.translated_label, 1, 5)
 
-        # Load saved right splitter sizes if present
-        saved_right_sizes = SETTINGS.get('right_splitter_sizes')
-        if saved_right_sizes and len(saved_right_sizes) == 2:
-            self.right_splitter.setSizes(saved_right_sizes)
-        else:
-            self.right_splitter.setSizes([500, 500]) # Fallback ratio
+        # Row 2 — provider + model  (spans full width)
+        metrics_grid.addWidget(_mlabel("Provider"), 2, 0)
+        self.provider_label = QLabel("-"); self.provider_label.setObjectName("rp-metric-val")
+        metrics_grid.addWidget(self.provider_label, 2, 1)
+        metrics_grid.addWidget(_mlabel("Model"), 2, 2)
+        self.model_label = QLabel("-"); self.model_label.setObjectName("rp-metric-val")
+        self.model_label.setWordWrap(True)
+        metrics_grid.addWidget(self.model_label, 2, 3, 1, 3)
 
-        main_layout.addWidget(self.right_splitter, 1)
+        bottom_v.addWidget(metrics_widget)
+
+        # ── Token rates (very small, collapsed to single row) ─────────────────
+        token_row = QHBoxLayout()
+        token_row.setSpacing(12)
+        self.input_tokens_label = QLabel("In: 0 tok")
+        self.input_tokens_label.setObjectName("rp-tiny-label")
+        token_row.addWidget(self.input_tokens_label)
+        self.output_tokens_label = QLabel("Out: 0 tok")
+        self.output_tokens_label.setObjectName("rp-tiny-label")
+        token_row.addWidget(self.output_tokens_label)
+        self.rate_label_input = QLabel("$0.0000/in")
+        self.rate_label_input.setObjectName("rp-tiny-label")
+        token_row.addWidget(self.rate_label_input)
+        self.rate_label_output = QLabel("$0.0000/out")
+        self.rate_label_output.setObjectName("rp-tiny-label")
+        token_row.addWidget(self.rate_label_output)
+        token_row.addStretch()
+        bottom_v.addLayout(token_row)
+
+        # ── Cooldown label ───────────────────────────────────────────────────────
+        self.countdown_label = QLabel("⏳ Cooldown: 60s")
+        self.countdown_label.setObjectName("rp-countdown")
+        self.countdown_label.setVisible(False)
+        bottom_v.addWidget(self.countdown_label)
+
+        main_layout.addWidget(bottom_bar)
+
+        # ── Activate first tab ───────────────────────────────────────────────────
+        if self._sidebar_buttons:
+            self._on_sidebar_nav(0)
 
         return main_layout
 
+    def _on_sidebar_nav(self, page_idx):
+        """Switch stacked widget page and update sidebar button states."""
+        self.right_stack.setCurrentIndex(page_idx)
+        for btn in self._sidebar_buttons:
+            btn.setChecked(btn.property("page") == page_idx)
+
     def _apply_right_panel_styles(self):
-        """Apply a cleaner, modern skin to the Tools & Workflows column."""
+        """Apply modern dark sidebar skin to the Tools & Workflows column."""
         try:
             panel_widget = self.right_panel_scroll.widget()
         except Exception:
@@ -1224,158 +1308,414 @@ class MangaOCRApp(QMainWindow):
             return
 
         panel_widget.setStyleSheet("""
+            /* ── Root panel ─────────────────────────────────────────────────── */
             #right-panel {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #090a0f, stop:0.5 #0e111a, stop:1 #090a0f);
-                border-left: 1px solid #1e293b;
+                background-color: #0b0e17;
+                border-left: 1px solid #1a2235;
             }
-            #right-panel QWidget { color: #cbd5e1; font-size: 10pt; }
+
+            /* ── Header bar ─────────────────────────────────────────────────── */
+            #rp-header-bar {
+                background-color: #0d111b;
+                border-bottom: 1px solid #1a2235;
+            }
             #right-panel QLabel#panel-title {
+                color: #e2e8f0;
+                font-size: 13pt;
+                font-weight: 700;
+                letter-spacing: 0.3px;
+                background: transparent;
+                padding: 0px;
+            }
+
+            /* ── Separators ─────────────────────────────────────────────────── */
+            #rp-sep {
+                background-color: #1a2235;
+                border: none;
+                max-height: 1px;
+            }
+            #rp-vsep {
+                background-color: #1a2235;
+                border: none;
+                max-width: 1px;
+            }
+
+            /* ── Icon sidebar ───────────────────────────────────────────────── */
+            #rp-sidebar {
+                background-color: #0d111b;
+            }
+            QToolButton#rp-nav-btn {
+                background: transparent;
+                border: none;
+                border-radius: 10px;
+                color: #4a5c78;
+                font-size: 8.5pt;
+                font-weight: 600;
+                padding: 4px 2px;
+            }
+            QToolButton#rp-nav-btn:hover {
+                background: #141c2e;
+                color: #94a3b8;
+            }
+            QToolButton#rp-nav-btn:checked {
+                background: #162035;
                 color: #38bdf8;
-                letter-spacing: 0.5px;
-                font-weight: 800;
+                border: 1px solid #1e3a5f;
             }
-            #right-panel QGroupBox {
-                background: rgba(255,255,255,0.01);
-                border: 1px solid #1e293b;
-                border-radius: 12px;
-                margin-top: 10px;
-                padding-top: 10px;
+
+            /* ── Stacked content area ───────────────────────────────────────── */
+            #rp-stack {
+                background-color: #0b0e17;
             }
-            #right-panel QGroupBox::title {
-                color: #38bdf8;
-                padding: 4px 6px;
-                subcontrol-position: top left;
-                left: 8px;
-            }
-            #right-panel QFrame[panelCard="true"] {
-                background: rgba(255,255,255,0.01);
-                border: 1px solid #1e293b;
-                border-radius: 12px;
-                padding: 10px;
-            }
-            #right-panel QLabel {
+            #rp-stack QWidget {
                 color: #cbd5e1;
+                font-size: 10pt;
             }
-            #right-panel QScrollArea {
+            #rp-stack QScrollArea {
                 background: transparent;
                 border: none;
             }
-            #right-panel QPushButton {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #1e293b, stop:1 #334155);
-                color: #cbd5e1;
-                border: 1px solid #334155;
+
+            /* ── Group boxes ────────────────────────────────────────────────── */
+            #rp-stack QGroupBox {
+                background: rgba(255,255,255,0.015);
+                border: 1px solid #1e293b;
                 border-radius: 10px;
-                padding: 8px 12px;
-                font-weight: 600;
+                margin-top: 12px;
+                padding: 12px 10px 10px 10px;
             }
-            #right-panel QPushButton:disabled {
-                background: #0f131a;
-                color: #64748b;
-                border-color: #1e293b;
+            #rp-stack QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: #38bdf8;
+                font-weight: 700;
+                font-size: 9.5pt;
+                letter-spacing: 0.3px;
             }
-            #right-panel QPushButton:hover:!disabled {
-                background: #38bdf8;
-                color: #090a0f;
+
+            /* ── Section label titles (used instead of QGroupBox in new tabs) */
+            QLabel#rp-section-title {
+                color: #38bdf8;
+                font-size: 9.5pt;
+                font-weight: 700;
+                padding-bottom: 2px;
+                background: transparent;
+            }
+
+            /* ── Input controls ─────────────────────────────────────────────── */
+            #rp-stack QComboBox,
+            #rp-stack QLineEdit,
+            #rp-stack QSpinBox,
+            #rp-stack QDoubleSpinBox {
+                background-color: #0f1624;
+                border: 1px solid #1e2d42;
+                border-radius: 7px;
+                padding: 5px 8px;
+                color: #cbd5e1;
+                min-height: 26px;
+            }
+            #rp-stack QComboBox:focus,
+            #rp-stack QLineEdit:focus,
+            #rp-stack QSpinBox:focus,
+            #rp-stack QDoubleSpinBox:focus {
                 border-color: #38bdf8;
             }
-            #right-panel QPushButton:pressed:!disabled {
-                background: #0284c7;
+            #rp-stack QComboBox::drop-down {
+                border: none;
+                width: 22px;
+            }
+            #rp-stack QComboBox::down-arrow {
+                width: 10px;
+                height: 10px;
+            }
+
+            /* ── Checkboxes & radios ─────────────────────────────────────────── */
+            #rp-stack QCheckBox,
+            #rp-stack QRadioButton {
+                color: #94a3b8;
+                spacing: 7px;
+                background: transparent;
+            }
+            #rp-stack QCheckBox::indicator,
+            #rp-stack QRadioButton::indicator {
+                width: 15px;
+                height: 15px;
+                border: 1px solid #2d3f58;
+                border-radius: 4px;
+                background: #0f1624;
+            }
+            #rp-stack QCheckBox::indicator:checked {
+                background: #38bdf8;
+                border-color: #38bdf8;
+            }
+            #rp-stack QRadioButton::indicator {
+                border-radius: 8px;
+            }
+            #rp-stack QRadioButton::indicator:checked {
+                background: #38bdf8;
+                border-color: #38bdf8;
+            }
+
+            /* ── Standard button ─────────────────────────────────────────────── */
+            #rp-stack QPushButton {
+                background-color: #141c2e;
+                color: #94a3b8;
+                border: 1px solid #1e2d42;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 9.5pt;
+            }
+            #rp-stack QPushButton:hover:!disabled {
+                background-color: #1e3050;
+                color: #e2e8f0;
+                border-color: #2d4a72;
+            }
+            #rp-stack QPushButton:pressed:!disabled {
+                background-color: #1a4276;
                 color: #ffffff;
             }
-            #right-panel QComboBox, #right-panel QLineEdit, #right-panel QSpinBox, #right-panel QDoubleSpinBox {
-                background: #0f131c;
-                border: 1px solid #1e293b;
+            #rp-stack QPushButton:disabled {
+                background-color: #0d1220;
+                color: #374151;
+                border-color: #131c2e;
+            }
+
+            /* ── Sliders ─────────────────────────────────────────────────────── */
+            #rp-stack QSlider::groove:horizontal {
+                border: none;
+                height: 4px;
+                background: #1e293b;
+                border-radius: 2px;
+            }
+            #rp-stack QSlider::handle:horizontal {
+                background: #38bdf8;
+                border: none;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            #rp-stack QSlider::sub-page:horizontal {
+                background: #38bdf8;
+                border-radius: 2px;
+            }
+
+            /* ── Bottom bar ──────────────────────────────────────────────────── */
+            #rp-bottom-bar {
+                background-color: #0d111b;
+                border-top: 1px solid #1a2235;
+            }
+
+            /* ── Bottom action buttons ───────────────────────────────────────── */
+            QPushButton#rp-action-btn {
+                background-color: #141c2e;
+                color: #94a3b8;
+                border: 1px solid #1e2d42;
+                border-radius: 7px;
+                padding: 5px 10px;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QPushButton#rp-action-btn:hover:!disabled {
+                background-color: #1e3050;
+                color: #e2e8f0;
+                border-color: #38bdf8;
+            }
+            QPushButton#rp-action-btn:disabled {
+                color: #2d3f55;
+                border-color: #111827;
+                background-color: #0d1220;
+            }
+
+            QPushButton#rp-save-btn {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 #0c4a6e, stop:1 #0369a1);
+                color: #e0f2fe;
+                border: 1px solid #0284c7;
+                border-radius: 7px;
+                padding: 5px 10px;
+                font-size: 9pt;
+                font-weight: 700;
+            }
+            QPushButton#rp-save-btn:hover {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 #0369a1, stop:1 #0284c7);
+                border-color: #38bdf8;
+            }
+
+            QPushButton#rp-confirm-btn {
+                background-color: #052e16;
+                color: #6ee7b7;
+                border: 1px solid #065f46;
+                border-radius: 7px;
+                padding: 5px 10px;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QPushButton#rp-confirm-btn:hover {
+                background-color: #065f46;
+                color: #a7f3d0;
+                border-color: #34d399;
+            }
+
+            QPushButton#rp-danger-btn {
+                background-color: #2d0f0f;
+                color: #fca5a5;
+                border: 1px solid #7f1d1d;
+                border-radius: 7px;
+                padding: 5px 10px;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QPushButton#rp-danger-btn:hover {
+                background-color: #7f1d1d;
+                color: #fecaca;
+            }
+
+            /* ── Metrics grid ────────────────────────────────────────────────── */
+            #rp-metrics {
+                background: rgba(255,255,255,0.02);
+                border: 1px solid #1a2235;
                 border-radius: 8px;
-                padding: 6px 8px;
-                color: #cbd5e1;
             }
-            #right-panel QComboBox::drop-down {
-                width: 22px;
-                border-left: 1px solid #1e293b;
+            QLabel#rp-metric-key {
+                color: #4a5c78;
+                font-size: 8.5pt;
+                background: transparent;
+                padding: 0;
             }
-            #right-panel QCheckBox, #right-panel QRadioButton {
-                color: #cbd5e1;
-                spacing: 6px;
+            QLabel#rp-metric-val {
+                color: #94a3b8;
+                font-size: 8.5pt;
+                font-weight: 600;
+                background: transparent;
+                padding: 0;
+            }
+            QLabel#rp-cost-val {
+                color: #34d399;
+                font-size: 8.5pt;
+                font-weight: 700;
+                background: transparent;
+                padding: 0;
+            }
+
+            /* ── Token row ───────────────────────────────────────────────────── */
+            QLabel#rp-tiny-label {
+                color: #374151;
+                font-size: 8pt;
+                background: transparent;
+                padding: 0;
+            }
+
+            /* ── Countdown ───────────────────────────────────────────────────── */
+            QLabel#rp-countdown {
+                color: #fbbf24;
+                font-size: 9pt;
+                font-weight: 600;
+                background: transparent;
             }
         """)
 
     def _create_translate_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(14)
 
-        # OCR Group
+        # ── OCR & Language ──────────────────────────────────────────────────
         ocr_group = QGroupBox("OCR & Language")
-        ocr_layout = QGridLayout(ocr_group)
-        
-        # Language Input
-        ocr_layout.addWidget(QLabel("OCR Language:"), 1, 0)
+        ocr_form = QFormLayout(ocr_group)
+        ocr_form.setContentsMargins(12, 16, 12, 12)
+        ocr_form.setSpacing(10)
+        ocr_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        ocr_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
         self.ocr_lang_combo = QComboBox()
         self.ocr_lang_combo.currentIndexChanged.connect(self.on_ocr_lang_changed)
-        ocr_layout.addWidget(self.ocr_lang_combo, 1, 1)
-        
+        ocr_form.addRow("OCR Language:", self.ocr_lang_combo)
+
         self.ocr_engine_info_label = QLabel("Engine akan dipilih otomatis.")
         self.ocr_engine_info_label.setWordWrap(True)
-        ocr_layout.addWidget(self.ocr_engine_info_label, 2, 0, 1, 2)
+        self.ocr_engine_info_label.setStyleSheet("color:#4a5c78; font-size:8.5pt; font-style:italic;")
+        ocr_form.addRow(self.ocr_engine_info_label)
 
-        # Force AI OCR Checkbox
-        self.force_ai_ocr_checkbox = QCheckBox("Force Use AI OCR (Override Global Setting)")
+        self.force_ai_ocr_checkbox = QCheckBox("Force AI OCR")
         self.force_ai_ocr_checkbox.setChecked(bool(SETTINGS.get('force_ai_ocr', False)))
-        self.force_ai_ocr_checkbox.setToolTip("If enabled, all OCR operations will use the AI provider selected below, regardless of the main toolbar selection.")
+        self.force_ai_ocr_checkbox.setToolTip("If enabled, all OCR uses the AI provider below.")
         self.force_ai_ocr_checkbox.stateChanged.connect(lambda val: (
-            SETTINGS.update({'force_ai_ocr': bool(self.force_ai_ocr_checkbox.isChecked())}) or save_settings(SETTINGS) or self.ai_ocr_lang_combo.setEnabled(bool(val))
+            SETTINGS.update({'force_ai_ocr': bool(self.force_ai_ocr_checkbox.isChecked())}) or
+            save_settings(SETTINGS) or
+            self.ai_ocr_lang_combo.setEnabled(bool(val))
         ))
-        ocr_layout.addWidget(self.force_ai_ocr_checkbox, 3, 0, 1, 2)
+        ocr_form.addRow(self.force_ai_ocr_checkbox)
 
-        # AI OCR Language Input
-        ocr_layout.addWidget(QLabel("AI OCR Language:"), 4, 0)
         self.ai_ocr_lang_combo = QComboBox()
         self.ai_ocr_lang_combo.addItems([
             "Japanese", "English", "Korean", "Chinese (Simplified)", "Chinese (Traditional)",
             "Indonesian", "Portuguese (Brazil)", "Spanish", "French", "Russian", "Thai", "Vietnamese",
             "General/Multi-Language"
         ])
-        
-        # Load saved setting, default to Japanese
         saved_ai_lang = SETTINGS.get('ai_ocr_lang', 'Japanese')
         self.ai_ocr_lang_combo.setCurrentText(saved_ai_lang)
-        self.ai_ocr_lang_combo.currentTextChanged.connect(lambda val: SETTINGS.update({'ai_ocr_lang': val}) or save_settings(SETTINGS))
-        ocr_layout.addWidget(self.ai_ocr_lang_combo, 4, 1)
+        self.ai_ocr_lang_combo.currentTextChanged.connect(
+            lambda val: SETTINGS.update({'ai_ocr_lang': val}) or save_settings(SETTINGS)
+        )
+        ocr_form.addRow("AI OCR Lang:", self.ai_ocr_lang_combo)
 
-        self.translate_combo = self._create_combo_box(ocr_layout, "Translate to:", ["Indonesian", "English"], 5, 0, 1, 2, default="Indonesian")
-        # Global orientation selector (kept for compatibility)
-        self.orientation_combo = self._create_combo_box(ocr_layout, "Orientation:", ["Auto-Detect", "Horizontal", "Vertical"], 6, 0, 1, 2)
-        
-        # Per-language orientation overrides
-        ocr_layout.addWidget(QLabel("EN Orientation:"), 7, 0)
+        self.translate_combo = QComboBox()
+        self.translate_combo.addItems(["Indonesian", "English"])
+        self.translate_combo.setCurrentText("Indonesian")
+        ocr_form.addRow("Translate to:", self.translate_combo)
+
+        self.orientation_combo = QComboBox()
+        self.orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
+        ocr_form.addRow("Orientation:", self.orientation_combo)
+
+        layout.addWidget(ocr_group)
+
+        # ── Per-Language Orientation ─────────────────────────────────────────
+        lang_ori_group = QGroupBox("Per-Language Orientation")
+        lang_ori_form = QFormLayout(lang_ori_group)
+        lang_ori_form.setContentsMargins(12, 16, 12, 12)
+        lang_ori_form.setSpacing(10)
+        lang_ori_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lang_ori_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
         self.en_orientation_combo = QComboBox()
         self.en_orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
         self.en_orientation_combo.setCurrentText(SETTINGS.get('lang_orientation', {}).get('en', 'Auto-Detect'))
         self.en_orientation_combo.currentTextChanged.connect(lambda val: self._on_lang_orientation_changed('en', val))
-        ocr_layout.addWidget(self.en_orientation_combo, 7, 1)
+        lang_ori_form.addRow("English:", self.en_orientation_combo)
 
-        ocr_layout.addWidget(QLabel("JP Orientation:"), 8, 0)
         self.jp_orientation_combo = QComboBox()
         self.jp_orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
         self.jp_orientation_combo.setCurrentText(SETTINGS.get('lang_orientation', {}).get('ja', 'Auto-Detect'))
         self.jp_orientation_combo.currentTextChanged.connect(lambda val: self._on_lang_orientation_changed('ja', val))
-        ocr_layout.addWidget(self.jp_orientation_combo, 8, 1)
+        lang_ori_form.addRow("Japanese:", self.jp_orientation_combo)
 
-        layout.addWidget(ocr_group)
+        layout.addWidget(lang_ori_group)
 
+        # ── Detection Source ─────────────────────────────────────────────────
         detection_group = QGroupBox("OCR Detection Source")
-        detection_layout = QGridLayout(detection_group)
-        self.manga_use_easy_detection_checkbox = QCheckBox("Manga-OCR: use EasyOCR regions (recognize with Manga-OCR)")
-        self.manga_use_easy_detection_checkbox.setChecked(True)
-        self.manga_use_easy_detection_checkbox.setToolTip("When enabled, EasyOCR proposes text regions and Manga-OCR performs recognition. Disable to use Manga-OCR's own lightweight detection heuristic.")
-        detection_layout.addWidget(self.manga_use_easy_detection_checkbox, 0, 0, 1, 2)
+        det_layout = QVBoxLayout(detection_group)
+        det_layout.setContentsMargins(12, 16, 12, 12)
+        det_layout.setSpacing(8)
 
-        self.tesseract_use_easy_detection_checkbox = QCheckBox("Tesseract: use EasyOCR regions (recognize with Tesseract)")
+        self.manga_use_easy_detection_checkbox = QCheckBox("Manga-OCR: use EasyOCR regions")
+        self.manga_use_easy_detection_checkbox.setChecked(True)
+        self.manga_use_easy_detection_checkbox.setToolTip(
+            "When enabled, EasyOCR proposes text regions and Manga-OCR performs recognition."
+        )
+        det_layout.addWidget(self.manga_use_easy_detection_checkbox)
+
+        self.tesseract_use_easy_detection_checkbox = QCheckBox("Tesseract: use EasyOCR regions")
         self.tesseract_use_easy_detection_checkbox.setChecked(True)
-        self.tesseract_use_easy_detection_checkbox.setToolTip("When enabled, EasyOCR proposes text regions before Tesseract recognition. Disable to rely on Tesseract's native detection from image_to_data.")
-        detection_layout.addWidget(self.tesseract_use_easy_detection_checkbox, 1, 0, 1, 2)
+        self.tesseract_use_easy_detection_checkbox.setToolTip(
+            "When enabled, EasyOCR proposes text regions before Tesseract recognition."
+        )
+        det_layout.addWidget(self.tesseract_use_easy_detection_checkbox)
 
         layout.addWidget(detection_group)
 
@@ -1385,7 +1725,8 @@ class MangaOCRApp(QMainWindow):
     def _create_cleanup_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(14)
 
         # Auto-Detection Mode Group (NEW)
         detection_mode_group = QGroupBox("Auto-Detection Mode")
@@ -1572,8 +1913,8 @@ class MangaOCRApp(QMainWindow):
     def _create_layers_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(14)
 
         # Title/desc
         desc = QLabel("Canvas Layers Manager")
@@ -2271,7 +2612,7 @@ class MangaOCRApp(QMainWindow):
     def _create_history_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
 
         description = QLabel("Review the latest translation results. Only the five most recent entries are shown here.")
         description.setWordWrap(True)
@@ -2296,7 +2637,7 @@ class MangaOCRApp(QMainWindow):
     def _create_proofreader_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
 
         description = QLabel("Send recent translations to the AI proofreader to polish grammar and flow.")
         description.setWordWrap(True)
@@ -2338,7 +2679,7 @@ class MangaOCRApp(QMainWindow):
     def _create_quality_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
 
         description = QLabel("Request a final quality review to check consistency and naturalness.")
         description.setWordWrap(True)
@@ -2546,7 +2887,7 @@ class MangaOCRApp(QMainWindow):
     def _create_scene_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(14, 16, 14, 14)
         
         # Scene Selector & Management
         mgmt_layout = QHBoxLayout()
@@ -3705,92 +4046,115 @@ class MangaOCRApp(QMainWindow):
     def _create_ai_hardware_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 15, 10, 10)
-        layout.setSpacing(15)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(14)
 
-        # AI Model Configuration
+        # ── AI Model & Translation ────────────────────────────────────────────
         ai_group = QGroupBox("AI Models & Translation")
-        ai_layout = QGridLayout(ai_group)
-        ai_layout.setHorizontalSpacing(12)
-        ai_layout.setVerticalSpacing(10)
+        ai_form = QFormLayout(ai_group)
+        ai_form.setContentsMargins(12, 16, 12, 12)
+        ai_form.setSpacing(10)
+        ai_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        ai_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
-        self.ai_model_combo = self._create_combo_box(ai_layout, "AI Model:", [], 0, 0, 1, 2)
+        self.ai_model_combo = QComboBox()
         self.ai_model_combo.currentTextChanged.connect(self.on_ai_model_changed)
+        ai_form.addRow("AI Model:", self.ai_model_combo)
 
-        self.style_combo = self._create_combo_box(ai_layout, "Translation Style:", self.translation_styles, 1, 0, 1, 2)
+        self.style_combo = QComboBox()
+        self.style_combo.addItems(self.translation_styles)
         default_style = SETTINGS.get('general', {}).get('default_translation_style', 'Santai (Default)')
         if default_style in self.translation_styles:
             self.style_combo.setCurrentText(default_style)
-        # Small controls to add/remove custom styles
-        styles_controls = QWidget()
-        sc_layout = QHBoxLayout(styles_controls)
-        sc_layout.setContentsMargins(0, 6, 0, 0)
-        self.style_input = QLineEdit(self)
-        self.style_input.setPlaceholderText('Type custom style and click Add')
-        add_style_btn = QPushButton('Add')
-        add_style_btn.clicked.connect(lambda: (self.add_custom_style(self.style_input.text()) and self.style_input.clear()))
-        remove_style_btn = QPushButton('Remove Selected')
-        remove_style_btn.clicked.connect(lambda: (self.remove_selected_style()))
-        sc_layout.addWidget(self.style_input)
-        sc_layout.addWidget(add_style_btn)
-        sc_layout.addWidget(remove_style_btn)
-        layout.addWidget(ai_group)
-        layout.addWidget(styles_controls)
+        ai_form.addRow("Style:", self.style_combo)
 
-        # Processing & Safety Modes
+        layout.addWidget(ai_group)
+
+        # ── Custom Styles ─────────────────────────────────────────────────────
+        custom_style_group = QGroupBox("Custom Styles")
+        cs_layout = QVBoxLayout(custom_style_group)
+        cs_layout.setContentsMargins(12, 14, 12, 12)
+        cs_layout.setSpacing(8)
+
+        style_row = QHBoxLayout()
+        self.style_input = QLineEdit(self)
+        self.style_input.setPlaceholderText("New style name...")
+        style_row.addWidget(self.style_input, 1)
+        add_style_btn = QPushButton("+ Add")
+        add_style_btn.clicked.connect(lambda: (self.add_custom_style(self.style_input.text()) and self.style_input.clear()))
+        style_row.addWidget(add_style_btn)
+        remove_style_btn = QPushButton("Remove")
+        remove_style_btn.clicked.connect(lambda: self.remove_selected_style())
+        style_row.addWidget(remove_style_btn)
+        cs_layout.addLayout(style_row)
+
+        layout.addWidget(custom_style_group)
+
+        # ── Processing Modes ─────────────────────────────────────────────────
         mode_group = QGroupBox("Processing Modes")
-        mode_layout = QVBoxLayout(mode_group)
-        mode_layout.setSpacing(8)
-        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline (JP Only, More API)")
+        mode_v = QVBoxLayout(mode_group)
+        mode_v.setContentsMargins(12, 14, 12, 12)
+        mode_v.setSpacing(8)
+
+        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only · More API)")
         self.enhanced_pipeline_checkbox.stateChanged.connect(self.on_pipeline_mode_changed)
-        mode_layout.addWidget(self.enhanced_pipeline_checkbox)
+        mode_v.addWidget(self.enhanced_pipeline_checkbox)
 
         self.ai_only_translate_checkbox = QCheckBox("AI-Only Translate")
-        self.deepl_only_checkbox = QCheckBox("DeepL-Only Translate")
         self.ai_only_translate_checkbox.stateChanged.connect(self.on_translation_mode_changed)
-        self.deepl_only_checkbox.stateChanged.connect(self.on_translation_mode_changed)
-        mode_layout.addWidget(self.ai_only_translate_checkbox)
-        mode_layout.addWidget(self.deepl_only_checkbox)
+        mode_v.addWidget(self.ai_only_translate_checkbox)
 
-        self.safe_mode_checkbox = QCheckBox("Enable Safe Mode (Filter Konten Dewasa)")
-        mode_layout.addWidget(self.safe_mode_checkbox)
+        self.deepl_only_checkbox = QCheckBox("DeepL-Only Translate")
+        self.deepl_only_checkbox.stateChanged.connect(self.on_translation_mode_changed)
+        mode_v.addWidget(self.deepl_only_checkbox)
+
+        self.safe_mode_checkbox = QCheckBox("Safe Mode  (Filter Adult Content)")
+        mode_v.addWidget(self.safe_mode_checkbox)
 
         self.batch_mode_checkbox = QCheckBox("Enable Batch Processing")
         self.batch_mode_checkbox.stateChanged.connect(self.on_batch_mode_changed)
-        mode_layout.addWidget(self.batch_mode_checkbox)
+        mode_v.addWidget(self.batch_mode_checkbox)
+
         layout.addWidget(mode_group)
 
-        # Hardware Controls
+        # ── Hardware & Performance ────────────────────────────────────────────
         hardware_group = QGroupBox("Hardware & Performance")
-        hardware_layout = QGridLayout(hardware_group)
-        hardware_layout.setHorizontalSpacing(12)
-        hardware_layout.setVerticalSpacing(10)
+        hw_form = QFormLayout(hardware_group)
+        hw_form.setContentsMargins(12, 16, 12, 12)
+        hw_form.setSpacing(10)
+        hw_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        hw_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
-        self.use_gpu_checkbox = QCheckBox("Enable GPU Acceleration")
+        # GPU row with status indicator
+        gpu_row = QHBoxLayout()
+        self.use_gpu_checkbox = QCheckBox("Enable GPU")
         self.use_gpu_checkbox.setChecked(self.is_gpu_available)
         self.use_gpu_checkbox.setEnabled(self.is_gpu_available)
         if not self.is_gpu_available:
-            self.use_gpu_checkbox.setToolTip("Tidak ada GPU NVIDIA yang terdeteksi atau PyTorch tidak terinstal.")
+            self.use_gpu_checkbox.setToolTip("Tidak ada GPU NVIDIA yang terdeteksi.")
         self.use_gpu_checkbox.stateChanged.connect(self.update_gpu_status_label)
-        hardware_layout.addWidget(self.use_gpu_checkbox, 0, 0, 1, 2)
-
-        self.gpu_status_label = QLabel("GPU Detected" if self.is_gpu_available else "GPU Not Detected")
+        gpu_row.addWidget(self.use_gpu_checkbox)
+        gpu_row.addStretch()
+        self.gpu_status_label = QLabel("● GPU OK" if self.is_gpu_available else "● No GPU")
         self.gpu_status_label.setObjectName("gpu-status")
-        hardware_layout.addWidget(self.gpu_status_label, 0, 2, 1, 1, alignment=Qt.AlignRight)
+        self.gpu_status_label.setStyleSheet(
+            "color: #4ade80; font-weight:700; font-size:9pt;" if self.is_gpu_available
+            else "color: #f87171; font-weight:700; font-size:9pt;"
+        )
+        gpu_row.addWidget(self.gpu_status_label)
+        hw_form.addRow("Accel:", gpu_row)
 
-        hardware_layout.addWidget(QLabel("Max Workers:"), 1, 0)
         self.max_workers_spinbox = QSpinBox()
         self.max_workers_spinbox.setRange(1, 50)
         self.max_workers_spinbox.setValue(self.MAX_WORKERS)
         self.max_workers_spinbox.valueChanged.connect(self.on_max_workers_changed)
-        hardware_layout.addWidget(self.max_workers_spinbox, 1, 1)
+        hw_form.addRow("Max Workers:", self.max_workers_spinbox)
 
-        hardware_layout.addWidget(QLabel("Spawn Threshold:"), 2, 0)
         self.spawn_threshold_spinbox = QSpinBox()
         self.spawn_threshold_spinbox.setRange(1, 10)
         self.spawn_threshold_spinbox.setValue(self.WORKER_SPAWN_THRESHOLD)
         self.spawn_threshold_spinbox.valueChanged.connect(self.on_spawn_threshold_changed)
-        hardware_layout.addWidget(self.spawn_threshold_spinbox, 2, 1)
+        hw_form.addRow("Spawn Threshold:", self.spawn_threshold_spinbox)
 
         layout.addWidget(hardware_group)
 
