@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.3.4
+# Manga OCR & Typeset Tool v14.4.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================

@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.3.4
+# Manga OCR & Typeset Tool v14.4.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -200,6 +200,7 @@ class SettingsCenterDialog(QDialog):
         ("Shortcuts",   "⌨"),
         ("API Keys",    "🔑"),
         ("OCR Plugins", "🔌"),
+        ("Glossary",    "📖"),
     ]
 
     def __init__(self, main_window):
@@ -293,9 +294,11 @@ class SettingsCenterDialog(QDialog):
         self.shortcuts_tab = self._create_shortcuts_tab()
         self.api_tab = self._create_api_tab()
         self.ocr_plugins_tab = self._create_ocr_plugins_tab()
+        self.glossary_tab = self._create_glossary_tab()
 
         for page in (self.general_tab, self.cleanup_tab,
-                     self.translation_tab, self.shortcuts_tab, self.api_tab, self.ocr_plugins_tab):
+                     self.translation_tab, self.shortcuts_tab, self.api_tab, self.ocr_plugins_tab,
+                     self.glossary_tab):
             self._pages.addWidget(page)
 
         right_vbox.addWidget(self._pages, 1)
@@ -1207,6 +1210,105 @@ class SettingsCenterDialog(QDialog):
     # ------------------------------------------------------------------
     # Save handler
     # ------------------------------------------------------------------
+    def _create_glossary_tab(self):
+        """Tab Glossary: pasangan term sumber → target untuk injeksi ke prompt AI."""
+        page, layout = self._make_page_scroll()
+        layout.addWidget(self._make_page_header(
+            "Glossary",
+            "Daftar istilah khusus yang akan selalu diterjemahkan secara konsisten oleh AI. "
+            "Contoh: nama karakter, nama tempat, atau istilah unik dalam manga."
+        ))
+
+        card = QGroupBox("📖  Term Pairs (Source → Target)")
+        card.setObjectName("settings-card")
+        card_vbox = QVBoxLayout(card)
+        card_vbox.setSpacing(8)
+        card_vbox.setContentsMargins(12, 16, 12, 12)
+
+        # Tabel glossary
+        self._glossary_table = QTableWidget(0, 2)
+        self._glossary_table.setHorizontalHeaderLabels(["Source Term (Original)", "Target Term (Terjemahan)"])
+        self._glossary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._glossary_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._glossary_table.setAlternatingRowColors(True)
+        self._glossary_table.setMinimumHeight(280)
+        card_vbox.addWidget(self._glossary_table)
+
+        # Muat data glossary dari SETTINGS
+        glossary = SETTINGS.get('glossary', {})
+        for source, target in glossary.items():
+            self._add_glossary_row(source, target)
+
+        # Tombol aksi
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("+ Add Term")
+        add_btn.clicked.connect(self._on_glossary_add)
+        remove_btn = QPushButton("− Remove Selected")
+        remove_btn.clicked.connect(self._on_glossary_remove)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch(1)
+        card_vbox.addLayout(btn_row)
+
+        layout.addWidget(card)
+
+        # Info box
+        info_card = QGroupBox("ℹ  How it works")
+        info_card.setObjectName("settings-card")
+        info_vbox = QVBoxLayout(info_card)
+        info_label = QLabel(
+            "Setiap pasangan term yang kamu tambahkan akan diinjeksikan ke dalam prompt AI "
+            "saat menerjemahkan. AI akan selalu menggunakan 'Target Term' untuk setiap "
+            "kemunculan 'Source Term' dalam teks.\n\n"
+            "Contoh:\n"
+            "  Source: 煉獄杏寿郎  →  Target: Rengoku Kyojuro\n"
+            "  Source: 無惨  →  Target: Muzan\n"
+            "  Source: 全集中  →  Target: Total Concentration"
+        )
+        info_label.setWordWrap(True)
+        info_label.setObjectName("settings-option-desc")
+        info_vbox.addWidget(info_label)
+        layout.addWidget(info_card)
+        layout.addStretch(1)
+        return page
+
+    def _add_glossary_row(self, source: str = "", target: str = ""):
+        """Tambahkan baris baru ke tabel glossary."""
+        row = self._glossary_table.rowCount()
+        self._glossary_table.insertRow(row)
+        self._glossary_table.setItem(row, 0, QTableWidgetItem(source))
+        self._glossary_table.setItem(row, 1, QTableWidgetItem(target))
+
+    def _on_glossary_add(self):
+        """Tambahkan baris kosong ke tabel glossary."""
+        self._add_glossary_row()
+        # Scroll ke baris baru dan mulai edit
+        last_row = self._glossary_table.rowCount() - 1
+        self._glossary_table.scrollToBottom()
+        self._glossary_table.setCurrentCell(last_row, 0)
+        self._glossary_table.editItem(self._glossary_table.item(last_row, 0))
+
+    def _on_glossary_remove(self):
+        """Hapus baris yang dipilih dari tabel glossary."""
+        selected_rows = sorted(
+            set(idx.row() for idx in self._glossary_table.selectedIndexes()),
+            reverse=True
+        )
+        for row in selected_rows:
+            self._glossary_table.removeRow(row)
+
+    def _get_glossary_from_table(self) -> dict:
+        """Kumpulkan semua pasangan term dari tabel menjadi dict."""
+        result = {}
+        for row in range(self._glossary_table.rowCount()):
+            source_item = self._glossary_table.item(row, 0)
+            target_item = self._glossary_table.item(row, 1)
+            source = source_item.text().strip() if source_item else ''
+            target = target_item.text().strip() if target_item else ''
+            if source:
+                result[source] = target
+        return result
+
     def _on_save(self):
         # Save OCR plugins config
         ocr_plugins_cfg = SETTINGS.setdefault('ocr_plugins', {})
@@ -1283,6 +1385,10 @@ class SettingsCenterDialog(QDialog):
         SETTINGS['ocr'] = copy.deepcopy(api_export.get('ocr', {}))
         SETTINGS['tesseract'] = copy.deepcopy(api_export.get('tesseract', {}))
         SETTINGS['shortcuts'] = shortcut_settings
+
+        # Simpan Glossary
+        if hasattr(self, '_glossary_table'):
+            SETTINGS['glossary'] = self._get_glossary_from_table()
 
         save_settings(SETTINGS)
 

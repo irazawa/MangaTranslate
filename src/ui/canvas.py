@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.3.4
+# Manga OCR & Typeset Tool v14.4.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -1759,6 +1759,30 @@ class SelectableImageLabel(QLabel):
         if not self.main_window or not getattr(self.main_window, 'original_pixmap', None): return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw detected panels if checkbox is checked
+        if (
+            getattr(self.main_window, 'show_panels_checkbox', None) is not None
+            and self.main_window.show_panels_checkbox.isChecked()
+            and getattr(self.main_window, 'detected_panels', None)
+        ):
+            painter.save()
+            scale = self.main_window.zoom_factor
+            pixmap = self.pixmap()
+            if pixmap and not pixmap.isNull():
+                label_size = self.size()
+                pixmap_size = pixmap.size()
+                offset_x = max(0, (label_size.width() - pixmap_size.width()) // 2)
+                offset_y = max(0, (label_size.height() - pixmap_size.height()) // 2)
+                painter.translate(offset_x, offset_y)
+                painter.scale(scale, scale)
+
+            panel_pen = QPen(QColor(147, 51, 234, 200), 2 / scale, Qt.DashLine) # Purple dash line
+            painter.setPen(panel_pen)
+            painter.setBrush(QColor(147, 51, 234, 30)) # Translucent purple
+            for panel_rect in self.main_window.detected_panels:
+                painter.drawRect(panel_rect)
+            painter.restore()
 
         if self.main_window.is_in_confirmation_mode and self.detected_items:
             painter.save()

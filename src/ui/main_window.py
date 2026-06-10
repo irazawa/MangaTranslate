@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.3.4
+# Manga OCR & Typeset Tool v14.4.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -361,7 +361,7 @@ class MangaOCRApp(QMainWindow):
             ensure_dependencies(self, required_pkgs)
         except Exception:
             pass
-        self.setWindowTitle("Manga OCR & Typeset Tool v14.3.4")
+        self.setWindowTitle("Manga OCR & Typeset Tool v14.4.1")
         self.image_files = []
         self.current_image_path = None
         self.current_image_pil = None
@@ -371,10 +371,12 @@ class MangaOCRApp(QMainWindow):
         self.active_curves_points = None
         self.typeset_pixmap = None
         self.zoom_factor = 1.0
+        self._compare_mode_active = False
         self.layers_list_widget = None
 
         self.all_typeset_data = {}
         self.typeset_areas = []
+        self.detected_panels = []
         self.selected_typeset_area = None
         self.redo_stack = []
         self.history_entries = []
@@ -761,6 +763,8 @@ class MangaOCRApp(QMainWindow):
         self.shortcut_f3.activated.connect(self.toggle_left_panel)
         self.shortcut_f4 = QShortcut(QKeySequence("F4"), self)
         self.shortcut_f4.activated.connect(self.toggle_right_panel)
+        
+        self.fetch_openrouter_pricing_async()
 
     def setup_menu_bar(self):
         menu_bar = self.menuBar()
@@ -771,6 +775,12 @@ class MangaOCRApp(QMainWindow):
         self.load_project_action = QAction('Load Project', self)
         self.load_project_action.triggered.connect(self.load_project)
         file_menu.addAction(self.load_project_action)
+
+        # --- Recent Projects submenu ---
+        self.recent_projects_menu = QMenu('Recent Projects', self)
+        file_menu.addMenu(self.recent_projects_menu)
+        self._rebuild_recent_projects_menu()
+
         self._action_shortcut_map.update({
             'save_project': self.save_project_action,
             'load_project': self.load_project_action,
@@ -783,6 +793,9 @@ class MangaOCRApp(QMainWindow):
         export_pdf_action = QAction('Export Typeset to PDF...', self)
         export_pdf_action.triggered.connect(self.export_to_pdf)
         file_menu.addAction(export_pdf_action)
+        export_cbz_action = QAction('Export Typeset to CBZ...', self)
+        export_cbz_action.triggered.connect(self.export_to_cbz)
+        file_menu.addAction(export_cbz_action)
 
         view_menu = menu_bar.addMenu('&View')
         toggle_theme_action = QAction('Toggle Light/Dark Mode', self); toggle_theme_action.triggered.connect(self.toggle_theme); view_menu.addAction(toggle_theme_action)
@@ -805,6 +818,13 @@ class MangaOCRApp(QMainWindow):
         curves_action.triggered.connect(self.open_image_curves_dialog)
         filter_menu.addAction(curves_action)
 
+        # --- Edit menu ---
+        edit_menu = menu_bar.addMenu('&Edit')
+        find_replace_action = QAction('Find && Replace...', self)
+        find_replace_action.setShortcut(QKeySequence("Ctrl+H"))
+        find_replace_action.triggered.connect(self.open_find_replace_dialog)
+        edit_menu.addAction(find_replace_action)
+
         settings_menu = menu_bar.addMenu('&Settings')
         self.use_box_action = None
         settings_center_action = QAction('Settings...', self)
@@ -812,6 +832,11 @@ class MangaOCRApp(QMainWindow):
         settings_menu.addAction(settings_center_action)
         help_menu = menu_bar.addMenu('&Help / Usage')
         about_action = QAction('About & API Usage', self); about_action.triggered.connect(self.show_about_dialog); help_menu.addAction(about_action)
+
+        project_stats_action = QAction('Project Statistics...', self)
+        project_stats_action.triggered.connect(self.show_project_stats_dialog)
+        help_menu.addAction(project_stats_action)
+
 
     def open_settings_dialog(self, focus_tab: str = 'general'):
         dialog = SettingsCenterDialog(self)
@@ -927,6 +952,31 @@ class MangaOCRApp(QMainWindow):
             }
         """)
         nav_zoom_layout.addWidget(self.focus_mode_btn)
+
+        # Quick Compare toggle button
+        self.compare_mode_btn = QPushButton("👁 Compare")
+        self.compare_mode_btn.setToolTip("Tahan untuk lihat gambar asli tanpa typeset overlay (Quick Compare)")
+        self.compare_mode_btn.setCheckable(True)
+        self.compare_mode_btn.toggled.connect(self._on_compare_mode_toggled)
+        self.compare_mode_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #3d1a6e, stop:1 #5a2a9a);
+                border: 1px solid #6b3ab8;
+                border-radius: 8px;
+                padding: 6px 12px;
+                color: #e8d5ff;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #5a2a9a, stop:1 #7a4ac0);
+            }
+            QPushButton:checked {
+                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #ab47bc);
+                color: #ffffff;
+                border-color: #ce93d8;
+            }
+        """)
+        nav_zoom_layout.addWidget(self.compare_mode_btn)
         
         self.next_button = QPushButton("Next >>")
         self.next_button.clicked.connect(self.on_next_clicked)
@@ -1719,6 +1769,23 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(detection_group)
 
+        # One-Click Full-Page Translation Group
+        auto_translate_group = QGroupBox("Full-Page Translation (Instant)")
+        auto_translate_layout = QVBoxLayout(auto_translate_group)
+        
+        self.auto_translate_page_btn = QPushButton("🚀 Terjemahkan Halaman Ini")
+        self.auto_translate_page_btn.setStyleSheet("QPushButton { font-weight: bold; font-size: 10pt; color: #38bdf8; background-color: #0b0f19; border: 1px solid #1e293b; padding: 8px; border-radius: 8px; } QPushButton:hover { background-color: #1e293b; border-color: #38bdf8; }")
+        self.auto_translate_page_btn.clicked.connect(self.start_full_page_translation)
+        
+        self.use_ai_vision_checkbox = QCheckBox("Gunakan AI Vision (Gemini/GPT-4o)")
+        self.use_ai_vision_checkbox.setChecked(True)
+        self.use_ai_vision_checkbox.setToolTip("Menggunakan kecerdasan buatan visual untuk deteksi sekaligus penerjemahan (sangat akurat, membutuhkan API key).")
+        
+        auto_translate_layout.addWidget(self.auto_translate_page_btn)
+        auto_translate_layout.addWidget(self.use_ai_vision_checkbox)
+        
+        layout.addWidget(auto_translate_group)
+
         layout.addStretch()
         return tab
 
@@ -1906,6 +1973,37 @@ class MangaOCRApp(QMainWindow):
         self.dl_model_provider_combo.currentTextChanged.connect(self.on_dl_provider_changed)
         layout.addWidget(dl_detect_group)
         self.on_dl_provider_changed(self.dl_model_provider_combo.currentText())
+
+        # Panel & RTL Reader Group (NEW)
+        panel_group = QGroupBox("Panel & RTL Reader (Advanced)")
+        panel_layout = QGridLayout(panel_group)
+        
+        self.panel_model_path_input = QLineEdit()
+        self.panel_model_path_input.setPlaceholderText("Default YOLO26 model path")
+        self.panel_model_path_input.setText(SETTINGS.get('cleanup', {}).get('panel_model_path', ''))
+        self.panel_model_path_input.textChanged.connect(self.on_panel_model_path_changed)
+        
+        browse_panel_btn = QPushButton("Browse")
+        browse_panel_btn.clicked.connect(self.browse_panel_model)
+        
+        self.show_panels_checkbox = QCheckBox("Tampilkan Batas Panel (Debug)")
+        self.show_panels_checkbox.setChecked(False)
+        self.show_panels_checkbox.stateChanged.connect(self.on_show_panels_changed)
+        
+        detect_panels_btn = QPushButton("Auto-Detect Panels")
+        detect_panels_btn.clicked.connect(self.detect_panels_yolo)
+        
+        sort_rtl_btn = QPushButton("Sort RTL")
+        sort_rtl_btn.clicked.connect(self.sort_areas_rtl)
+        
+        panel_layout.addWidget(QLabel("YOLO Model:"), 0, 0)
+        panel_layout.addWidget(self.panel_model_path_input, 0, 1)
+        panel_layout.addWidget(browse_panel_btn, 0, 2)
+        panel_layout.addWidget(self.show_panels_checkbox, 1, 0, 1, 3)
+        panel_layout.addWidget(detect_panels_btn, 2, 0, 1, 1)
+        panel_layout.addWidget(sort_rtl_btn, 2, 1, 1, 2)
+        
+        layout.addWidget(panel_group)
 
         layout.addStretch()
         return tab
@@ -4543,12 +4641,15 @@ class MangaOCRApp(QMainWindow):
                     self._mouse_shortcuts[(evt, btn)] = callback
 
     def _apply_action_shortcut(self, action: QAction, sequence: str):
-        if action is None:
+        if action is None or not hasattr(action, 'setShortcut'):
             return
         try:
             action.setShortcut(QKeySequence(sequence) if sequence else QKeySequence())
         except Exception:
-            action.setShortcut(QKeySequence())
+            try:
+                action.setShortcut(QKeySequence())
+            except Exception:
+                pass
 
     # [BARU] Mengubah mode seleksi via shortcut keyboard
     def set_selection_mode_by_index(self, index):
@@ -4756,6 +4857,9 @@ class MangaOCRApp(QMainWindow):
         models = openrouter_cfg.get('models') or []
         provider_dict = self.AI_PROVIDERS.setdefault('OpenRouter', {})
         provider_dict.clear()
+        
+        pricing_db = getattr(self, 'openrouter_pricing_db', {})
+        
         for model in models:
             if not isinstance(model, dict):
                 continue
@@ -4764,11 +4868,16 @@ class MangaOCRApp(QMainWindow):
                 continue
             name = (model.get('name') or model_id).strip()
             description = (model.get('description') or '').strip()
+            
+            # Lookup pricing dari database real-time OpenRouter
+            db_info = pricing_db.get(model_id, {})
+            db_pricing = db_info.get('pricing', {'input': 0.0, 'output': 0.0})
+            
             provider_dict[model_id] = {
                 'display': f"{name}",
                 'pricing': {
-                    'input': 0.0,
-                    'output': 0.0
+                    'input': db_pricing.get('input', 0.0),
+                    'output': db_pricing.get('output', 0.0)
                 },
                 'limits': {
                     'rpm': 300,
@@ -4779,6 +4888,61 @@ class MangaOCRApp(QMainWindow):
                 'id': model_id,
                 'name': name
             }
+
+    def fetch_openrouter_pricing_async(self):
+        """Mengambil data harga model OpenRouter secara dinamis dari API models resmi OpenRouter."""
+        import threading
+        
+        # Set default/fallback pricing untuk model populer (seperti deepseek-v4-flash atau deepseek-chat)
+        # sebelum data API models termuat
+        self.openrouter_pricing_db = {
+            'deepseek/deepseek-chat': {
+                'display': 'DeepSeek Chat (V3)',
+                'pricing': {'input': 0.00000014, 'output': 0.00000028}
+            },
+            'deepseek/deepseek-v4-flash': {
+                'display': 'DeepSeek V4 Flash',
+                'pricing': {'input': 0.00000007, 'output': 0.00000021}
+            },
+            'deepseek/deepseek-r1': {
+                'display': 'DeepSeek R1',
+                'pricing': {'input': 0.00000055, 'output': 0.00000219}
+            }
+        }
+        
+        def worker():
+            try:
+                import requests
+                # Panggil API list models OpenRouter (gratis, public endpoint)
+                response = requests.get("https://openrouter.ai/api/v1/models", timeout=12)
+                if response.status_code == 200:
+                    data = response.json().get('data', [])
+                    for model in data:
+                        model_id = model.get('id')
+                        name = model.get('name')
+                        pricing = model.get('pricing', {})
+                        try:
+                            input_price = float(pricing.get('prompt', 0.0))
+                            output_price = float(pricing.get('completion', 0.0))
+                        except (ValueError, TypeError):
+                            input_price = 0.0
+                            output_price = 0.0
+                        
+                        self.openrouter_pricing_db[model_id] = {
+                            'display': name,
+                            'pricing': {
+                                'input': input_price,
+                                'output': output_price
+                            }
+                        }
+                    # Pemicu reload list model agar harga langsung ter-apply
+                    self._load_openrouter_models()
+                    print(f"OpenRouter pricing database updated dynamically with {len(data)} models.")
+            except Exception as e:
+                print(f"Gagal memuat harga OpenRouter dari API: {e}")
+                
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
     def initialize_ocr_engine(self, lang_data):
         """Inisialisasi engine OCR yang dibutuhkan secara on-demand."""
@@ -5068,9 +5232,29 @@ class MangaOCRApp(QMainWindow):
         """
         self.usage_mutex.lock()
         try:
-            provider_models = self.AI_PROVIDERS.get(provider, {})
-            model_info = provider_models.get(model_name, {})
-            pricing = model_info.get('pricing', {'input': 0.0, 'output': 0.0})
+            provider_models = self.AI_PROVIDERS.setdefault(provider, {})
+            model_info = provider_models.get(model_name)
+            
+            # Jika model tidak ditemukan secara statis, coba cari di OpenRouter dynamic pricing db
+            if not model_info and provider == 'OpenRouter':
+                pricing_db = getattr(self, 'openrouter_pricing_db', {})
+                if model_name in pricing_db:
+                    model_info = pricing_db[model_name]
+                    # Daftarkan secara dinamis ke provider_models agar bisa direferensikan berikutnya
+                    provider_models[model_name] = model_info
+            
+            if not model_info:
+                # Fallback pricing jika model tidak ada di database/statis
+                if 'deepseek' in model_name.lower():
+                    # default deepseek chat/V3 pricing
+                    pricing = {'input': 0.00000014, 'output': 0.00000028}
+                elif 'gemini' in model_name.lower():
+                    pricing = {'input': 0.000000125, 'output': 0.00000025}
+                else:
+                    pricing = {'input': 0.0, 'output': 0.0}
+            else:
+                pricing = model_info.get('pricing', {'input': 0.0, 'output': 0.0})
+                
             # Hitung biaya total (USD)
             cost = (input_tokens * pricing['input']) + (output_tokens * pricing['output'])
             self.total_cost += cost
@@ -5246,6 +5430,17 @@ class MangaOCRApp(QMainWindow):
         style = settings.get('translation_style', 'Santai (Default)')
         style_instruction = style_map.get(style, style_map["Santai (Default)"])
         enhancements += f"\n- Translation Style: {style_instruction}"
+
+        # Injeksi Glossary jika ada
+        glossary = SETTINGS.get('glossary', {})
+        if isinstance(glossary, dict) and glossary:
+            glossary_lines = [f'  - "{src}" → "{tgt}"' for src, tgt in glossary.items() if src]
+            if glossary_lines:
+                glossary_str = '\n'.join(glossary_lines)
+                enhancements += (
+                    f"\n- Character/Term Glossary (ALWAYS use these translations consistently):\n"
+                    f"{glossary_str}"
+                )
 
         return enhancements
     
@@ -6898,7 +7093,7 @@ class MangaOCRApp(QMainWindow):
         self.save_project(is_auto=True)
         if status_message is None:
             status_message = "New project created and auto-saved."
-        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.3.4 - {os.path.basename(self.current_project_path)}")
+        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.4.1 - {os.path.basename(self.current_project_path)}")
         self.statusBar().showMessage(status_message, 4000)
     
     def load_folder(self):
@@ -10411,7 +10606,7 @@ class MangaOCRApp(QMainWindow):
 
             # Update judul window
             self.setWindowTitle(
-                f"Manga OCR & Typeset Tool v14.3.4 - {os.path.basename(self.current_project_path)}"
+                f"Manga OCR & Typeset Tool v14.4.1 - {os.path.basename(self.current_project_path)}"
             )
 
             # Start autosave only if user enabled it
@@ -10434,6 +10629,9 @@ class MangaOCRApp(QMainWindow):
                 QMessageBox.information(self, "Success", "Project loaded successfully.")
             elif warnings:
                 self.statusBar().showMessage("; ".join(warnings), 5000)
+
+            # Tambahkan ke recent projects
+            self._add_to_recent_projects(file_path)
 
             return True
 
@@ -10550,6 +10748,12 @@ class MangaOCRApp(QMainWindow):
 
         worker.finished.connect(self.on_project_save_finished)
         worker.error.connect(self.on_project_save_error)
+        
+        # Clean up asynchronously to avoid GIL deadlocks on the GUI thread
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_save_thread_finished)
 
         # store references so we can cancel/inspect
         self.project_save_worker = worker
@@ -10563,22 +10767,16 @@ class MangaOCRApp(QMainWindow):
         return True
 
     def on_project_save_finished(self, success, message):
-        # Cleanup thread/worker
-        if self.project_save_thread:
-            try:
-                self.project_save_thread.quit()
-                self.project_save_thread.wait()
-            except Exception:
-                pass
-            self.project_save_thread = None
-        self.project_save_worker = None
-        
         is_auto = getattr(self, 'project_save_is_auto', False)
         if not is_auto:
             if success:
                 QMessageBox.information(self, "Success", message)
             else:
                 QMessageBox.critical(self, "Error", message)
+
+    def _on_save_thread_finished(self):
+        self.project_save_thread = None
+        self.project_save_worker = None
 
     def on_project_save_error(self, msg):
         self.statusBar().showMessage(f"Error saving project: {msg}", 5000)
@@ -10595,6 +10793,60 @@ class MangaOCRApp(QMainWindow):
         default_dir = self.project_dir or ''
         file_path, _ = QFileDialog.getOpenFileName(self, "Load Project", default_dir, "Manga Project (*.manga_proj)")
         if not file_path:
+            return
+        self._load_project_from_path(file_path)
+
+    def _rebuild_recent_projects_menu(self):
+        """Membangun ulang submenu Recent Projects dari settings."""
+        menu = getattr(self, 'recent_projects_menu', None)
+        if not menu:
+            return
+        menu.clear()
+        recent = SETTINGS.get('recent_projects', [])
+        if not recent:
+            no_action = menu.addAction('(No recent projects)')
+            no_action.setEnabled(False)
+            return
+        for proj_path in recent:
+            display = os.path.basename(proj_path)
+            action = menu.addAction(display)
+            action.setToolTip(proj_path)
+            action.triggered.connect(lambda checked=False, p=proj_path: self.open_recent_project(p))
+        menu.addSeparator()
+        clear_action = menu.addAction('Clear Recent')
+        clear_action.triggered.connect(self._clear_recent_projects)
+
+    def _add_to_recent_projects(self, file_path: str):
+        """Tambahkan path project ke recent projects (max 10 entri)."""
+        if not file_path:
+            return
+        recent = list(SETTINGS.get('recent_projects', []))
+        # Hapus jika sudah ada (akan di-push ke atas)
+        if file_path in recent:
+            recent.remove(file_path)
+        recent.insert(0, file_path)
+        # Batasi 10 entri
+        SETTINGS['recent_projects'] = recent[:10]
+        save_settings(SETTINGS)
+        self._rebuild_recent_projects_menu()
+
+    def _clear_recent_projects(self):
+        """Hapus semua entri recent projects."""
+        SETTINGS['recent_projects'] = []
+        save_settings(SETTINGS)
+        self._rebuild_recent_projects_menu()
+
+    def open_recent_project(self, file_path: str):
+        """Buka project dari recent projects list."""
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, 'File Not Found',
+                f'Project file not found:\n{file_path}\n\nIt will be removed from recent projects.')
+            recent = list(SETTINGS.get('recent_projects', []))
+            if file_path in recent:
+                recent.remove(file_path)
+            SETTINGS['recent_projects'] = recent
+            save_settings(SETTINGS)
+            self._rebuild_recent_projects_menu()
             return
         self._load_project_from_path(file_path)
 
@@ -10689,8 +10941,498 @@ class MangaOCRApp(QMainWindow):
         self.load_usage_data()
         provider, model_name = self.get_selected_model_name()
         if not model_name: return
-        about_text = (f"<b>Manga OCR & Typeset Tool v14.3.4</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
+        about_text = (f"<b>Manga OCR & Typeset Tool v14.4.1</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
         QMessageBox.about(self, "About & API Usage", about_text)
+
+    def show_project_stats_dialog(self):
+        """Tampilkan dialog statistik project saat ini."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QScrollArea, QWidget, QGridLayout, QFrame
+
+        if not self.project_dir:
+            QMessageBox.information(self, "No Project", "Load a folder/project first.")
+            return
+
+        # --- Hitung statistik ---
+        total_pages = len([f for f in self.image_files if "_typeset" not in f.lower()])
+        pages_with_typeset = 0
+        total_areas = 0
+        total_words = 0
+        areas_with_text = 0
+        empty_areas = 0
+        model_usage = {}
+
+        for key, data in self.all_typeset_data.items():
+            areas = data.get('areas', [])
+            if areas:
+                pages_with_typeset += 1
+            for area in areas:
+                total_areas += 1
+                text = ''
+                if hasattr(area, 'text'):
+                    text = area.text or ''
+                elif isinstance(area, dict):
+                    text = area.get('text', '') or ''
+                if text.strip():
+                    areas_with_text += 1
+                    total_words += len(text.split())
+                else:
+                    empty_areas += 1
+                # Model usage
+                model_label = None
+                if hasattr(area, 'review_notes') and isinstance(area.review_notes, dict):
+                    model_label = area.review_notes.get('ai_model')
+                elif isinstance(area, dict):
+                    model_label = area.get('ai_model_label') or area.get('ai_model')
+                    if not model_label and 'review_notes' in area and isinstance(area['review_notes'], dict):
+                        model_label = area['review_notes'].get('ai_model')
+
+                if isinstance(model_label, (list, tuple)) and len(model_label) >= 2:
+                    model_label = f"{model_label[0]} ({model_label[1]})"
+                elif not model_label or not isinstance(model_label, str):
+                    model_label = 'Unknown'
+
+                model_usage[model_label] = model_usage.get(model_label, 0) + 1
+
+        completion_pct = round((pages_with_typeset / total_pages * 100), 1) if total_pages > 0 else 0.0
+        area_completion_pct = round((areas_with_text / total_areas * 100), 1) if total_areas > 0 else 0.0
+        session_cost_idr = int(self.total_cost * self.usd_to_idr_rate)
+
+        # --- Dialog ---
+        dlg = QDialog(self)
+        dlg.setWindowTitle("\U0001f4ca Project Statistics")
+        dlg.setModal(True)
+        dlg.resize(420, 500)
+
+        scroll = QScrollArea(dlg)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        vbox = QVBoxLayout(inner)
+        vbox.setContentsMargins(20, 16, 20, 16)
+        vbox.setSpacing(14)
+
+        def make_section(title):
+            lbl = QLabel(f"<b style='color:#38bdf8; font-size:11pt;'>{title}</b>")
+            vbox.addWidget(lbl)
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            sep.setStyleSheet("color: #1e293b;")
+            vbox.addWidget(sep)
+
+        def make_row(label, value):
+            row = QLabel(f"<span style='color:#94a3b8;'>{label}:</span>  <b style='color:#f1f5f9;'>{value}</b>")
+            row.setTextFormat(Qt.RichText)
+            vbox.addWidget(row)
+
+        make_section("\U0001f4c1 Project")
+        make_row("Folder", os.path.basename(self.project_dir))
+        make_row("Total Pages", str(total_pages))
+        make_row("Pages with Typeset", f"{pages_with_typeset} ({completion_pct}%)")
+
+        make_section("\u270f\ufe0f Areas")
+        make_row("Total Areas", str(total_areas))
+        make_row("Areas with Text", f"{areas_with_text} ({area_completion_pct}%)")
+        make_row("Empty Areas", str(empty_areas))
+        make_row("Total Words Translated", f"{total_words:,}")
+
+        make_section("\U0001f4b0 Session Cost")
+        make_row("Estimated Cost", f"${self.total_cost:.6f}  (~Rp {session_cost_idr:,})")
+        make_row("Snippets Translated", str(getattr(self, 'translated_count', 0)))
+
+        if model_usage:
+            make_section("\U0001f916 Model Usage (areas)")
+            for model, count in sorted(model_usage.items(), key=lambda x: -x[1]):
+                make_row(model, str(count))
+
+        vbox.addStretch(1)
+        scroll.setWidget(inner)
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(0, 0, 0, 12)
+        outer.addWidget(scroll, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedWidth(100)
+        close_btn.clicked.connect(dlg.accept)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(close_btn)
+        outer.addLayout(btn_row)
+
+        dlg.exec_()
+
+    def open_find_replace_dialog(self):
+        """Membuka dialog Find and Replace teks terjemahan global."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QPushButton, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QColor
+        import os
+        import re
+        
+        # Commit area aktif agar tersinkronisasi ke all_typeset_data
+        if self.current_image_path:
+            key = self.get_current_data_key()
+            self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔍 Find & Replace")
+        dlg.setModal(True)
+        dlg.resize(380, 200)
+        
+        # Setup dark theme styling untuk dialog agar selaras dengan main window (Catppuccin Mocha)
+        dlg.setStyleSheet("""
+            QDialog {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QLabel {
+                color: #cdd6f4;
+                font-size: 10pt;
+            }
+            QLineEdit {
+                background-color: #313244;
+                color: #cdd6f4;
+                border: 1px solid #45475a;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QLineEdit:focus {
+                border-color: #89b4fa;
+            }
+            QCheckBox {
+                color: #cdd6f4;
+            }
+            QPushButton {
+                background-color: #45475a;
+                color: #cdd6f4;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #585b70;
+            }
+            QPushButton:pressed {
+                background-color: #313244;
+            }
+            QPushButton#action-btn {
+                background-color: #89b4fa;
+                color: #11111b;
+            }
+            QPushButton#action-btn:hover {
+                background-color: #b4befe;
+            }
+            QTableWidget {
+                background-color: #11111b;
+                alternate-background-color: #181825;
+                color: #cdd6f4;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                gridline-color: #313244;
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background-color: #313244;
+                color: #89b4fa;
+                font-weight: bold;
+            }
+            QHeaderView::section {
+                background-color: #181825;
+                color: #cdd6f4;
+                padding: 6px;
+                border: 1px solid #313244;
+                font-weight: bold;
+            }
+            QGroupBox {
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 12px;
+                color: #cdd6f4;
+                font-weight: bold;
+            }
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # Baris Find
+        find_lay = QHBoxLayout()
+        find_lbl = QLabel("Find:")
+        find_lbl.setFixedWidth(60)
+        find_input = QLineEdit()
+        find_lay.addWidget(find_lbl)
+        find_lay.addWidget(find_input)
+        layout.addLayout(find_lay)
+
+        # Baris Replace
+        rep_lay = QHBoxLayout()
+        rep_lbl = QLabel("Replace:")
+        rep_lbl.setFixedWidth(60)
+        rep_input = QLineEdit()
+        rep_lay.addWidget(rep_lbl)
+        rep_lay.addWidget(rep_input)
+        layout.addLayout(rep_lay)
+
+        # Options
+        case_cb = QCheckBox("Match Case")
+        whole_cb = QCheckBox("Whole Word Only")
+        opt_lay = QHBoxLayout()
+        opt_lay.addWidget(case_cb)
+        opt_lay.addWidget(whole_cb)
+        layout.addLayout(opt_lay)
+
+        # Buttons
+        btn_lay = QHBoxLayout()
+        find_btn = QPushButton("Find All")
+        find_btn.setObjectName("action-btn")
+        replace_all_btn = QPushButton("Replace All")
+        replace_all_btn.setStyleSheet("background-color: #f38ba8; color: #11111b;") # Soft red for replace warning
+        close_btn = QPushButton("Close")
+        btn_lay.addWidget(find_btn)
+        btn_lay.addWidget(replace_all_btn)
+        btn_lay.addStretch(1)
+        btn_lay.addWidget(close_btn)
+        layout.addLayout(btn_lay)
+
+        # Results Group (hidden initially)
+        results_group = QGroupBox("🔍 Search Results")
+        results_vbox = QVBoxLayout(results_group)
+        results_table = QTableWidget(0, 2)
+        results_table.setHorizontalHeaderLabels(["Page / File", "Text Content"])
+        results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        results_table.setSelectionMode(QTableWidget.SingleSelection)
+        results_table.setAlternatingRowColors(True)
+        results_vbox.addWidget(results_table)
+        
+        layout.addWidget(results_group)
+        results_group.setVisible(False)
+
+        # Connect actions
+        close_btn.clicked.connect(dlg.reject)
+
+        def get_search_pattern():
+            find_txt = find_input.text()
+            if not find_txt:
+                return None
+            match_case = case_cb.isChecked()
+            whole_word = whole_cb.isChecked()
+            
+            flags = 0 if match_case else re.IGNORECASE
+            escaped_find = re.escape(find_txt)
+            if whole_word:
+                return re.compile(rf"\b{escaped_find}\b", flags)
+            else:
+                return re.compile(escaped_find, flags)
+
+        def do_find():
+            pattern = get_search_pattern()
+            if not pattern:
+                QMessageBox.warning(dlg, "Empty Search", "Please enter text to find.")
+                return
+            
+            # Disable selection changed trigger during table rebuild
+            results_table.blockSignals(True)
+            results_table.setRowCount(0)
+            found_count = 0
+            
+            for key, rec in list(self.all_typeset_data.items()):
+                areas = rec.get('areas', [])
+                for area in areas:
+                    if hasattr(area, 'text'):
+                        text = area.text or ''
+                    elif isinstance(area, dict):
+                        text = area.get('text', '') or ''
+                    else:
+                        continue
+                        
+                    if not text:
+                        continue
+                        
+                    if pattern.search(text):
+                        found_count += 1
+                        row_idx = results_table.rowCount()
+                        results_table.insertRow(row_idx)
+                        
+                        # Column 0: Page / File name
+                        page_name = os.path.basename(key.split('::page::')[0]) if '::page::' in key else os.path.basename(key)
+                        if '::page::' in key:
+                            page_name = f"{page_name} [Page {int(key.split('::page::')[1]) + 1}]"
+                        
+                        page_item = QTableWidgetItem(page_name)
+                        page_item.setData(Qt.UserRole, key)  # Store image/pdf key
+                        results_table.setItem(row_idx, 0, page_item)
+                        
+                        # Column 1: Text Content
+                        content_item = QTableWidgetItem(text.strip())
+                        hist_id = getattr(area, 'history_id', None) if not isinstance(area, dict) else area.get('history_id')
+                        content_item.setData(Qt.UserRole, hist_id)  # Store history ID
+                        results_table.setItem(row_idx, 1, content_item)
+            
+            results_table.blockSignals(False)
+            
+            if found_count > 0:
+                results_group.setVisible(True)
+                dlg.resize(600, 480)
+                results_table.selectRow(0)
+            else:
+                results_group.setVisible(False)
+                dlg.resize(380, 200)
+                QMessageBox.information(dlg, "No Matches", f"No occurrences of '{find_input.text()}' were found.")
+
+        def do_replace_all():
+            find_txt = find_input.text()
+            rep_txt = rep_input.text()
+            pattern = get_search_pattern()
+            if not pattern:
+                QMessageBox.warning(dlg, "Empty Search", "Please enter text to find.")
+                return
+            
+            replaced_count = 0
+            affected_pages = 0
+            
+            for key, rec in list(self.all_typeset_data.items()):
+                areas = rec.get('areas', [])
+                page_changed = False
+                for area in areas:
+                    if hasattr(area, 'text'):
+                        orig = area.text or ''
+                    elif isinstance(area, dict):
+                        orig = area.get('text', '') or ''
+                    else:
+                        continue
+                        
+                    if not orig:
+                        continue
+                        
+                    if pattern.search(orig):
+                        new_text, count = pattern.subn(rep_txt, orig)
+                        if count > 0:
+                            replaced_count += count
+                            page_changed = True
+                            if hasattr(area, 'update_plain_text') and callable(area.update_plain_text):
+                                area.update_plain_text(new_text)
+                            elif hasattr(area, 'text'):
+                                area.text = new_text
+                            elif isinstance(area, dict):
+                                area['text'] = new_text
+                                area['segments'] = None
+                if page_changed:
+                    affected_pages += 1
+            
+            if replaced_count > 0:
+                # Reload active page if it was affected
+                if self.current_image_path:
+                    curr_key = self.get_current_data_key()
+                    if curr_key in self.all_typeset_data:
+                        self.typeset_areas = self.all_typeset_data[curr_key]['areas']
+                        self.redraw_all_typeset_areas()
+                
+                self.save_project(is_auto=True)
+                
+                QMessageBox.information(self, "Replace Complete", 
+                    f"Successfully replaced {replaced_count} occurrences across {affected_pages} pages.\n"
+                    "Project automatically saved.")
+                dlg.accept()
+            else:
+                QMessageBox.information(dlg, "No Matches", f"No occurrences of '{find_txt}' were found.")
+
+        def on_selection_changed():
+            row_idx = results_table.currentRow()
+            if row_idx < 0:
+                return
+            page_item = results_table.item(row_idx, 0)
+            content_item = results_table.item(row_idx, 1)
+            if not page_item or not content_item:
+                return
+            
+            img_key = page_item.data(Qt.UserRole)
+            target_history_id = content_item.data(Qt.UserRole)
+            
+            # Switch page/image
+            if '::page::' in img_key:
+                parts = img_key.split('::page::')
+                target_path = parts[0]
+                target_page = int(parts[1])
+            else:
+                target_path = img_key
+                target_page = -1
+
+            if target_path in self.image_files:
+                file_row = self.image_files.index(target_path)
+                
+                # Block signals temporarily to prevent loop/unwanted triggers
+                self.file_list_widget.blockSignals(True)
+                try:
+                    self.file_list_widget.setCurrentRow(file_row)
+                    if target_page != -1:
+                        self.current_pdf_page = target_page
+                    # Force load the page
+                    self.load_item(target_path)
+                finally:
+                    self.file_list_widget.blockSignals(False)
+                
+                # Locate and select target area in typeset_areas
+                target_area_obj = None
+                if target_history_id:
+                    for a in self.typeset_areas:
+                        if getattr(a, 'history_id', None) == target_history_id:
+                            target_area_obj = a
+                            break
+                
+                if target_area_obj:
+                    self.set_selected_area(target_area_obj)
+                    self.redraw_all_typeset_areas()
+
+        find_btn.clicked.connect(do_find)
+        replace_all_btn.clicked.connect(do_replace_all)
+        results_table.itemSelectionChanged.connect(on_selection_changed)
+
+        dlg.exec_()
+
+    def show_desktop_notification(self, title: str, message: str, icon_type="info"):
+        """Mengirimkan desktop notification menggunakan QSystemTrayIcon secara lazy."""
+        from PyQt5.QtWidgets import QSystemTrayIcon
+        from PyQt5.QtGui import QIcon
+        
+        if not hasattr(self, '_tray_icon') or self._tray_icon is None:
+            self._tray_icon = QSystemTrayIcon(self)
+            app_icon = self.windowIcon()
+            if not app_icon.isNull():
+                self._tray_icon.setIcon(app_icon)
+            else:
+                from PyQt5.QtWidgets import QStyle
+                style_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+                self._tray_icon.setIcon(style_icon)
+            self._tray_icon.show()
+            
+        if icon_type == "error":
+            q_icon_type = QSystemTrayIcon.Critical
+        elif icon_type == "warning":
+            q_icon_type = QSystemTrayIcon.Warning
+        else:
+            q_icon_type = QSystemTrayIcon.Information
+            
+        self._tray_icon.showMessage(title, message, q_icon_type, 5000)
+
+    def _get_safe_path(self, path_str: str) -> str:
+        """Mengonversi path ke path absolut Windows Long Path (\\\\?\\prefix) jika berjalan di Windows."""
+        import platform
+        if not path_str or platform.system() != 'Windows':
+            return path_str
+        abs_path = os.path.abspath(path_str)
+        if abs_path.startswith('\\\\?\\'):
+            return abs_path
+        # Ganti forward slash ke backslash khas Windows
+        norm_path = abs_path.replace('/', '\\')
+        return '\\\\?\\' + norm_path
+
     def export_to_pdf(self):
         if not self.project_dir:
             QMessageBox.warning(self, "No Folder Loaded", "Please load a folder containing images first.")
@@ -10730,12 +11472,12 @@ class MangaOCRApp(QMainWindow):
             for i, f in enumerate(image_files_to_export):
                 self.overall_progress_bar.setVisible(True)
                 self.update_overall_progress(int((i/len(image_files_to_export))*100), f"Converting {os.path.basename(f)}...")
-                img = Image.open(f).convert("RGB")
+                img = Image.open(self._get_safe_path(f)).convert("RGB")
                 images_pil.append(img)
 
             if images_pil:
                 self.update_overall_progress(100, "Saving PDF...")
-                images_pil[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=images_pil[1:])
+                images_pil[0].save(self._get_safe_path(pdf_path), "PDF", resolution=100.0, save_all=True, append_images=images_pil[1:])
                 QMessageBox.information(self, "Success", f"Successfully exported {len(images_pil)} typeset images to:\n{pdf_path}")
             else:
                 raise Exception("No images could be processed.")
@@ -10744,6 +11486,72 @@ class MangaOCRApp(QMainWindow):
             QMessageBox.critical(self, "Export Error", f"An error occurred while exporting to PDF:\n{e}")
         finally:
             QApplication.restoreOverrideCursor() # DIUBAH: hapus argumen
+            self.overall_progress_bar.setVisible(False)
+            self.statusBar().showMessage("Ready", 3000)
+
+    def export_to_cbz(self):
+        """Export semua halaman yang sudah di-typeset ke format CBZ (Comic Book Zip)."""
+        if not self.project_dir:
+            QMessageBox.warning(self, "No Folder Loaded", "Please load a folder containing images first.")
+            return
+
+        import zipfile
+
+        # Kumpulkan file yang sudah di-typeset
+        image_files_to_export = []
+        for file_path in self.image_files:
+            if "_typeset" in file_path.lower():
+                continue
+            path_part, _ = os.path.splitext(file_path)
+            for ext in ('_typeset.png', '_typeset.webp', '_typeset.jpg'):
+                typeset_path = f"{path_part}{ext}"
+                if os.path.exists(typeset_path):
+                    image_files_to_export.append(typeset_path)
+                    break
+
+        if not image_files_to_export:
+            QMessageBox.warning(self, "No Typeset Files Found",
+                "No typeset images were found. Please run Batch Save first to generate typeset files.")
+            return
+
+        # Urutkan secara natural (1, 2, 10 bukan 1, 10, 2)
+        def natural_sort_key(s):
+            return [int(t) if t.isdigit() else t.lower()
+                    for t in re.split('([0-9]+)', os.path.basename(s))]
+        image_files_to_export.sort(key=natural_sort_key)
+
+        # Dialog simpan
+        folder_name = os.path.basename(self.project_dir)
+        save_suggestion = os.path.join(self.project_dir, f"{folder_name}_typeset.cbz")
+        cbz_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Typeset CBZ As", save_suggestion, "Comic Book Zip (*.cbz)")
+        if not cbz_path:
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.statusBar().showMessage("Exporting to CBZ... Please wait.")
+        self.overall_progress_bar.setVisible(True)
+
+        try:
+            with zipfile.ZipFile(self._get_safe_path(cbz_path), 'w', zipfile.ZIP_DEFLATED) as zf:
+                total = len(image_files_to_export)
+                for i, img_path in enumerate(image_files_to_export):
+                    self.update_overall_progress(
+                        int(((i + 1) / total) * 100),
+                        f"Adding {os.path.basename(img_path)}..."
+                    )
+                    # Tambahkan file ke zip dengan nama yang berurutan
+                    arcname = f"{i + 1:04d}_{os.path.basename(img_path)}"
+                    zf.write(self._get_safe_path(img_path), arcname)
+
+            QMessageBox.information(self, "Success",
+                f"Successfully exported {len(image_files_to_export)} typeset pages to:\n{cbz_path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error",
+                f"An error occurred while exporting to CBZ:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
             self.overall_progress_bar.setVisible(False)
             self.statusBar().showMessage("Ready", 3000)
 
@@ -10858,6 +11666,7 @@ class MangaOCRApp(QMainWindow):
     def on_api_batch_finished(self):
         self.statusBar().showMessage("Batch processing finished.", 5000)
         self.batch_processor_thread.quit()
+        self.show_desktop_notification("Batch Translate Selesai", "Proses batch translation untuk halaman yang dipilih telah selesai.")
 
     def split_extended_bubbles(self, detections, split_threshold=2.5):
         new_detections = []
@@ -10946,6 +11755,7 @@ class MangaOCRApp(QMainWindow):
             self.cancel_detection_button.setText("Cancel Detection")
 
         self.statusBar().showMessage("Detection complete. Please review the highlighted areas.", 5000)
+        self.show_desktop_notification("Bubble Detection Selesai", "Proses pendeteksian balon teks/teks otomatis telah selesai.")
         self.set_ui_for_confirmation(True)
 
     def process_confirmed_detections(self):
@@ -11148,6 +11958,7 @@ class MangaOCRApp(QMainWindow):
         self.statusBar().showMessage("Batch save complete.", 5000)
         self.overall_progress_bar.setVisible(False)
         self.batch_save_thread.quit(); self.batch_save_thread.wait()
+        self.show_desktop_notification("Batch Save Selesai", "Semua halaman terpilih telah berhasil disimpan.")
         QMessageBox.information(self, "Batch Save Complete", "All selected files have been saved.")
 
     def check_if_saved(self, file_path):
@@ -11346,6 +12157,20 @@ class MangaOCRApp(QMainWindow):
                     pass
             except Exception:
                 pass
+
+        # Quit/wait project save thread if running
+        try:
+            if getattr(self, 'project_save_thread', None):
+                try:
+                    if getattr(self.project_save_thread, 'isRunning', lambda: False)():
+                        self.project_save_thread.quit()
+                        self.project_save_thread.wait()
+                except RuntimeError:
+                    pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # Acquire paint mutex to ensure no painting is currently active before destroying pixmaps
         try:
@@ -12800,3 +13625,763 @@ class MangaOCRApp(QMainWindow):
             blocker = QSignalBlocker(self.toggle_right_btn)
             self.toggle_right_btn.setChecked(self.right_panel_scroll.isVisible())
             self.toggle_right_btn.setText("Show Tools" if not self.right_panel_scroll.isVisible() else "Hide Tools")
+
+    def _on_compare_mode_toggled(self, checked: bool):
+        """Aktifkan/nonaktifkan Quick Compare mode (tampilkan gambar asli tanpa typeset)."""
+        self._compare_mode_active = checked
+        if checked:
+            # Tampilkan gambar asli tanpa typeset overlay
+            if self.unmodified_original_pixmap and not self.unmodified_original_pixmap.isNull():
+                self.paint_mutex.lock()
+                try:
+                    local_pix = self.unmodified_original_pixmap.copy()
+                finally:
+                    self.paint_mutex.unlock()
+                scaled = local_pix.scaled(
+                    self.image_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                self.image_label.setPixmap(scaled)
+                self.statusBar().showMessage("Compare Mode: Menampilkan gambar asli (klik lagi untuk kembali)", 0)
+            else:
+                self.compare_mode_btn.setChecked(False)
+                self.statusBar().showMessage("Tidak ada gambar yang dimuat.", 2000)
+        else:
+            # Kembalikan ke tampilan typeset normal
+            self.redraw_all_typeset_areas()
+            self.statusBar().showMessage("Compare Mode: Nonaktif", 2000)
+
+    def browse_panel_model(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select YOLO Model",
+            os.path.join(ROOT_DIR, "src", "models"),
+            "YOLO Models (*.pt);;All Files (*)"
+        )
+        if file_path:
+            self.panel_model_path_input.setText(file_path)
+            self.on_panel_model_path_changed(file_path)
+
+    def on_panel_model_path_changed(self, text):
+        SETTINGS.setdefault('cleanup', {})['panel_model_path'] = text
+        save_settings(SETTINGS)
+
+    def on_show_panels_changed(self, state):
+        self.image_label.update()
+
+    def download_panel_model(self, model_path, callback):
+        # Premium dark style progress dialog
+        progress_dlg = QProgressDialog("Mengunduh model panel YOLO26 dari Hugging Face... (~10MB)", "Batal", 0, 100, self)
+        progress_dlg.setWindowModality(Qt.WindowModal)
+        progress_dlg.setWindowTitle("Unduh Model Panel")
+        progress_dlg.setStyleSheet("QProgressDialog { background-color: #090a0f; color: #cbd5e1; } QLabel { color: #cbd5e1; } QPushButton { background-color: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background-color: #334155; border-color: #38bdf8; }")
+        progress_dlg.show()
+
+        url = "https://huggingface.co/leoxs22/manga-panel-detector-yolo26n/resolve/main/manga_panel_detector_fp32.pt"
+        self._downloader_worker = FileDownloadWorker(url, model_path)
+        
+        def on_progress(percent, msg):
+            progress_dlg.setValue(percent)
+            progress_dlg.setLabelText(msg)
+
+        def on_finished(success, msg):
+            progress_dlg.close()
+            if success:
+                QMessageBox.information(self, "Success", "Model YOLO26 panel detector berhasil diunduh!")
+                self.panel_model_path_input.setText(model_path)
+                self.on_panel_model_path_changed(model_path)
+                callback()
+            else:
+                if msg != "Cancelled":
+                    QMessageBox.critical(self, "Error", f"Gagal mengunduh model: {msg}")
+
+        self._downloader_worker.progress.connect(on_progress)
+        self._downloader_worker.finished.connect(on_finished)
+        progress_dlg.canceled.connect(self._downloader_worker.cancel)
+        self._downloader_worker.start()
+
+    def detect_panels_yolo(self):
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "Buka gambar manga terlebih dahulu.")
+            return
+
+        model_path = self.panel_model_path_input.text().strip()
+        if not model_path:
+            model_path = os.path.join(ROOT_DIR, "src", "models", "manga_panel_detector_fp32.pt")
+        
+        # Jika file model belum ada, lakukan download otomatis!
+        if not os.path.exists(model_path):
+            reply = QMessageBox.question(
+                self,
+                "Download Model",
+                "Model YOLO26 panel detector tidak ditemukan.\nApakah Anda ingin mengunduhnya secara otomatis dari Hugging Face (~10MB)?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.download_panel_model(model_path, self.detect_panels_yolo)
+                return
+            else:
+                return
+
+        from src.core.config import YOLO
+        if YOLO is None:
+            QMessageBox.critical(self, "Dependency Error", "Pustaka 'ultralytics' (YOLO) tidak terpasang atau tidak terdeteksi.")
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.statusBar().showMessage("Menjalankan deteksi panel dengan YOLO...")
+        QApplication.processEvents()
+
+        try:
+            cv_img = cv2.imread(self.current_image_path)
+            if cv_img is None:
+                raise Exception("Gagal membaca file gambar.")
+
+            use_gpu = self.use_gpu_checkbox.isChecked() and self.is_gpu_available
+            device = "cuda" if use_gpu else "cpu"
+            
+            model = YOLO(model_path)
+            results = model(cv_img, verbose=False, device=device)
+            
+            detected_rects = []
+            if results and results[0].boxes is not None:
+                for box in results[0].boxes:
+                    xyxy = box.xyxy[0].cpu().numpy()
+                    x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                    # Class 0: panel, Class 1: text
+                    # Hanya ambil objek jika kelasnya adalah panel (0)
+                    cls_id = int(box.cls[0].cpu().numpy())
+                    if cls_id == 0:
+                        detected_rects.append(QRect(x1, y1, x2 - x1, y2 - y1))
+            
+            self.detected_panels = detected_rects
+            self.statusBar().showMessage(f"Berhasil mendeteksi {len(detected_rects)} panel.", 3000)
+            
+            self.show_panels_checkbox.setChecked(True)
+            self.image_label.update()
+            
+            if detected_rects:
+                reply = QMessageBox.question(
+                    self,
+                    "Sort RTL",
+                    f"Ditemukan {len(detected_rects)} panel. Apakah Anda ingin langsung mengurutkan balon teks berdasarkan urutan baca RTL?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    self.sort_areas_rtl()
+            else:
+                QMessageBox.information(self, "Deteksi Selesai", "Tidak ditemukan panel pada halaman ini.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Gagal mendeteksi panel: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def detect_panels_opencv_fallback(self):
+        if not self.current_image_path:
+            return []
+        try:
+            cv_img = cv2.imread(self.current_image_path)
+            if cv_img is None:
+                return []
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            panels = []
+            h, w = gray.shape
+            min_panel_area = (h * w) * 0.01
+            max_panel_area = (h * w) * 0.95
+            
+            for cnt in contours:
+                x, y, gw, gh = cv2.boundingRect(cnt)
+                area = gw * gh
+                if min_panel_area < area < max_panel_area:
+                    rect = QRect(x, y, gw, gh)
+                    is_dup = False
+                    for p in panels:
+                        intersect = p.intersected(rect)
+                        if intersect.width() * intersect.height() > 0.8 * area:
+                            is_dup = True
+                            break
+                    if not is_dup:
+                        panels.append(rect)
+            
+            return panels
+        except Exception as e:
+            print(f"Error in OpenCV panel detection fallback: {e}")
+            return []
+
+    def _sort_panels_rtl(self, panels):
+        if not panels:
+            return []
+        
+        sorted_by_y = sorted(panels, key=lambda r: r.y())
+        rows = []
+        for panel in sorted_by_y:
+            added = False
+            for row in rows:
+                ref = row[0]
+                overlap_y1 = max(ref.y(), panel.y())
+                overlap_y2 = min(ref.y() + ref.height(), panel.y() + panel.height())
+                overlap_h = overlap_y2 - overlap_y1
+                
+                min_h = min(ref.height(), panel.height())
+                if overlap_h > 0.3 * min_h:
+                    row.append(panel)
+                    added = True
+                    break
+            if not added:
+                rows.append([panel])
+        
+        sorted_panels = []
+        for row in rows:
+            sorted_row = sorted(row, key=lambda r: r.x() + r.width(), reverse=True)
+            sorted_panels.extend(sorted_row)
+            
+        return sorted_panels
+
+    def _sort_areas_by_panels(self, areas, sorted_panels):
+        panel_mapping = {i: [] for i in range(len(sorted_panels))}
+        floating_areas = []
+        
+        for area in areas:
+            rect = area.rect
+            cx = rect.x() + rect.width() / 2
+            cy = rect.y() + rect.height() / 2
+            point = QPointF(cx, cy).toPoint()
+            
+            assigned = False
+            for idx, panel in enumerate(sorted_panels):
+                if panel.contains(point):
+                    panel_mapping[idx].append(area)
+                    assigned = True
+                    break
+            if not assigned:
+                floating_areas.append(area)
+        
+        sorted_areas = []
+        
+        def sort_group_rtl(group):
+            by_y = sorted(group, key=lambda a: a.rect.y())
+            sub_rows = []
+            for area in by_y:
+                added = False
+                for sub_row in sub_rows:
+                    ref = sub_row[0]
+                    if abs(ref.rect.y() - area.rect.y()) < 35:
+                        sub_row.append(area)
+                        added = True
+                        break
+                if not added:
+                    sub_rows.append([area])
+            
+            sorted_group = []
+            for sub_row in sub_rows:
+                sorted_sub_row = sorted(sub_row, key=lambda a: a.rect.x() + a.rect.width(), reverse=True)
+                sorted_group.extend(sorted_sub_row)
+            return sorted_group
+            
+        for idx in range(len(sorted_panels)):
+            sorted_areas.extend(sort_group_rtl(panel_mapping[idx]))
+            
+        sorted_areas.extend(sort_group_rtl(floating_areas))
+        return sorted_areas
+
+    def sort_areas_rtl(self):
+        if not self.typeset_areas:
+            QMessageBox.information(self, "No Areas", "Tidak ada balon teks untuk diurutkan.")
+            return
+
+        panels = getattr(self, 'detected_panels', [])
+        if not panels:
+            panels = self.detect_panels_opencv_fallback()
+            self.detected_panels = panels
+            self.show_panels_checkbox.setChecked(True)
+            self.image_label.update()
+
+        sorted_panels = self._sort_panels_rtl(panels)
+        sorted_areas = self._sort_areas_by_panels(self.typeset_areas, sorted_panels)
+        self.typeset_areas = sorted_areas
+        
+        current_key = self.get_current_data_key()
+        if current_key:
+            self.all_typeset_data.setdefault(current_key, {})['areas'] = self.typeset_areas
+
+        self.redraw_all_typeset_areas(refresh_layers=True)
+        self.statusBar().showMessage("Urutan balon teks berhasil disortir berdasarkan RTL.", 3000)
+
+    def start_full_page_translation(self):
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "Buka gambar manga terlebih dahulu.")
+            return
+
+        settings = self.get_current_settings()
+        
+        # Override with active AI OCR provider and model if selected in OCR language settings
+        if settings.get('ocr_engine') == 'AI_OCR' and settings.get('ocr_ai_provider'):
+            provider_raw = settings.get('ocr_ai_provider', '')
+            model_name = settings.get('ocr_ai_model_id', '')
+            
+            # Map provider name to capitalized/proper case if necessary
+            if provider_raw.lower() == 'gemini':
+                provider = 'Gemini'
+            elif provider_raw.lower() == 'openai':
+                provider = 'OpenAI'
+            elif provider_raw.lower() == 'openrouter':
+                provider = 'OpenRouter'
+            else:
+                provider = provider_raw
+        else:
+            provider, model_name = self.get_selected_model_name()
+            if hasattr(self, 'ai_model_combo'):
+                idx = self.ai_model_combo.currentIndex()
+                if idx >= 0:
+                    data = self.ai_model_combo.itemData(idx, Qt.UserRole)
+                    if data:
+                        provider, model_name = data
+        
+        settings['ai_model'] = (provider, model_name)
+        settings['target_lang'] = self.translate_combo.currentText()
+        settings['use_inpaint'] = self.inpaint_checkbox.isChecked()
+        
+        self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
+        self.auto_translate_page_btn.setEnabled(False)
+        
+        use_ai_vision = self.use_ai_vision_checkbox.isChecked()
+        
+        self._full_page_worker = FullPageTranslateWorker(self, self.current_image_path, settings, use_ai_vision)
+        self._full_page_worker.progress.connect(lambda pct, msg: self.statusBar().showMessage(f"{msg} ({pct}%)"))
+        self._full_page_worker.finished.connect(self.on_full_page_translation_finished)
+        self._full_page_worker.error.connect(self.on_full_page_translation_error)
+        
+        self._full_page_worker.start()
+
+    def on_full_page_translation_finished(self, created_areas, msg):
+        self.auto_translate_page_btn.setText("🚀 Terjemahkan Halaman Ini")
+        self.auto_translate_page_btn.setEnabled(True)
+        
+        if not created_areas:
+            QMessageBox.information(self, "Selesai", f"Selesai: {msg}")
+            return
+
+        for area_payload in created_areas:
+            rect = area_payload['rect']
+            text = area_payload['text']
+            original_text = area_payload['original_text']
+            polygon = area_payload['polygon']
+            settings = area_payload['settings']
+            
+            self._create_typeset_area(
+                rect=rect,
+                text=text,
+                settings=settings,
+                polygon=polygon,
+                original_text=original_text,
+                is_manual=False
+            )
+        
+        self.redraw_all_typeset_areas(refresh_layers=True)
+        self.statusBar().showMessage(f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", 4000)
+
+    def on_full_page_translation_error(self, err_msg):
+        self.auto_translate_page_btn.setText("🚀 Terjemahkan Halaman Ini")
+        self.auto_translate_page_btn.setEnabled(True)
+        self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
+        QMessageBox.critical(self, "Error", f"Gagal menerjemahkan halaman: {err_msg}")
+
+class FileDownloadWorker(QThread):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, url, save_path):
+        super().__init__()
+        self.url = url
+        self.save_path = save_path
+        self._is_cancelled = False
+
+    def run(self):
+        try:
+            os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+            response = requests.get(self.url, stream=True, timeout=20)
+            response.raise_for_status()
+            total_size = int(response.headers.get('content-length', 0))
+            
+            bytes_written = 0
+            with open(self.save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if self._is_cancelled:
+                        break
+                    if chunk:
+                        f.write(chunk)
+                        bytes_written += len(chunk)
+                        if total_size > 0:
+                            percent = int((bytes_written / total_size) * 100)
+                            self.progress.emit(percent, f"Downloading: {percent}% ({bytes_written//1024} KB / {total_size//1024} KB)")
+            
+            if self._is_cancelled:
+                if os.path.exists(self.save_path):
+                    try: os.remove(self.save_path)
+                    except Exception: pass
+                self.finished.emit(False, "Cancelled")
+            else:
+                self.finished.emit(True, "Success")
+        except Exception as e:
+            if os.path.exists(self.save_path):
+                try: os.remove(self.save_path)
+                except Exception: pass
+            self.finished.emit(False, str(e))
+
+    def cancel(self):
+        self._is_cancelled = True
+
+class FullPageTranslateWorker(QThread):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(list, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, main_app, image_path, settings, use_ai_vision):
+        super().__init__()
+        self.main_app = main_app
+        self.image_path = image_path
+        self.settings = settings
+        self.use_ai_vision = use_ai_vision
+        self._is_cancelled = False
+
+    def run(self):
+        try:
+            pil_image = Image.open(self.image_path).convert('RGB')
+            cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            h, w = cv_image.shape[:2]
+            
+            created_areas = []
+
+            if self.use_ai_vision:
+                self.progress.emit(10, "Mengirim halaman ke AI Vision...")
+                provider, model_name = self.settings.get('ai_model', ('Gemini', 'gemini-1.5-flash'))
+                target_lang = self.settings.get('target_lang', 'Indonesian')
+                
+                prompt = f"""
+You are an expert manga translator. Analyze this manga page image.
+1. Identify all text regions (dialogue bubbles, narration box, floating text, SFX).
+2. For each region:
+   - Perform OCR (detect the original language, e.g. Japanese, Chinese, or English).
+   - Translate the text into {target_lang}.
+3. Return the results ONLY as a valid JSON array of objects. Do not wrap in markdown code blocks.
+Each object MUST have the following keys:
+- "box": [x, y, width, height] (integers representing the bounding box in pixels on the original image).
+- "original": the detected original text.
+- "translation": the translated text in {target_lang}.
+
+Image dimensions: Width = {w} pixels, Height = {h} pixels. Your coordinates must fit within these dimensions.
+JSON format example:
+[
+  {{"box": [100, 150, 80, 120], "original": "こんにちは", "translation": "Halo"}}
+]
+"""
+                response_text = ""
+                if provider == 'Gemini':
+                    api_key = get_active_key('gemini')
+                    if not api_key:
+                        raise Exception("Gemini API Key belum dikonfigurasi.")
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel(model_name)
+                    response = model.generate_content(
+                        [prompt, pil_image],
+                        generation_config={
+                            "max_output_tokens": 4096,
+                            "temperature": 0.3,
+                            "response_mime_type": "application/json"
+                        }
+                    )
+                    response_text = response.text if response else ""
+                    if response and hasattr(response, 'usage_metadata') and response.usage_metadata:
+                        in_tok = response.usage_metadata.prompt_token_count
+                        out_tok = response.usage_metadata.candidates_token_count
+                        if hasattr(self.main_app, "api_cost_signal"):
+                            self.main_app.api_cost_signal.emit(in_tok, out_tok, 'Gemini', model_name)
+                elif provider in ('OpenAI', 'OpenRouter'):
+                    if provider == 'OpenAI':
+                        client = getattr(self.main_app, "openai_client", None)
+                        if not client:
+                            api_key = get_active_key('openai')
+                            if not api_key:
+                                raise Exception("OpenAI API Key belum dikonfigurasi.")
+                            client = OpenAI(api_key=api_key)
+                    else:  # OpenRouter
+                        api_key = (
+                            SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip() or
+                            get_openrouter_api_key()
+                        )
+                        if not api_key:
+                            raise Exception("OpenRouter API Key belum dikonfigurasi.")
+                        client = OpenAI(
+                            api_key=api_key,
+                            base_url="https://openrouter.ai/api/v1"
+                        )
+                    
+                    buffered = io.BytesIO()
+                    pil_image.save(buffered, format="JPEG")
+                    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                    
+                    try:
+                        resp = client.chat.completions.create(
+                            model=model_name,
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:image/jpeg;base64,{base64_image}"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            response_format={"type": "json_object"},
+                            max_tokens=4096,
+                            temperature=0.3
+                        )
+                    except Exception as api_err:
+                        # Fallback for models that do not support response_format/JSON mode
+                        if "response_format" in str(api_err) or "json" in str(api_err).lower():
+                            resp = client.chat.completions.create(
+                                model=model_name,
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "text", "text": prompt},
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {
+                                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                max_tokens=4096,
+                                temperature=0.3
+                            )
+                        else:
+                            raise api_err
+                    response_text = resp.choices[0].message.content
+                    if resp and hasattr(resp, 'usage') and resp.usage:
+                        in_tok = resp.usage.prompt_tokens
+                        out_tok = resp.usage.completion_tokens
+                        if hasattr(self.main_app, "api_cost_signal"):
+                            self.main_app.api_cost_signal.emit(in_tok, out_tok, provider, model_name)
+                else:
+                    raise Exception(f"Provider AI Vision '{provider}' tidak didukung.")
+
+                if not response_text:
+                    raise Exception("AI Vision tidak mengembalikan respon.")
+
+                # Save response for debugging
+                try:
+                    os.makedirs("temp", exist_ok=True)
+                    with open("temp/full_page_response.txt", "w", encoding="utf-8") as f:
+                        f.write(response_text)
+                except Exception:
+                    pass
+
+                self.progress.emit(50, "Mengekstrak hasil terjemahan AI Vision...")
+                try:
+                    # Robust extraction of JSON from markdown blocks
+                    json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
+                    cleaned_json = json_match.group(1).strip() if json_match else response_text.strip()
+                    
+                    data = json.loads(cleaned_json)
+                    items = []
+                    if isinstance(data, list):
+                        items = data
+                    elif isinstance(data, dict):
+                        # Find the list of regions in the dict (checking common keys)
+                        for k, v in data.items():
+                            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                                if any(box_key in v[0] for box_key in ('box', 'rect', 'bounding_box', 'bbox', 'position', 'coordinates')):
+                                    items = v
+                                    break
+                        else:
+                            # Fallback: find any list of dicts that is not empty
+                            for k, v in data.items():
+                                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                                    items = v
+                                    break
+                        if not items and any(box_key in data for box_key in ('box', 'rect', 'bounding_box', 'bbox', 'position', 'coordinates')):
+                            items = [data]
+                    
+                    total_items = len(items)
+                    for idx, item in enumerate(items):
+                        if self._is_cancelled:
+                            break
+                        box = (
+                            item.get('box') or 
+                            item.get('rect') or 
+                            item.get('bounding_box') or 
+                            item.get('bbox') or 
+                            item.get('position') or 
+                            item.get('coordinates')
+                        )
+                        if not box:
+                            continue
+                        
+                        # Parse box in various formats (dict, list of 4, list of lists)
+                        parsed_box = None
+                        if isinstance(box, dict):
+                            bx = box.get('x') or box.get('x_min') or box.get('left')
+                            by = box.get('y') or box.get('y_min') or box.get('top')
+                            bw = box.get('width') or box.get('w') or (box.get('x_max', 0) - bx if bx is not None else None)
+                            bh = box.get('height') or box.get('h') or (box.get('y_max', 0) - by if by is not None else None)
+                            if bx is not None and by is not None and bw is not None and bh is not None:
+                                try:
+                                    parsed_box = (int(float(bx)), int(float(by)), int(float(bw)), int(float(bh)))
+                                except ValueError:
+                                    pass
+                        elif isinstance(box, (list, tuple)):
+                            if len(box) == 4:
+                                try:
+                                    parsed_box = (int(float(box[0])), int(float(box[1])), int(float(box[2])), int(float(box[3])))
+                                except ValueError:
+                                    pass
+                            elif len(box) == 2 and isinstance(box[0], (list, tuple)) and isinstance(box[1], (list, tuple)):
+                                try:
+                                    bx1, by1 = float(box[0][0]), float(box[0][1])
+                                    bx2, by2 = float(box[1][0]), float(box[1][1])
+                                    parsed_box = (int(min(bx1, bx2)), int(min(by1, by2)), int(abs(bx2 - bx1)), int(abs(by2 - by1)))
+                                except (ValueError, IndexError):
+                                    pass
+                        
+                        if not parsed_box:
+                            continue
+                            
+                        x, y, bw, bh = parsed_box
+                        x = max(0, min(x, w - 1))
+                        y = max(0, min(y, h - y - 1) if h - y > 0 else 0)
+                        bw = max(5, min(bw, w - x))
+                        bh = max(5, min(bh, h - y))
+                        
+                        rect = QRect(x, y, bw, bh)
+                        original_text = (
+                            item.get('original') or 
+                            item.get('original_text') or 
+                            item.get('ocr') or 
+                            item.get('text') or 
+                            item.get('src') or 
+                            ''
+                        )
+                        translated_text = (
+                            item.get('translation') or 
+                            item.get('translated') or 
+                            item.get('translation_text') or 
+                            item.get('translated_text') or 
+                            item.get('dest') or 
+                            ''
+                        )
+                        
+                        cleaned_cv = cv_image
+                        if self.settings.get('use_inpaint', True):
+                            self.progress.emit(50 + int((idx / total_items) * 40), f"Inpainting: {idx+1}/{total_items}...")
+                            cleaned_cv = self.run_inpainting_on_crop(cv_image, rect)
+                        
+                        area_payload = {
+                            'rect': rect,
+                            'text': translated_text,
+                            'original_text': original_text,
+                            'polygon': QPolygon([rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()]),
+                            'settings': self.settings
+                        }
+                        created_areas.append(area_payload)
+
+                except Exception as je:
+                    raise Exception(f"Gagal mem-parsing JSON dari AI Vision: {je}\nResponse: {response_text[:200]}")
+
+            else:
+                self.progress.emit(10, "Menjalankan pendeteksian teks lokal...")
+                detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
+                
+                if not detected_regions:
+                    self.finished.emit([], "Tidak ditemukan teks di halaman ini.")
+                    return
+                
+                total_regions = len(detected_regions)
+                for idx, (raw_text, polygon) in enumerate(detected_regions):
+                    if self._is_cancelled:
+                        break
+                    
+                    self.progress.emit(20 + int((idx / total_regions) * 80), f"Memproses teks: {idx+1}/{total_regions}...")
+                    rect = polygon.boundingRect()
+                    
+                    cropped_cv = cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
+                    if cropped_cv.size == 0:
+                        continue
+                    
+                    processed_text = self.main_app.clean_and_join_text(raw_text)
+                    translated_text = ""
+                    if processed_text:
+                        try:
+                            ai_model_cfg = self.settings.get('ai_model')
+                            use_ai_translate = self.settings.get('use_ai_only_translate') or ai_model_cfg
+                            if use_ai_translate and ai_model_cfg:
+                                provider, model_name = ai_model_cfg
+                                translated_text = self.main_app.translate_with_ai(processed_text, self.settings['target_lang'], provider, model_name, self.settings)
+                            else:
+                                translated_text = self.main_app.translate_text(processed_text, self.settings['target_lang'])
+                        except Exception as e:
+                            translated_text = f"[TRANSLATION ERROR: {e}]"
+                    
+                    if self.settings.get('use_inpaint', True):
+                        self.run_inpainting_on_crop(cv_image, rect)
+                    
+                    area_payload = {
+                        'rect': rect,
+                        'text': translated_text,
+                        'original_text': processed_text,
+                        'polygon': polygon,
+                        'settings': self.settings
+                    }
+                    created_areas.append(area_payload)
+
+            if created_areas:
+                self.finished.emit(created_areas, "Success")
+            else:
+                self.finished.emit([], "Tidak ditemukan balon teks/koordinat yang valid. Silakan cek file temp/full_page_response.txt untuk melihat respon AI.")
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def run_inpainting_on_crop(self, cv_image, rect):
+        try:
+            h, w = cv_image.shape[:2]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.rectangle(mask, (rect.x(), rect.y()), (rect.x() + rect.width(), rect.y() + rect.height()), 255, -1)
+            
+            url = "http://127.0.0.1:8080/api/v1/inpaint"
+            _, img_encoded = cv2.imencode('.png', cv_image)
+            _, mask_encoded = cv2.imencode('.png', mask)
+            
+            files = {
+                'image': ('image.png', img_encoded.tobytes(), 'image/png'),
+                'mask': ('mask.png', mask_encoded.tobytes(), 'image/png')
+            }
+            data = {'ldm_steps': 20}
+            
+            response = requests.post(url, files=files, data=data, timeout=10)
+            if response.status_code == 200:
+                nparr = np.frombuffer(response.content, np.uint8)
+                inpainted_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if inpainted_img is not None and inpainted_img.shape == cv_image.shape:
+                    cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted_img[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
+                    return inpainted_img
+            
+            flags = cv2.INPAINT_TELEA
+            inpainted = cv2.inpaint(cv_image, mask, 3, flags)
+            cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
+            return inpainted
+        except Exception as e:
+            print(f"Inpainting error: {e}")
+            return cv_image
