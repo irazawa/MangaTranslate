@@ -766,6 +766,10 @@ class MangaOCRApp(QMainWindow):
         
         self.fetch_openrouter_pricing_async()
 
+        # Tampilkan welcome screen di startup (hide nav bar & side panels)
+        if not self.project_dir:
+            self.show_welcome_screen()
+
     def setup_menu_bar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu('&File')
@@ -891,11 +895,20 @@ class MangaOCRApp(QMainWindow):
         self.image_scroll = QScrollArea()
         self.image_scroll.setWidget(self.image_label)
         self.image_scroll.setWidgetResizable(True)
-        center_layout.addWidget(self.image_scroll)
+
+        # --- Welcome / Start Screen (Fitur #19) ---
+        self.welcome_widget = self._build_welcome_widget()
+
+        # QStackedWidget: index 0 = welcome screen, index 1 = canvas
+        self.center_stack = QStackedWidget()
+        self.center_stack.addWidget(self.welcome_widget)
+        self.center_stack.addWidget(self.image_scroll)
+        self.center_stack.setCurrentIndex(0)  # Mulai di welcome screen
+        center_layout.addWidget(self.center_stack)
 
         # Navigation and Zoom Controls
-        nav_zoom_widget = QWidget()
-        nav_zoom_layout = QHBoxLayout(nav_zoom_widget)
+        self.nav_zoom_widget = QWidget()
+        nav_zoom_layout = QHBoxLayout(self.nav_zoom_widget)
         nav_zoom_layout.setContentsMargins(10, 5, 10, 5)
         
         # Premium toggle Folder btn
@@ -1007,7 +1020,7 @@ class MangaOCRApp(QMainWindow):
         """)
         nav_zoom_layout.addWidget(self.toggle_right_btn)
         
-        center_layout.addWidget(nav_zoom_widget)
+        center_layout.addWidget(self.nav_zoom_widget)
         self.splitter.addWidget(center_panel_widget)
 
         # Right Panel (Controls)
@@ -7095,6 +7108,8 @@ class MangaOCRApp(QMainWindow):
             status_message = "New project created and auto-saved."
         self.setWindowTitle(f"Manga OCR & Typeset Tool v14.4.1 - {os.path.basename(self.current_project_path)}")
         self.statusBar().showMessage(status_message, 4000)
+        # Sembunyikan welcome screen, tampilkan canvas
+        self.hide_welcome_screen()
     
     def load_folder(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Manga Folder", self.project_dir or "")
@@ -10579,6 +10594,8 @@ class MangaOCRApp(QMainWindow):
             self.file_list_widget.setCurrentRow(0)
 
         self.refresh_history_views()
+        # Sembunyikan welcome screen, tampilkan canvas
+        self.hide_welcome_screen()
         return warnings
 
     def _load_project_from_path(self, file_path, *, show_dialogs=True):
@@ -10796,6 +10813,461 @@ class MangaOCRApp(QMainWindow):
             return
         self._load_project_from_path(file_path)
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Welcome / Start Screen  (Fitur #14 & #19)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def show_welcome_screen(self):
+        """Tampilkan welcome screen — sembunyikan nav bar, folder panel, dan tools panel."""
+        stack = getattr(self, 'center_stack', None)
+        if not stack:
+            return
+        self._refresh_welcome_screen()
+        stack.setCurrentIndex(0)
+
+        # Sembunyikan nav bar bawah (zoom, prev/next, dsb.)
+        nav = getattr(self, 'nav_zoom_widget', None)
+        if nav:
+            nav.setVisible(False)
+
+        # Sembunyikan left panel (folder) — simpan state sebelumnya
+        left = getattr(self, 'left_panel_widget', None)
+        if left:
+            self._welcome_left_was_visible = left.isVisible()
+            left.setVisible(False)
+
+        # Sembunyikan right panel (tools)
+        right = getattr(self, 'right_panel_scroll', None)
+        if right:
+            self._welcome_right_was_visible = right.isVisible()
+            right.setVisible(False)
+
+    def hide_welcome_screen(self):
+        """Sembunyikan welcome screen — tampilkan canvas dan kembalikan panel."""
+        stack = getattr(self, 'center_stack', None)
+        if not stack:
+            return
+        stack.setCurrentIndex(1)
+
+        # Tampilkan kembali nav bar
+        nav = getattr(self, 'nav_zoom_widget', None)
+        if nav:
+            nav.setVisible(True)
+
+        # Kembalikan left panel ke state sebelumnya (default True jika tidak tersimpan)
+        left = getattr(self, 'left_panel_widget', None)
+        if left:
+            was_visible = getattr(self, '_welcome_left_was_visible', True)
+            left.setVisible(was_visible)
+            # Sync toggle button text
+            toggle_btn = getattr(self, 'toggle_left_btn', None)
+            if toggle_btn:
+                toggle_btn.setChecked(was_visible)
+                toggle_btn.setText("Hide Folder" if was_visible else "Show Folder")
+
+        # Kembalikan right panel ke state sebelumnya
+        right = getattr(self, 'right_panel_scroll', None)
+        if right:
+            was_visible = getattr(self, '_welcome_right_was_visible', True)
+            right.setVisible(was_visible)
+            # Sync toggle button text
+            toggle_btn = getattr(self, 'toggle_right_btn', None)
+            if toggle_btn:
+                toggle_btn.setChecked(was_visible)
+                toggle_btn.setText("Hide Tools" if was_visible else "Show Tools")
+
+    def _build_welcome_widget(self):
+        """Bangun widget welcome screen yang indah dengan quick actions dan recent projects."""
+        from PyQt5.QtWidgets import (
+            QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+            QScrollArea, QFrame, QSizePolicy, QGridLayout
+        )
+        from PyQt5.QtCore import Qt, QSize
+        from PyQt5.QtGui import QFont, QColor, QPalette
+
+        outer = QWidget()
+        outer.setObjectName("welcome-outer")
+        outer.setStyleSheet("""
+            QWidget#welcome-outer {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #090a0f,
+                    stop:0.5 #0d1117,
+                    stop:1 #090a0f
+                );
+            }
+        """)
+
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Scroll area supaya konten tidak terpotong di layar kecil
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(content)
+        vbox.setContentsMargins(60, 50, 60, 50)
+        vbox.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────────────────
+        header_lbl = QLabel("📖 MangaTranslate")
+        header_lbl.setAlignment(Qt.AlignCenter)
+        header_lbl.setStyleSheet("""
+            color: #f1f5f9;
+            font-size: 32pt;
+            font-weight: 800;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        """)
+        vbox.addWidget(header_lbl)
+
+        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.4.1")
+        sub_lbl.setAlignment(Qt.AlignCenter)
+        sub_lbl.setTextFormat(Qt.RichText)
+        sub_lbl.setStyleSheet("""
+            color: #64748b;
+            font-size: 11pt;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            margin-bottom: 36px;
+        """)
+        vbox.addWidget(sub_lbl)
+
+        # ── Separator ─────────────────────────────────────────────────────────
+        def make_sep():
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            sep.setStyleSheet("color: #1e293b; margin: 0 0 24px 0;")
+            return sep
+
+        # ── Quick Actions ──────────────────────────────────────────────────────
+        qa_title = QLabel("Quick Start")
+        qa_title.setStyleSheet("""
+            color: #94a3b8;
+            font-size: 9pt;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            margin-bottom: 12px;
+        """)
+        vbox.addWidget(qa_title)
+
+        qa_row = QHBoxLayout()
+        qa_row.setSpacing(12)
+
+        def make_action_btn(icon, label, slot, color_start, color_end, border_color):
+            btn = QPushButton()
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setFixedHeight(90)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 {color_start}, stop:1 {color_end});
+                    border: 1px solid {border_color};
+                    border-radius: 12px;
+                    color: #f1f5f9;
+                    font-size: 10pt;
+                    font-weight: 600;
+                    font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+                    padding: 8px;
+                    text-align: center;
+                }}
+                QPushButton:hover {{
+                    border: 1px solid #38bdf8;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #1e3a5f, stop:1 #0f2742);
+                }}
+                QPushButton:pressed {{
+                    background: #0c1e33;
+                }}
+            """)
+            btn.setText(f"{icon}\n{label}")
+            btn.clicked.connect(slot)
+            return btn
+
+        btn_folder = make_action_btn(
+            "📁", "Open Folder",
+            self.load_folder,
+            "#13263d", "#0c1a2c", "#1e3a5f"
+        )
+        btn_project = make_action_btn(
+            "🗂️", "Load Project",
+            self.load_project,
+            "#1a1340", "#110d2a", "#2d1d6b"
+        )
+        qa_row.addWidget(btn_folder)
+        qa_row.addWidget(btn_project)
+        vbox.addLayout(qa_row)
+
+        vbox.addSpacing(32)
+        vbox.addWidget(make_sep())
+
+        # ── Recent Projects ────────────────────────────────────────────────────
+        rp_header = QHBoxLayout()
+        rp_title = QLabel("Recent Projects")
+        rp_title.setStyleSheet("""
+            color: #94a3b8;
+            font-size: 9pt;
+            font-weight: 700;
+            letter-spacing: 2px;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            margin-bottom: 12px;
+        """)
+        rp_header.addWidget(rp_title)
+        rp_header.addStretch()
+        clear_recent_btn = QPushButton("Clear All")
+        clear_recent_btn.setFixedHeight(24)
+        clear_recent_btn.setCursor(Qt.PointingHandCursor)
+        clear_recent_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #475569;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                padding: 0 8px;
+                font-size: 8pt;
+                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            }
+            QPushButton:hover { color: #f87171; border-color: #f87171; }
+        """)
+        clear_recent_btn.clicked.connect(self._clear_recent_projects)
+        rp_header.addWidget(clear_recent_btn)
+        vbox.addLayout(rp_header)
+
+        # Container untuk grid kartu recent — di-refresh oleh _refresh_welcome_screen()
+        self._welcome_recent_container = QWidget()
+        self._welcome_recent_container.setStyleSheet("background: transparent;")
+        self._welcome_recent_grid = QGridLayout(self._welcome_recent_container)
+        self._welcome_recent_grid.setSpacing(10)
+        self._welcome_recent_grid.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(self._welcome_recent_container)
+
+        # Label "no recent" (akan di-show/hide oleh _populate_recent_cards)
+        # PENTING: inisialisasi _welcome_no_recent_lbl SEBELUM _populate_recent_cards() dipanggil
+        self._welcome_no_recent_lbl = QLabel("No recent projects yet.\nOpen a folder or load a project to get started.")
+        self._welcome_no_recent_lbl.setAlignment(Qt.AlignCenter)
+        self._welcome_no_recent_lbl.setStyleSheet("""
+            color: #334155;
+            font-size: 10pt;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            padding: 24px;
+        """)
+        vbox.addWidget(self._welcome_no_recent_lbl)
+
+        self._populate_recent_cards()  # Isi awal (setelah semua atribut diset)
+
+        vbox.addSpacing(32)
+        vbox.addWidget(make_sep())
+
+        # ── Keyboard Shortcuts ────────────────────────────────────────────────
+        ks_title = QLabel("Keyboard Shortcuts")
+        ks_title.setStyleSheet("""
+            color: #94a3b8;
+            font-size: 9pt;
+            font-weight: 700;
+            letter-spacing: 2px;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            margin-bottom: 10px;
+        """)
+        vbox.addWidget(ks_title)
+
+        shortcuts_data = [
+            ("Space", "Next Image"),
+            ("Esc", "Save Project"),
+            ("F2", "Focus Mode (Canvas Only)"),
+            ("F3", "Toggle Folder Panel"),
+            ("F4", "Toggle Tools Panel"),
+            ("1–9", "Switch Selection Mode"),
+            ("Ctrl+S", "Save Project"),
+            ("Ctrl+H", "Find & Replace"),
+            ("Ctrl+C / Ctrl+V", "Copy / Paste Area"),
+        ]
+
+        sc_grid = QGridLayout()
+        sc_grid.setSpacing(6)
+        sc_grid.setHorizontalSpacing(20)
+        for i, (key, desc) in enumerate(shortcuts_data):
+            col = (i % 2) * 2
+            row = i // 2
+            key_lbl = QLabel(key)
+            key_lbl.setStyleSheet("""
+                color: #38bdf8;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 9pt;
+                font-weight: 700;
+                background: #0f172a;
+                border: 1px solid #1e3a5f;
+                border-radius: 4px;
+                padding: 2px 8px;
+            """)
+            key_lbl.setFixedWidth(130)
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet("""
+                color: #64748b;
+                font-size: 9pt;
+                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            """)
+            sc_grid.addWidget(key_lbl, row, col)
+            sc_grid.addWidget(desc_lbl, row, col + 1)
+
+        vbox.addLayout(sc_grid)
+        vbox.addStretch(1)
+
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
+        return outer
+
+    def _populate_recent_cards(self):
+        """Isi ulang grid kartu recent projects dari SETTINGS."""
+        from PyQt5.QtWidgets import (
+            QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
+        )
+        from PyQt5.QtCore import Qt
+        import os
+
+        grid = getattr(self, '_welcome_recent_grid', None)
+        if grid is None:
+            return
+
+        # Bersihkan widget lama dari grid
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        recent = SETTINGS.get('recent_projects', [])
+        no_recent_lbl = getattr(self, '_welcome_no_recent_lbl', None)
+        if no_recent_lbl:
+            no_recent_lbl.setVisible(len(recent) == 0)
+
+        container = getattr(self, '_welcome_recent_container', None)
+        if container:
+            container.setVisible(len(recent) > 0)
+
+        cols = 2  # Kartu ditampilkan dalam 2 kolom
+        for idx, proj_path in enumerate(recent[:10]):
+            card = self._make_recent_project_card(proj_path)
+            row, col = divmod(idx, cols)
+            grid.addWidget(card, row, col)
+
+    def _make_recent_project_card(self, proj_path: str):
+        """Buat satu kartu recent project."""
+        from PyQt5.QtWidgets import (
+            QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
+        )
+        from PyQt5.QtCore import Qt
+        import os, time
+
+        card = QWidget()
+        card.setFixedHeight(68)
+        card.setCursor(Qt.PointingHandCursor)
+        exists = os.path.isfile(proj_path)
+        card.setStyleSheet(f"""
+            QWidget {{
+                background: {'#0f1729' if exists else '#130a0a'};
+                border: 1px solid {'#1e3a5f' if exists else '#3a1515'};
+                border-radius: 10px;
+            }}
+            QWidget:hover {{
+                background: {'#172035' if exists else '#1a0c0c'};
+                border-color: {'#38bdf8' if exists else '#f87171'};
+            }}
+        """)
+
+        h = QHBoxLayout(card)
+        h.setContentsMargins(12, 8, 8, 8)
+        h.setSpacing(10)
+
+        icon_lbl = QLabel("🗂️" if exists else "⚠️")
+        icon_lbl.setFixedWidth(28)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_lbl.setStyleSheet("font-size: 18pt; background: transparent; border: none;")
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(2)
+        name_lbl = QLabel(os.path.basename(proj_path))
+        name_lbl.setStyleSheet(f"""
+            color: {'#e2e8f0' if exists else '#f87171'};
+            font-size: 9.5pt;
+            font-weight: 600;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            background: transparent;
+            border: none;
+        """)
+        name_lbl.setToolTip(proj_path)
+        path_lbl = QLabel(os.path.dirname(proj_path))
+        path_lbl.setStyleSheet("""
+            color: #475569;
+            font-size: 8pt;
+            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            background: transparent;
+            border: none;
+        """)
+        path_lbl.setToolTip(proj_path)
+        # Truncate path kalau terlalu panjang
+        max_chars = 45
+        dir_text = os.path.dirname(proj_path)
+        if len(dir_text) > max_chars:
+            dir_text = "…" + dir_text[-(max_chars - 1):]
+        path_lbl.setText(dir_text)
+
+        info_col.addWidget(name_lbl)
+        info_col.addWidget(path_lbl)
+
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedSize(20, 20)
+        remove_btn.setCursor(Qt.PointingHandCursor)
+        remove_btn.setToolTip("Remove from recent list")
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #475569;
+                border: none;
+                font-size: 9pt;
+                font-weight: bold;
+                border-radius: 10px;
+                padding: 0;
+            }
+            QPushButton:hover { color: #f87171; background: #1f1010; }
+        """)
+        remove_btn.clicked.connect(lambda checked=False, p=proj_path: self._remove_single_recent(p))
+
+        h.addWidget(icon_lbl)
+        h.addLayout(info_col, 1)
+        h.addWidget(remove_btn)
+
+        # Klik card (bukan tombol ✕) → buka project
+        # Gunakan mousePressEvent pada card
+        def card_clicked(event, p=proj_path):
+            from PyQt5.QtCore import Qt
+            if event.button() == Qt.LeftButton:
+                self.open_recent_project(p)
+
+        card.mousePressEvent = card_clicked
+        return card
+
+    def _refresh_welcome_screen(self):
+        """Refresh kartu recent projects di welcome screen tanpa rebuild seluruh widget."""
+        self._populate_recent_cards()
+
+    def _remove_single_recent(self, file_path: str):
+        """Hapus satu entri dari recent projects list."""
+        recent = list(SETTINGS.get('recent_projects', []))
+        if file_path in recent:
+            recent.remove(file_path)
+        SETTINGS['recent_projects'] = recent
+        save_settings(SETTINGS)
+        self._rebuild_recent_projects_menu()
+
     def _rebuild_recent_projects_menu(self):
         """Membangun ulang submenu Recent Projects dari settings."""
         menu = getattr(self, 'recent_projects_menu', None)
@@ -10806,6 +11278,7 @@ class MangaOCRApp(QMainWindow):
         if not recent:
             no_action = menu.addAction('(No recent projects)')
             no_action.setEnabled(False)
+            self._refresh_welcome_screen()
             return
         for proj_path in recent:
             display = os.path.basename(proj_path)
@@ -10815,6 +11288,8 @@ class MangaOCRApp(QMainWindow):
         menu.addSeparator()
         clear_action = menu.addAction('Clear Recent')
         clear_action.triggered.connect(self._clear_recent_projects)
+        # Sinkronkan welcome screen agar kartu recent selalu up-to-date
+        self._refresh_welcome_screen()
 
     def _add_to_recent_projects(self, file_path: str):
         """Tambahkan path project ke recent projects (max 10 entri)."""

@@ -38,6 +38,14 @@ Untuk memastikan penghapusan teks manga (clean-up) berjalan secara mulus dan pre
 * **Stabilitas Eksekusi**: Dikonfigurasi dalam mode CPU (dioptimalkan untuk Windows tanpa ROCm pada GPU AMD consumer seperti Radeon RX 6600) untuk memberikan kestabilan 100% dengan waktu respon ultra-cepat (< 300ms per crop).
 * **Komunikasi Restful**: Aplikasi utama berkomunikasi dengan server inpainting (`http://127.0.0.1:8080`) menggunakan Rest API `POST /api/v1/inpaint` dengan parameter file gambar asli dan masking area teks hitam-putih.
 
+### 3. Antarmuka Awal & Recent Projects (Welcome Screen)
+Untuk meningkatkan pengalaman pengguna baru, aplikasi mengimplementasikan layar pembuka interaktif:
+* **Welcome Screen Otomatis**: Ditampilkan secara otomatis saat aplikasi dijalankan jika tidak ada folder/proyek yang sedang aktif. Layar ini didesain menggunakan gaya visual gelap (dark theme) premium.
+* **Smart UI Hiding**: Saat Welcome Screen aktif, semua sidebar panel (folder panel di kiri, tools panel di kanan), panel kontrol status navigasi bawah, dan tombol kontrol canvas (zoom, dll.) disembunyikan agar tampilan menjadi fokus dan minimalis.
+* **Recent Projects Card Grid**: Menampilkan daftar proyek yang terakhir diakses secara visual dalam bentuk grid kartu interaktif. Pengguna dapat langsung membuka proyek dengan mengklik kartu tersebut, atau menghapus entri dari riwayat dengan mengklik tombol `✕` di pojok kanan kartu.
+* **Quick Actions**: Tombol akses cepat untuk langsung membuka folder manga, memuat file proyek `.manga_proj`, atau membuka dokumen PDF.
+* **Keyboard Shortcut Guide**: Daftar panduan pintasan tombol keyboard utama yang ditampilkan di welcome screen untuk membiasakan workflow pengguna.
+
 ---
 
 ## 🔄 Pipeline OCR & Terjemahan (OCR & Translation Pipelines)
@@ -246,4 +254,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v16.1.0*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.5.0*
