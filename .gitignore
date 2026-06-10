@@ -36,3 +36,8 @@ src/data/music/
 
 # Local/external tools and folders
 Inpainting/
+
+# Secret documentation files
+code.md
+feature_ideas.md
+
