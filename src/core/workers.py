@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.4.1
+# Manga OCR & Typeset Tool v14.7.0
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -205,6 +205,45 @@ class QueueProcessorWorker(QObject):
         self.signals = QueueProcessorSignals()
 
     # Fungsi utama yang dijalankan oleh thread worker
+    def apply_auto_font(self, translated_text, settings):
+        if not settings.get('auto_font_enabled', False):
+            return None
+
+        # Content Rules
+        group_name = "Dialog Normal"
+        if translated_text:
+            text_upper = translated_text.upper()
+            if (translated_text == text_upper and sum(1 for c in translated_text if c.isalpha()) > 3) or "!!!" in translated_text:
+                group_name = "Marah / Berteriak"
+            elif "..." in translated_text or (translated_text.startswith("(") and translated_text.endswith(")")):
+                group_name = "Berbisik / Pelan"
+            elif "!?" in translated_text or "?!" in translated_text:
+                group_name = "Kaget / Shock / Tersentak"
+        
+        font_groups = getattr(self.main_app, 'font_groups', {})
+        fonts_in_group = font_groups.get(group_name, [])
+        if not fonts_in_group:
+            return None
+
+        chosen_font = fonts_in_group[0]
+        
+        from src.utils.dafont import DaFontDownloader
+        from src.core.fonts import get_font_manager
+        
+        font_manager = get_font_manager()
+        if font_manager and not font_manager.has_font(chosen_font):
+            dl_dir = os.path.join("temp", "downloaded_fonts")
+            path = DaFontDownloader.search_and_download(chosen_font, dl_dir)
+            if path:
+                try:
+                    font_manager.import_font(path)
+                except Exception as e:
+                    print(f"Failed to import downloaded font: {e}")
+                    
+        if font_manager and font_manager.has_font(chosen_font):
+            return chosen_font
+        return None
+
     def run(self):
         print(f"Worker {self.worker_id} started.")
         while self.is_running:
@@ -224,6 +263,11 @@ class QueueProcessorWorker(QObject):
                 original_text, translated_text = self.process_job(cropped_cv_img, settings, pre_detected_text)
 
                 if translated_text:
+                    # Terapkan Auto-Font
+                    auto_font_name = self.apply_auto_font(translated_text, settings)
+                    if auto_font_name:
+                        settings['auto_font'] = auto_font_name
+
                     area_payload = {
                         'rect': job['rect'],
                         'text': translated_text,
@@ -517,6 +561,45 @@ class BatchProcessorWorker(QObject):
         self.settings = settings
         self.signals = BatchProcessorSignals()
 
+    def apply_auto_font(self, translated_text, settings):
+        if not settings.get('auto_font_enabled', False):
+            return None
+
+        # Content Rules
+        group_name = "Dialog Normal"
+        if translated_text:
+            text_upper = translated_text.upper()
+            if (translated_text == text_upper and sum(1 for c in translated_text if c.isalpha()) > 3) or "!!!" in translated_text:
+                group_name = "Marah / Berteriak"
+            elif "..." in translated_text or (translated_text.startswith("(") and translated_text.endswith(")")):
+                group_name = "Berbisik / Pelan"
+            elif "!?" in translated_text or "?!" in translated_text:
+                group_name = "Kaget / Shock / Tersentak"
+        
+        font_groups = getattr(self.main_app, 'font_groups', {})
+        fonts_in_group = font_groups.get(group_name, [])
+        if not fonts_in_group:
+            return None
+
+        chosen_font = fonts_in_group[0]
+        
+        from src.utils.dafont import DaFontDownloader
+        from src.core.fonts import get_font_manager
+        
+        font_manager = get_font_manager()
+        if font_manager and not font_manager.has_font(chosen_font):
+            dl_dir = os.path.join("temp", "downloaded_fonts")
+            path = DaFontDownloader.search_and_download(chosen_font, dl_dir)
+            if path:
+                try:
+                    font_manager.import_font(path)
+                except Exception as e:
+                    print(f"Failed to import downloaded font: {e}")
+                    
+        if font_manager and font_manager.has_font(chosen_font):
+            return chosen_font
+        return None
+
     def run(self):
         try:
             jobs_by_image = {}
@@ -645,10 +728,16 @@ Your final output must ONLY be the translated {target_lang} text, with each tran
                 if self.settings.get('safe_mode') and translated_text:
                     translated_text = self.main_app.apply_safe_mode(translated_text)
                 if translated_text and "[N/A]" not in translated_text:
+                    # Copy setting agar masing-masing area bisa punya auto_font berbeda
+                    area_settings = dict(self.settings)
+                    auto_font_name = self.apply_auto_font(translated_text, area_settings)
+                    if auto_font_name:
+                        area_settings['auto_font'] = auto_font_name
+                        
                     area_payload = {
                         'rect': job['rect'],
                         'text': translated_text,
-                        'settings': self.settings,
+                        'settings': area_settings,
                         'polygon': job.get('polygon'),
                         'original_text': ocr_texts[i],
                         'ai_model_label': self.settings.get('ai_model_label')

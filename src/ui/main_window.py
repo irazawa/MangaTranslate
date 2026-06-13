@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.4.1
+# Manga OCR & Typeset Tool v14.7.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -361,7 +361,7 @@ class MangaOCRApp(QMainWindow):
             ensure_dependencies(self, required_pkgs)
         except Exception:
             pass
-        self.setWindowTitle("Manga OCR & Typeset Tool v14.4.1")
+        self.setWindowTitle("Manga OCR & Typeset Tool v14.7.0")
         self.image_files = []
         self.current_image_path = None
         self.current_image_pil = None
@@ -2480,6 +2480,14 @@ class MangaOCRApp(QMainWindow):
         self.import_font_button.setToolTip("Add new font files from your computer (TTF, OTF, TTC, OTC).")
         self.import_font_button.clicked.connect(self.import_font)
         font_layout.addWidget(self.import_font_button, 3, 1, 1, 2)
+        
+        self.auto_font_checkbox = QCheckBox("Enable Auto-Font (Smart Detection)")
+        self.auto_font_checkbox.setToolTip("Automatically selects the best font based on the translated text.")
+        auto_font_enabled = SETTINGS.get('typeset', {}).get('auto_font_enabled', False)
+        self.auto_font_checkbox.setChecked(auto_font_enabled)
+        self.auto_font_checkbox.toggled.connect(self._on_auto_font_toggled)
+        font_layout.addWidget(self.auto_font_checkbox, 4, 0, 1, 3)
+        
         layout.addWidget(font_group)
 
         appearance_group = QGroupBox("Appearance")
@@ -2707,6 +2715,21 @@ class MangaOCRApp(QMainWindow):
         self.typeset_preview_label.setStyleSheet("background-color: #172330; border: 1px solid #1f2b3b; border-radius: 12px;")
         preview_layout.addWidget(self.typeset_preview_label)
         layout.addWidget(preview_group)
+
+        # Recent Translations Group (Feature #5)
+        recent_group = QGroupBox("Recent Translations")
+        recent_layout = QVBoxLayout(recent_group)
+        recent_layout.setContentsMargins(12, 10, 12, 12)
+        
+        recent_desc = QLabel("Click to apply recent translation to active text area.")
+        recent_desc.setStyleSheet("color: #8fa6c5; font-size: 8.5pt;")
+        recent_layout.addWidget(recent_desc)
+        
+        self.typeset_recent_list = QListWidget()
+        self.typeset_recent_list.setMaximumHeight(160)
+        self.typeset_recent_list.itemClicked.connect(self._on_recent_translation_clicked)
+        recent_layout.addWidget(self.typeset_recent_list)
+        layout.addWidget(recent_group)
 
         layout.addStretch(1)
 
@@ -6020,7 +6043,12 @@ class MangaOCRApp(QMainWindow):
                     # changes the user made while the translation was in progress are
                     # reflected in the resulting area.
                     live_settings = area_payload['settings'].copy()
-                    live_settings['font'] = self._build_current_font()
+                    
+                    if 'auto_font' in live_settings:
+                        # Auto-font has chosen a font for this specific area
+                        live_settings['font'] = self.font_manager.create_qfont(live_settings['auto_font'], self.typeset_font)
+                    else:
+                        live_settings['font'] = self._build_current_font()
                     if hasattr(self, 'typeset_color') and isinstance(self.typeset_color, QColor):
                         live_settings['color'] = QColor(self.typeset_color)
                     area = self._create_typeset_area(
@@ -6388,6 +6416,7 @@ class MangaOCRApp(QMainWindow):
                     self.populate_result_table(table, entries, source)
 
             self.update_result_buttons_state()
+            self._update_recent_translations_list()
         finally:
             self._is_refreshing_history = False
 
@@ -7106,7 +7135,7 @@ class MangaOCRApp(QMainWindow):
         self.save_project(is_auto=True)
         if status_message is None:
             status_message = "New project created and auto-saved."
-        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.4.1 - {os.path.basename(self.current_project_path)}")
+        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.7.0 - {os.path.basename(self.current_project_path)}")
         self.statusBar().showMessage(status_message, 4000)
         # Sembunyikan welcome screen, tampilkan canvas
         self.hide_welcome_screen()
@@ -7867,6 +7896,35 @@ class MangaOCRApp(QMainWindow):
         self.typeset_font = self._build_current_font()
         self._apply_active_typeset_to_selected()
         self._update_typeset_preview()
+
+    def _update_recent_translations_list(self):
+        if not hasattr(self, 'typeset_recent_list'):
+            return
+        
+        self.typeset_recent_list.clear()
+        
+        # Get up to 20 unique recent translations
+        recent_texts = []
+        for entry in reversed(getattr(self, 'history_entries', [])):
+            text = entry.get('translated_text', '').strip()
+            if text and text not in recent_texts:
+                recent_texts.append(text)
+                if len(recent_texts) >= 20:
+                    break
+                    
+        for text in recent_texts:
+            # truncate display if too long
+            display_text = text if len(text) <= 60 else text[:57] + '...'
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.UserRole, text)
+            self.typeset_recent_list.addItem(item)
+
+    def _on_recent_translation_clicked(self, item):
+        text = item.data(Qt.UserRole)
+        if text and self.selected_typeset_area:
+            self.selected_typeset_area.text = text
+            self.redraw_all_typeset_areas()
+            self.update_undo_redo_buttons_state()
 
     def _on_warp_style_changed(self, text):
         if hasattr(self, 'typeset_curve_editor'):
@@ -10623,7 +10681,7 @@ class MangaOCRApp(QMainWindow):
 
             # Update judul window
             self.setWindowTitle(
-                f"Manga OCR & Typeset Tool v14.4.1 - {os.path.basename(self.current_project_path)}"
+                f"Manga OCR & Typeset Tool v14.7.0 - {os.path.basename(self.current_project_path)}"
             )
 
             # Start autosave only if user enabled it
@@ -10857,7 +10915,7 @@ class MangaOCRApp(QMainWindow):
         # Kembalikan left panel ke state sebelumnya (default True jika tidak tersimpan)
         left = getattr(self, 'left_panel_widget', None)
         if left:
-            was_visible = getattr(self, '_welcome_left_was_visible', True)
+            was_visible = True  # Selalu buka folder saat memuat project
             left.setVisible(was_visible)
             # Sync toggle button text
             toggle_btn = getattr(self, 'toggle_left_btn', None)
@@ -10868,7 +10926,7 @@ class MangaOCRApp(QMainWindow):
         # Kembalikan right panel ke state sebelumnya
         right = getattr(self, 'right_panel_scroll', None)
         if right:
-            was_visible = getattr(self, '_welcome_right_was_visible', True)
+            was_visible = True  # Selalu buka tools saat memuat project
             right.setVisible(was_visible)
             # Sync toggle button text
             toggle_btn = getattr(self, 'toggle_right_btn', None)
@@ -10928,7 +10986,7 @@ class MangaOCRApp(QMainWindow):
         """)
         vbox.addWidget(header_lbl)
 
-        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.4.1")
+        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.7.0")
         sub_lbl.setAlignment(Qt.AlignCenter)
         sub_lbl.setTextFormat(Qt.RichText)
         sub_lbl.setStyleSheet("""
@@ -11416,7 +11474,7 @@ class MangaOCRApp(QMainWindow):
         self.load_usage_data()
         provider, model_name = self.get_selected_model_name()
         if not model_name: return
-        about_text = (f"<b>Manga OCR & Typeset Tool v14.4.1</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
+        about_text = (f"<b>Manga OCR & Typeset Tool v14.7.0</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
         QMessageBox.about(self, "About & API Usage", about_text)
 
     def show_project_stats_dialog(self):
@@ -14043,6 +14101,25 @@ class MangaOCRApp(QMainWindow):
     def _set_layer_opacity_direct(self, area, val):
         area.opacity = val / 100.0
         self.redraw_all_typeset_areas(refresh_layers=False)
+
+    def import_font(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Font", "", "Fonts (*.ttf *.otf *.ttc *.otc)"
+        )
+        if file_path:
+            try:
+                display_name = self.font_manager.import_font(file_path)
+                QMessageBox.information(self, "Success", f"Font '{display_name}' imported successfully.")
+                self._populate_typeset_font_dropdown(display_name)
+                self.typeset_font = self._build_current_font()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to import font:\n{str(e)}")
+
+    def _on_auto_font_toggled(self, checked):
+        if 'typeset' not in SETTINGS:
+            SETTINGS['typeset'] = {}
+        SETTINGS['typeset']['auto_font_enabled'] = checked
+        save_settings(SETTINGS)
 
     def _on_opacity_slider_changed(self, value):
         area = self.selected_typeset_area

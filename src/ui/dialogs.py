@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.4.1
+# Manga OCR & Typeset Tool v14.7.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -26,7 +26,7 @@ from PyQt5.QtGui import (
     QColor, QFont, QTextCharFormat, QTextCursor, QBrush, QTextBlockFormat, QPixmap, QImage
 )
 from PyQt5.QtCore import (
-    Qt, pyqtSignal, QTimer, QSignalBlocker, QSize, QThread
+    Qt, pyqtSignal, QTimer, QSignalBlocker, QSize, QThread, QPoint
 )
 
 import sys
@@ -1915,6 +1915,11 @@ class AdvancedTextEditDialog(QDialog):
         self.ai_translate_btn.clicked.connect(self._on_ai_translate_clicked)
         toolbar_layout.addWidget(self.ai_translate_btn)
 
+        self.recent_translations_btn = QPushButton("📋 Recent")
+        self.recent_translations_btn.setToolTip("Apply a recently generated translation to this text area")
+        self.recent_translations_btn.clicked.connect(self._show_recent_menu)
+        toolbar_layout.addWidget(self.recent_translations_btn)
+
         # After creating widgets, populate group combo if possible and hook handlers
         try:
             main_win = self.parent()
@@ -2546,6 +2551,50 @@ class AdvancedTextEditDialog(QDialog):
         direction_str = self.area.get_extra('gradient_direction')
         if direction_str:
             self.gradient_direction_combo.setCurrentText(direction_str)
+
+
+    def _show_recent_menu(self):
+        parent = self.parent()
+        if not parent or not hasattr(parent, 'history_entries'):
+            return
+            
+        from PyQt5.QtWidgets import QMenu, QAction
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { background-color: #172330; border: 1px solid #2d3f58; } QMenu::item:selected { background-color: #1e3050; }")
+        
+        recent_texts = []
+        for entry in reversed(parent.history_entries):
+            text = entry.get('translated_text', '').strip()
+            if text and text not in recent_texts:
+                recent_texts.append(text)
+                if len(recent_texts) >= 20:
+                    break
+                    
+        if not recent_texts:
+            action = QAction("No recent translations", self)
+            action.setEnabled(False)
+            menu.addAction(action)
+        else:
+            for text in recent_texts:
+                display_text = text if len(text) <= 40 else text[:37] + '...'
+                action = QAction(display_text, self)
+                action.setData(text)
+                menu.addAction(action)
+                
+        # Connect menu triggered
+        def on_action(action):
+            if action.data():
+                # Replace selection or all text
+                cursor = self.text_edit.textCursor()
+                if cursor.hasSelection():
+                    cursor.insertText(action.data())
+                else:
+                    self.text_edit.setPlainText(action.data())
+                    
+        menu.triggered.connect(on_action)
+        
+        # Show menu under button
+        menu.exec_(self.recent_translations_btn.mapToGlobal(QPoint(0, self.recent_translations_btn.height())))
 
 
     def _on_ai_translate_clicked(self):
