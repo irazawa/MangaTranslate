@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.7.0
+# Manga OCR & Typeset Tool v14.8.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -361,7 +361,7 @@ class MangaOCRApp(QMainWindow):
             ensure_dependencies(self, required_pkgs)
         except Exception:
             pass
-        self.setWindowTitle("Manga OCR & Typeset Tool v14.7.0")
+        self.setWindowTitle("Manga OCR & Typeset Tool v14.8.0")
         self.image_files = []
         self.current_image_path = None
         self.current_image_pil = None
@@ -379,6 +379,10 @@ class MangaOCRApp(QMainWindow):
         self.detected_panels = []
         self.selected_typeset_area = None
         self.redo_stack = []
+        # --- Feature #1: Snapshot-based Undo/Redo History ---
+        self._undo_history = []       # list of {'label': str, 'snapshot': [payload_dict]}
+        self._undo_history_idx = -1   # index state aktif (-1 = kosong)
+        self._MAX_UNDO_HISTORY = 50
         self.history_entries = []
         self.proofreader_entries = []
         self.quality_entries = []
@@ -835,11 +839,15 @@ class MangaOCRApp(QMainWindow):
         settings_center_action.triggered.connect(self.open_settings_dialog)
         settings_menu.addAction(settings_center_action)
         help_menu = menu_bar.addMenu('&Help / Usage')
-        about_action = QAction('About & API Usage', self); about_action.triggered.connect(self.show_about_dialog); help_menu.addAction(about_action)
+        about_action = QAction('📖 Help & Usage...', self)
+        about_action.triggered.connect(self.show_unified_help_dialog)
+        help_menu.addAction(about_action)
 
+        # Legacy individual dialogs (tersembunyi, bisa dipakai dari kode)
         project_stats_action = QAction('Project Statistics...', self)
         project_stats_action.triggered.connect(self.show_project_stats_dialog)
-        help_menu.addAction(project_stats_action)
+        session_analytics_action = QAction('Session Analytics...', self)
+        session_analytics_action.triggered.connect(self.show_session_analytics_dialog)
 
 
     def open_settings_dialog(self, focus_tab: str = 'general'):
@@ -1272,6 +1280,59 @@ class MangaOCRApp(QMainWindow):
         self.save_button.clicked.connect(self.save_image)
         edit_row.addWidget(self.save_button)
         bottom_v.addLayout(edit_row)
+
+        # ── Undo History Timeline (Feature #1) ──────────────────────────────────
+        timeline_header = QHBoxLayout()
+        timeline_header.setContentsMargins(2, 4, 2, 0)
+        timeline_header.setSpacing(4)
+        timeline_title_lbl = QLabel("🕐 History")
+        timeline_title_lbl.setObjectName("rp-tiny-label")
+        timeline_header.addWidget(timeline_title_lbl)
+        timeline_header.addStretch(1)
+        self._timeline_clear_btn = QPushButton("✕")
+        self._timeline_clear_btn.setObjectName("rp-action-btn")
+        self._timeline_clear_btn.setFixedSize(18, 18)
+        self._timeline_clear_btn.setToolTip("Clear undo history")
+        self._timeline_clear_btn.clicked.connect(self._clear_undo_history)
+        timeline_header.addWidget(self._timeline_clear_btn)
+        bottom_v.addLayout(timeline_header)
+
+        self.undo_timeline_list = QListWidget()
+        self.undo_timeline_list.setObjectName("undo-timeline")
+        self.undo_timeline_list.setFixedHeight(110)
+        self.undo_timeline_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.undo_timeline_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.undo_timeline_list.setStyleSheet("""
+            QListWidget#undo-timeline {
+                background-color: #060810;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                font-size: 8pt;
+                color: #94a3b8;
+                outline: none;
+            }
+            QListWidget#undo-timeline::item {
+                padding: 2px 6px;
+                border-radius: 3px;
+            }
+            QListWidget#undo-timeline::item:selected {
+                background-color: #1e3a5f;
+                color: #38bdf8;
+            }
+            QListWidget#undo-timeline::item:hover {
+                background-color: #0f172a;
+            }
+            QScrollBar:vertical {
+                background: #0e111a;
+                width: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #334155;
+                border-radius: 3px;
+            }
+        """)
+        self.undo_timeline_list.itemClicked.connect(self._on_timeline_item_clicked)
+        bottom_v.addWidget(self.undo_timeline_list)
 
         # ── Status metrics (compact 2-row grid) ─────────────────────────────────
         metrics_widget = QWidget()
@@ -2235,6 +2296,7 @@ class MangaOCRApp(QMainWindow):
         font = self._build_current_font()
         color = self.typeset_color if hasattr(self, 'typeset_color') and self.typeset_color else QColor("#000000")
         new_area = TypesetArea(rect, "SFX Text", font, color)
+        self._push_undo_snapshot("New Layer")
         self.typeset_areas.append(new_area)
         self.set_selected_area(new_area)
         self.redraw_all_typeset_areas()
@@ -2247,6 +2309,7 @@ class MangaOCRApp(QMainWindow):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
+            self._push_undo_snapshot("Clear All Areas")
             self.typeset_areas.clear()
             self.clear_selected_area()
             self.redraw_all_typeset_areas()
@@ -6361,6 +6424,10 @@ class MangaOCRApp(QMainWindow):
             image_record.setdefault('redo', []).clear()
 
         if image_key == self.get_current_data_key():
+            # Push snapshot SEBELUM perubahan teks terjemahan
+            if translated_text is not None:
+                snippet = translated_text[:20] + ('…' if len(translated_text) > 20 else '')
+                self._push_undo_snapshot(f"Translate: {snippet}")
             self.redo_stack.clear()
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
@@ -7135,7 +7202,7 @@ class MangaOCRApp(QMainWindow):
         self.save_project(is_auto=True)
         if status_message is None:
             status_message = "New project created and auto-saved."
-        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.7.0 - {os.path.basename(self.current_project_path)}")
+        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.8.0 - {os.path.basename(self.current_project_path)}")
         self.statusBar().showMessage(status_message, 4000)
         # Sembunyikan welcome screen, tampilkan canvas
         self.hide_welcome_screen()
@@ -7284,8 +7351,12 @@ class MangaOCRApp(QMainWindow):
             self.set_selected_area(None, notify=True)
 
             self.rebuild_history_for_image(key, self.typeset_areas)
+            # Reset undo timeline saat ganti halaman (Feature #1)
+            self._undo_history.clear()
+            self._undo_history_idx = -1
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
+            self._refresh_undo_timeline()
             self._refresh_detection_overlay()
             self.refresh_history_views()
         except Exception as e:
@@ -7922,6 +7993,8 @@ class MangaOCRApp(QMainWindow):
     def _on_recent_translation_clicked(self, item):
         text = item.data(Qt.UserRole)
         if text and self.selected_typeset_area:
+            snippet = text[:20] + ('…' if len(text) > 20 else '')
+            self._push_undo_snapshot(f"Apply Recent: {snippet}")
             self.selected_typeset_area.text = text
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
@@ -8556,6 +8629,9 @@ class MangaOCRApp(QMainWindow):
         )
 
         current_key = self.get_current_data_key()
+        # Push snapshot SEBELUM tambah area (agar bisa di-undo)
+        snippet = manual_text[:20] + ('…' if len(manual_text) > 20 else '') if manual_text else ''
+        self._push_undo_snapshot(f"Add Manual: {snippet}" if snippet else "Add Manual Area")
         self.typeset_areas.append(manual_area)
         self.set_selected_area(manual_area, notify=True)
         self.redo_stack.clear()
@@ -10186,6 +10262,11 @@ class MangaOCRApp(QMainWindow):
 
     def delete_typeset_area(self, area_to_delete):
         if area_to_delete in self.typeset_areas:
+            # Push snapshot SEBELUM hapus agar bisa di-undo
+            area_text = getattr(area_to_delete, 'text', '') or ''
+            snippet = area_text[:20] + ('…' if len(area_text) > 20 else '')
+            self._push_undo_snapshot(f"Delete: {snippet}" if snippet else "Delete Area")
+
             # Sync to Deleted History Scene
             history_id = getattr(area_to_delete, 'history_id', None)
             if history_id:
@@ -10200,21 +10281,171 @@ class MangaOCRApp(QMainWindow):
             self.update_undo_redo_buttons_state()
 
     def undo_last_action(self):
-        if self.typeset_areas:
-            undone_area = self.typeset_areas.pop(); self.redo_stack.append(undone_area)
-            if self.selected_typeset_area is undone_area:
-                self.clear_selected_area()
-            self.redraw_all_typeset_areas(); self.update_undo_redo_buttons_state(); self.image_label.clear_selection()
+        """Navigasi mundur satu langkah di undo history timeline."""
+        if self._undo_history_idx > 0:
+            self._restore_snapshot(self._undo_history_idx - 1)
+        elif self._undo_history_idx == 0:
+            # Kembali ke state kosong (sebelum snapshot pertama)
+            self._undo_history_idx = -1
+            self.typeset_areas.clear()
+            self.clear_selected_area()
+            self.redraw_all_typeset_areas()
+            self.update_undo_redo_buttons_state()
+            self._refresh_undo_timeline()
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_selection()
+        else:
+            # Fallback legacy: pop satu area
+            if self.typeset_areas:
+                undone_area = self.typeset_areas.pop()
+                self.redo_stack.append(undone_area)
+                if self.selected_typeset_area is undone_area:
+                    self.clear_selected_area()
+                self.redraw_all_typeset_areas()
+                self.update_undo_redo_buttons_state()
+                if hasattr(self, 'image_label'):
+                    self.image_label.clear_selection()
 
     def redo_last_action(self):
-        if self.redo_stack:
-            redone_area = self.redo_stack.pop(); self.typeset_areas.append(redone_area)
-            self.set_selected_area(redone_area)
-            self.redraw_all_typeset_areas(); self.update_undo_redo_buttons_state(); self.image_label.clear_selection()
+        """Navigasi maju satu langkah di undo history timeline."""
+        if self._undo_history and self._undo_history_idx < len(self._undo_history) - 1:
+            self._restore_snapshot(self._undo_history_idx + 1)
+        else:
+            # Fallback legacy redo
+            if self.redo_stack:
+                redone_area = self.redo_stack.pop()
+                self.typeset_areas.append(redone_area)
+                self.set_selected_area(redone_area)
+                self.redraw_all_typeset_areas()
+                self.update_undo_redo_buttons_state()
+                if hasattr(self, 'image_label'):
+                    self.image_label.clear_selection()
 
     def update_undo_redo_buttons_state(self):
-        self.undo_button.setEnabled(len(self.typeset_areas) > 0)
-        self.redo_button.setEnabled(len(self.redo_stack) > 0)
+        """Update enabled state tombol Undo dan Redo berdasarkan snapshot history."""
+        can_undo = self._undo_history_idx >= 0
+        can_redo = bool(self._undo_history) and self._undo_history_idx < len(self._undo_history) - 1
+        self.undo_button.setEnabled(can_undo)
+        self.redo_button.setEnabled(can_redo)
+
+    # ── Feature #1: Snapshot History Methods ────────────────────────────────────
+
+    def _push_undo_snapshot(self, label="Action"):
+        """
+        Ambil snapshot deep-copy dari typeset_areas sebelum perubahan.
+        Push ke _undo_history dan potong redo branch.
+        """
+        import copy as _copy
+        try:
+            snapshot = []
+            for area in self.typeset_areas:
+                if hasattr(area, 'to_payload'):
+                    snapshot.append(area.to_payload())
+                else:
+                    snapshot.append(_copy.deepcopy(area))
+
+            # Potong redo branch (state setelah posisi aktif)
+            if self._undo_history_idx < len(self._undo_history) - 1:
+                self._undo_history = self._undo_history[:self._undo_history_idx + 1]
+
+            self._undo_history.append({'label': label, 'snapshot': snapshot})
+
+            # Cap ke max history
+            if len(self._undo_history) > self._MAX_UNDO_HISTORY:
+                self._undo_history = self._undo_history[-self._MAX_UNDO_HISTORY:]
+
+            self._undo_history_idx = len(self._undo_history) - 1
+            self._refresh_undo_timeline()
+        except Exception as e:
+            print(f"[UndoTimeline] Push snapshot failed: {e}")
+
+    def _restore_snapshot(self, idx):
+        """Restore typeset_areas dari snapshot ke-idx di _undo_history."""
+        try:
+            from src.ui.canvas import TypesetArea
+            if idx < 0 or idx >= len(self._undo_history):
+                return
+            entry = self._undo_history[idx]
+            self._undo_history_idx = idx
+
+            payloads = entry['snapshot']
+            self.typeset_areas.clear()
+            for payload in payloads:
+                if isinstance(payload, dict):
+                    try:
+                        area = TypesetArea.from_payload(payload)
+                        self.typeset_areas.append(area)
+                    except Exception as e:
+                        print(f"[UndoTimeline] Restore area failed: {e}")
+
+            self.clear_selected_area()
+            self.redraw_all_typeset_areas()
+            self.update_undo_redo_buttons_state()
+            self._refresh_undo_timeline()
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_selection()
+            self._refresh_layers_list()
+        except Exception as e:
+            print(f"[UndoTimeline] Restore snapshot failed: {e}")
+
+    def _refresh_undo_timeline(self):
+        """Perbarui QListWidget timeline dengan seluruh undo history."""
+        if not hasattr(self, 'undo_timeline_list'):
+            return
+        lst = self.undo_timeline_list
+        lst.blockSignals(True)
+        lst.clear()
+
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtWidgets import QListWidgetItem
+
+        if not self._undo_history:
+            empty_item = QListWidgetItem("  (kosong)")
+            empty_item.setForeground(QColor('#334155'))
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsSelectable)
+            lst.addItem(empty_item)
+            lst.blockSignals(False)
+            return
+
+        for i, entry in enumerate(self._undo_history):
+            is_current = (i == self._undo_history_idx)
+            is_redo    = (i > self._undo_history_idx)
+
+            if is_current:
+                prefix = "▶"
+                color  = '#38bdf8'   # biru terang = state aktif
+            elif is_redo:
+                prefix = "◁"
+                color  = '#475569'   # dim = state yang bisa di-redo
+            else:
+                prefix = "·"
+                color  = '#64748b'   # lebih muda = masa lalu
+
+            item = QListWidgetItem(f"  {prefix}  {i + 1}. {entry['label']}")
+            item.setData(Qt.UserRole, i)
+            item.setForeground(QColor(color))
+            lst.addItem(item)
+
+        # Scroll ke item aktif
+        if 0 <= self._undo_history_idx < lst.count():
+            lst.scrollToItem(lst.item(self._undo_history_idx))
+            lst.setCurrentRow(self._undo_history_idx)
+
+        lst.blockSignals(False)
+
+    def _on_timeline_item_clicked(self, item):
+        """Handler saat user klik item di undo timeline — jump ke snapshot tersebut."""
+        idx = item.data(Qt.UserRole)
+        if idx is None:
+            return
+        self._restore_snapshot(int(idx))
+
+    def _clear_undo_history(self):
+        """Bersihkan seluruh undo history timeline."""
+        self._undo_history.clear()
+        self._undo_history_idx = -1
+        self._refresh_undo_timeline()
+        self.update_undo_redo_buttons_state()
 
     def _snapshot_current_image_state(self):
         if not self.current_image_path:
@@ -10681,7 +10912,7 @@ class MangaOCRApp(QMainWindow):
 
             # Update judul window
             self.setWindowTitle(
-                f"Manga OCR & Typeset Tool v14.7.0 - {os.path.basename(self.current_project_path)}"
+                f"Manga OCR & Typeset Tool v14.8.0 - {os.path.basename(self.current_project_path)}"
             )
 
             # Start autosave only if user enabled it
@@ -10986,7 +11217,7 @@ class MangaOCRApp(QMainWindow):
         """)
         vbox.addWidget(header_lbl)
 
-        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.7.0")
+        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.8.0")
         sub_lbl.setAlignment(Qt.AlignCenter)
         sub_lbl.setTextFormat(Qt.RichText)
         sub_lbl.setStyleSheet("""
@@ -11474,7 +11705,7 @@ class MangaOCRApp(QMainWindow):
         self.load_usage_data()
         provider, model_name = self.get_selected_model_name()
         if not model_name: return
-        about_text = (f"<b>Manga OCR & Typeset Tool v14.7.0</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
+        about_text = (f"<b>Manga OCR & Typeset Tool v14.8.0</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
         QMessageBox.about(self, "About & API Usage", about_text)
 
     def show_project_stats_dialog(self):
@@ -11593,6 +11824,66 @@ class MangaOCRApp(QMainWindow):
         outer.addLayout(btn_row)
 
         dlg.exec_()
+
+    def show_session_analytics_dialog(self):
+        """Tampilkan dialog Session Analytics & Export (Feature #16) — legacy."""
+        self.show_unified_help_dialog(start_tab=2)
+
+    def show_unified_help_dialog(self, start_tab: int = 0):
+        """
+        Buka UnifiedHelpDialog — gabungan About, Project Stats,
+        Pricing Editor, dan Session Analytics dalam satu dialog tabbed.
+        """
+        from src.ui.unified_help_dialog import UnifiedHelpDialog
+
+        total_input  = getattr(self, 'total_input_tokens',  0)
+        total_output = getattr(self, 'total_output_tokens', 0)
+        count        = getattr(self, 'translated_count', 0)
+
+        dlg = UnifiedHelpDialog(
+            parent               = self,
+            app_version          = "14.8.0",
+            ai_providers         = self.AI_PROVIDERS,
+            openrouter_pricing_db= getattr(self, 'openrouter_pricing_db', {}),
+            usage_data           = self.usage_data,
+            total_cost           = self.total_cost,
+            usd_to_idr_rate      = self.usd_to_idr_rate,
+            total_input_tokens   = total_input,
+            total_output_tokens  = total_output,
+            translated_count     = count,
+            project_dir          = self.project_dir,
+            image_files          = self.image_files,
+            all_typeset_data     = self.all_typeset_data,
+            on_pricing_saved     = self._on_unified_pricing_saved,
+        )
+        dlg.tabs.setCurrentIndex(start_tab)
+        dlg.exec_()
+
+    def _on_unified_pricing_saved(self, updated_providers: dict, updated_openrouter_db: dict):
+        """
+        Callback dari UnifiedHelpDialog saat user menyimpan perubahan harga.
+        Update AI_PROVIDERS dan openrouter_pricing_db agar add_api_cost pakai harga baru.
+        """
+        # Update pricing per model di AI_PROVIDERS
+        for provider, models in updated_providers.items():
+            if provider not in self.AI_PROVIDERS:
+                self.AI_PROVIDERS[provider] = {}
+            for model_id, info in models.items():
+                if model_id in self.AI_PROVIDERS[provider]:
+                    self.AI_PROVIDERS[provider][model_id]['pricing'] = info.get('pricing', {})
+                else:
+                    self.AI_PROVIDERS[provider][model_id] = info
+
+        # Update openrouter_pricing_db
+        for model_id, info in updated_openrouter_db.items():
+            if not hasattr(self, 'openrouter_pricing_db'):
+                self.openrouter_pricing_db = {}
+            if model_id in self.openrouter_pricing_db:
+                self.openrouter_pricing_db[model_id]['pricing'] = info.get('pricing', {})
+            else:
+                self.openrouter_pricing_db[model_id] = info
+
+        self.statusBar().showMessage("✅ Harga model berhasil diperbarui dari Pricing Editor.", 4000)
 
     def open_find_replace_dialog(self):
         """Membuka dialog Find and Replace teks terjemahan global."""

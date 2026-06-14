@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.7.0
+# Manga OCR & Typeset Tool v14.8.0
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================

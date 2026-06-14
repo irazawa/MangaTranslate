@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.7.0
+# Manga OCR & Typeset Tool v14.8.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -3917,5 +3917,440 @@ class ImageCurvesDialog(QDialog):
         # Trigger parent applying curves to full size image
         if self.parent:
             self.parent.apply_curves_lut(self.curves_widget.lut, self.curves_widget.get_curves_points())
+        self.accept()
+
+
+# ============================================================
+# Feature #16 — Session Analytics & Export Dialog
+# ============================================================
+class SessionAnalyticsDialog(QDialog):
+    """
+    Dialog analitik sesi: menampilkan API usage per provider/model
+    sebagai grafik bar sederhana, estimasi biaya akumulasi,
+    rate limit status (progress bar), dan fitur export ke CSV.
+    """
+
+    # Warna per provider (konsisten dengan dark theme app)
+    PROVIDER_COLORS = {
+        'Gemini':     '#4ade80',   # hijau
+        'OpenAI':     '#60a5fa',   # biru
+        'OpenRouter': '#f472b6',   # merah muda
+    }
+    PROVIDER_DEFAULT_COLOR = '#94a3b8'
+
+    def __init__(self, parent=None, usage_data=None, ai_providers=None,
+                 total_cost=0.0, usd_to_idr_rate=16200.0, total_input_tokens=0,
+                 total_output_tokens=0):
+        super().__init__(parent)
+        self.usage_data      = usage_data      or {}
+        self.ai_providers    = ai_providers    or {}
+        self.total_cost      = total_cost
+        self.usd_to_idr_rate = usd_to_idr_rate
+        self.total_input_tokens  = total_input_tokens
+        self.total_output_tokens = total_output_tokens
+
+        self.setWindowTitle("📈 Session Analytics & Export")
+        self.setModal(True)
+        self.resize(700, 580)
+        self._apply_style()
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    # Stylesheet
+    # ------------------------------------------------------------------
+    def _apply_style(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #090a0f;
+                color: #cbd5e1;
+                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            }
+            QLabel { color: #cbd5e1; }
+            QScrollArea { border: none; background: transparent; }
+            QWidget#inner_widget { background: transparent; }
+            QFrame#separator {
+                background-color: #1e293b;
+                max-height: 1px;
+                border: none;
+            }
+            QFrame#card {
+                background-color: #0e111a;
+                border: 1px solid #1e293b;
+                border-radius: 8px;
+            }
+            QProgressBar {
+                background-color: #1e293b;
+                border: none;
+                border-radius: 4px;
+                height: 10px;
+                text-align: right;
+            }
+            QProgressBar::chunk { border-radius: 4px; }
+            QPushButton {
+                background-color: #1e293b;
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 9pt;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                color: #f1f5f9;
+                border-color: #38bdf8;
+            }
+            QPushButton#export_btn {
+                background-color: #0ea5e9;
+                color: #f8fafc;
+                border: none;
+                font-weight: bold;
+            }
+            QPushButton#export_btn:hover { background-color: #38bdf8; color: #0f172a; }
+            QPushButton#reset_btn {
+                background-color: #7f1d1d;
+                color: #fca5a5;
+                border: 1px solid #b91c1c;
+            }
+            QPushButton#reset_btn:hover { background-color: #b91c1c; color: #fff; }
+        """)
+
+    # ------------------------------------------------------------------
+    # UI Builder
+    # ------------------------------------------------------------------
+    def _build_ui(self):
+        from PyQt5.QtWidgets import QProgressBar as _QProgressBar, QScrollArea, QSizePolicy
+        from PyQt5.QtCore import Qt
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Header ──────────────────────────────────────────────────────
+        header = QWidget()
+        header.setStyleSheet("background-color: #0e111a; border-bottom: 1px solid #1e293b;")
+        hdr_layout = QHBoxLayout(header)
+        hdr_layout.setContentsMargins(20, 14, 20, 14)
+
+        title_lbl = QLabel("📈  Session Analytics")
+        title_lbl.setStyleSheet("font-size: 14pt; font-weight: bold; color: #38bdf8;")
+        hdr_layout.addWidget(title_lbl)
+        hdr_layout.addStretch(1)
+
+        # Tombol export & reset di header
+        export_btn = QPushButton("⬇  Export CSV")
+        export_btn.setObjectName("export_btn")
+        export_btn.setFixedHeight(32)
+        export_btn.clicked.connect(self._export_csv)
+        hdr_layout.addWidget(export_btn)
+
+        reset_btn = QPushButton("🗑  Reset")
+        reset_btn.setObjectName("reset_btn")
+        reset_btn.setFixedHeight(32)
+        reset_btn.clicked.connect(self._reset_usage)
+        hdr_layout.addWidget(reset_btn)
+
+        outer.addWidget(header)
+
+        # ── Scroll area ─────────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        inner.setObjectName("inner_widget")
+        self._vbox = QVBoxLayout(inner)
+        self._vbox.setContentsMargins(20, 16, 20, 20)
+        self._vbox.setSpacing(16)
+
+        self._populate_content()
+
+        self._vbox.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        # ── Footer ──────────────────────────────────────────────────────
+        footer = QWidget()
+        footer.setStyleSheet("background-color: #0e111a; border-top: 1px solid #1e293b;")
+        ftr_layout = QHBoxLayout(footer)
+        ftr_layout.setContentsMargins(20, 10, 20, 10)
+        ftr_layout.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.setFixedWidth(90)
+        close_btn.clicked.connect(self.accept)
+        ftr_layout.addWidget(close_btn)
+        outer.addWidget(footer)
+
+    # ------------------------------------------------------------------
+    # Content population
+    # ------------------------------------------------------------------
+    def _section_label(self, text):
+        """Buat label section header dengan separator."""
+        lbl = QLabel(f"<b style='color:#38bdf8; font-size:10pt;'>{text}</b>")
+        lbl.setTextFormat(Qt.RichText)
+        self._vbox.addWidget(lbl)
+        sep = QFrame()
+        sep.setObjectName("separator")
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #1e293b;")
+        self._vbox.addWidget(sep)
+
+    def _make_card(self):
+        """Buat QFrame 'card' dengan shadow styling."""
+        card = QFrame()
+        card.setObjectName("card")
+        return card
+
+    def _populate_content(self):
+        from PyQt5.QtWidgets import QProgressBar as _QProgressBar
+
+        provider_usage = self.usage_data.get('provider_usage', {})
+
+        # ── 1. Ringkasan biaya ──────────────────────────────────────────
+        self._section_label("💰 Cost Summary")
+        cost_card = self._make_card()
+        cc_layout = QGridLayout(cost_card)
+        cc_layout.setContentsMargins(16, 12, 16, 12)
+        cc_layout.setVerticalSpacing(6)
+
+        cost_idr = self.total_cost * self.usd_to_idr_rate
+
+        def _stat(row, label, value, color="#f1f5f9"):
+            lbl_w = QLabel(f"<span style='color:#64748b;'>{label}</span>")
+            lbl_w.setTextFormat(Qt.RichText)
+            val_w = QLabel(f"<b style='color:{color};'>{value}</b>")
+            val_w.setTextFormat(Qt.RichText)
+            cc_layout.addWidget(lbl_w, row, 0)
+            cc_layout.addWidget(val_w, row, 1, Qt.AlignRight)
+
+        _stat(0, "Total Session Cost (USD)", f"${self.total_cost:.6f}", "#4ade80")
+        _stat(1, "Estimasi IDR", f"Rp {cost_idr:,.0f}", "#fbbf24")
+        _stat(2, "Total Input Tokens", f"{self.total_input_tokens:,}", "#94a3b8")
+        _stat(3, "Total Output Tokens", f"{self.total_output_tokens:,}", "#94a3b8")
+        _stat(4, "Data tanggal", self.usage_data.get('date', '-'), "#64748b")
+
+        self._vbox.addWidget(cost_card)
+
+        # ── 2. Usage per provider & model ────────────────────────────────
+        self._section_label("📊 API Usage per Model")
+
+        # Kumpulkan total daily_count global untuk menentukan skala bar
+        all_counts = []
+        for _p, models in provider_usage.items():
+            for _m, mdata in models.items():
+                all_counts.append(mdata.get('daily_count', 0))
+        global_max = max(all_counts) if all_counts else 1
+
+        for provider in sorted(provider_usage.keys()):
+            models = provider_usage[provider]
+            if not models:
+                continue
+
+            color = self.PROVIDER_COLORS.get(provider, self.PROVIDER_DEFAULT_COLOR)
+
+            # Header provider
+            prov_lbl = QLabel(
+                f"<b style='color:{color}; font-size:10pt;'>▶ {provider}</b>"
+            )
+            prov_lbl.setTextFormat(Qt.RichText)
+            self._vbox.addWidget(prov_lbl)
+
+            for model_name in sorted(models.keys()):
+                mdata    = models[model_name]
+                daily    = mdata.get('daily_count', 0)
+                rpm      = mdata.get('minute_count', 0)
+
+                # Cari limits di AI_PROVIDERS
+                model_info  = self.ai_providers.get(provider, {}).get(model_name, {})
+                limits      = model_info.get('limits', {'rpm': 300, 'rpd': 1000})
+                rpd_limit   = limits.get('rpd', 1000)
+                rpm_limit   = limits.get('rpm', 60)
+
+                # Display name
+                display = (model_info.get('display') or model_name)
+                if len(display) > 45:
+                    display = display[:42] + "…"
+
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(8, 4, 8, 4)
+                row_layout.setSpacing(10)
+
+                name_lbl = QLabel(f"<span style='color:#cbd5e1;'>{display}</span>")
+                name_lbl.setTextFormat(Qt.RichText)
+                name_lbl.setMinimumWidth(230)
+                name_lbl.setMaximumWidth(280)
+                row_layout.addWidget(name_lbl)
+
+                # Bar RPD
+                rpd_pct = int(min(daily / rpd_limit * 100, 100)) if rpd_limit > 0 else 0
+                rpd_bar = _QProgressBar()
+                rpd_bar.setRange(0, 100)
+                rpd_bar.setValue(rpd_pct)
+                rpd_bar.setFixedHeight(10)
+                rpd_bar.setTextVisible(False)
+                chunk_color = "#ef4444" if rpd_pct >= 90 else ("#f59e0b" if rpd_pct >= 60 else color)
+                rpd_bar.setStyleSheet(
+                    f"QProgressBar {{ background: #1e293b; border: none; border-radius: 4px; }}"
+                    f"QProgressBar::chunk {{ background: {chunk_color}; border-radius: 4px; }}"
+                )
+                row_layout.addWidget(rpd_bar, 1)
+
+                count_lbl = QLabel(
+                    f"<span style='color:#94a3b8; font-size:8pt;'>{daily}/{rpd_limit} (daily)</span>"
+                )
+                count_lbl.setTextFormat(Qt.RichText)
+                count_lbl.setMinimumWidth(110)
+                row_layout.addWidget(count_lbl)
+
+                self._vbox.addWidget(row_widget)
+
+        # ── 3. Rate Limit Status ─────────────────────────────────────────
+        self._section_label("⏱ Rate Limit Status (saat ini)")
+
+        has_any = False
+        for provider in sorted(provider_usage.keys()):
+            models = provider_usage[provider]
+            color  = self.PROVIDER_COLORS.get(provider, self.PROVIDER_DEFAULT_COLOR)
+            for model_name in sorted(models.keys()):
+                mdata  = models[model_name]
+                rpm    = mdata.get('minute_count', 0)
+                model_info = self.ai_providers.get(provider, {}).get(model_name, {})
+                limits     = model_info.get('limits', {'rpm': 300, 'rpd': 1000})
+                rpm_limit  = limits.get('rpm', 60)
+                daily      = mdata.get('daily_count', 0)
+                rpd_limit  = limits.get('rpd', 1000)
+
+                if rpm == 0 and daily == 0:
+                    continue   # sembunyikan model yang tidak pernah dipakai
+
+                has_any = True
+                display = model_info.get('display') or model_name
+                if len(display) > 45:
+                    display = display[:42] + "…"
+
+                status_icon = "🟢"
+                rpm_pct = int(min(rpm / rpm_limit * 100, 100)) if rpm_limit > 0 else 0
+                if rpm_pct >= 100:
+                    status_icon = "🔴"
+                elif rpm_pct >= 60:
+                    status_icon = "🟡"
+
+                row_w = QWidget()
+                rl = QHBoxLayout(row_w)
+                rl.setContentsMargins(8, 2, 8, 2)
+                rl.setSpacing(10)
+
+                icon_lbl = QLabel(status_icon)
+                icon_lbl.setFixedWidth(20)
+                rl.addWidget(icon_lbl)
+
+                nm_lbl = QLabel(f"<span style='color:#cbd5e1;'>{display}</span>")
+                nm_lbl.setTextFormat(Qt.RichText)
+                nm_lbl.setMinimumWidth(230)
+                nm_lbl.setMaximumWidth(280)
+                rl.addWidget(nm_lbl)
+
+                rpm_bar = _QProgressBar()
+                rpm_bar.setRange(0, 100)
+                rpm_bar.setValue(rpm_pct)
+                rpm_bar.setFixedHeight(8)
+                rpm_bar.setTextVisible(False)
+                chunk_c = "#ef4444" if rpm_pct >= 90 else ("#f59e0b" if rpm_pct >= 60 else color)
+                rpm_bar.setStyleSheet(
+                    f"QProgressBar {{ background: #1e293b; border: none; border-radius: 3px; }}"
+                    f"QProgressBar::chunk {{ background: {chunk_c}; border-radius: 3px; }}"
+                )
+                rl.addWidget(rpm_bar, 1)
+
+                rpm_lbl = QLabel(
+                    f"<span style='color:#94a3b8; font-size:8pt;'>{rpm}/{rpm_limit} rpm</span>"
+                )
+                rpm_lbl.setTextFormat(Qt.RichText)
+                rpm_lbl.setMinimumWidth(90)
+                rl.addWidget(rpm_lbl)
+
+                self._vbox.addWidget(row_w)
+
+        if not has_any:
+            no_lbl = QLabel("<i style='color:#475569;'>Belum ada model yang digunakan sesi ini.</i>")
+            no_lbl.setTextFormat(Qt.RichText)
+            self._vbox.addWidget(no_lbl)
+
+    # ------------------------------------------------------------------
+    # Export CSV
+    # ------------------------------------------------------------------
+    def _export_csv(self):
+        import csv
+        import os
+        from PyQt5.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Analytics CSV", "session_analytics.csv",
+            "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+
+        provider_usage = self.usage_data.get('provider_usage', {})
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # Header
+                writer.writerow([
+                    "Date", "Provider", "Model",
+                    "Daily Count", "RPD Limit", "RPD %",
+                    "Minute Count (last)", "RPM Limit"
+                ])
+                date_str = self.usage_data.get('date', '-')
+                for provider in sorted(provider_usage.keys()):
+                    for model_name in sorted(provider_usage[provider].keys()):
+                        mdata = provider_usage[provider][model_name]
+                        model_info = self.ai_providers.get(provider, {}).get(model_name, {})
+                        limits = model_info.get('limits', {'rpm': 300, 'rpd': 1000})
+                        daily = mdata.get('daily_count', 0)
+                        rpm   = mdata.get('minute_count', 0)
+                        rpd_limit = limits.get('rpd', 1000)
+                        rpm_limit = limits.get('rpm', 60)
+                        rpd_pct = round(daily / rpd_limit * 100, 2) if rpd_limit > 0 else 0
+                        writer.writerow([
+                            date_str, provider, model_name,
+                            daily, rpd_limit, f"{rpd_pct}%",
+                            rpm, rpm_limit
+                        ])
+
+                # Summary row
+                writer.writerow([])
+                writer.writerow(["Total Cost (USD)", f"${self.total_cost:.6f}"])
+                writer.writerow(["Estimasi IDR", f"Rp {self.total_cost * self.usd_to_idr_rate:,.0f}"])
+                writer.writerow(["Total Input Tokens", self.total_input_tokens])
+                writer.writerow(["Total Output Tokens", self.total_output_tokens])
+
+            QMessageBox.information(self, "Export Berhasil", f"Analytics berhasil disimpan ke:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Gagal", f"Gagal menyimpan CSV:\n{e}")
+
+    # ------------------------------------------------------------------
+    # Reset usage
+    # ------------------------------------------------------------------
+    def _reset_usage(self):
+        reply = QMessageBox.question(
+            self, "Reset Usage Data",
+            "Reset semua data usage (daily count, minute count) ke nol?\n"
+            "Total cost tidak akan direset.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        provider_usage = self.usage_data.get('provider_usage', {})
+        for provider in provider_usage:
+            for model_name in provider_usage[provider]:
+                provider_usage[provider][model_name]['daily_count'] = 0
+                provider_usage[provider][model_name]['minute_count'] = 0
+
+        # Beritahu parent untuk simpan
+        if self.parent() and hasattr(self.parent(), 'save_usage_data'):
+            self.parent().save_usage_data()
+
+        QMessageBox.information(self, "Reset Selesai", "Usage data berhasil direset.")
         self.accept()
 

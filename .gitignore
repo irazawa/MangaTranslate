@@ -41,3 +41,7 @@ Inpainting/
 code.md
 feature_ideas.md
 
+# Large model checkpoints
+src/models/
+
+
