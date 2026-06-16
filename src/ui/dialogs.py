@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.1
+﻿# Manga OCR & Typeset Tool v14.8.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -3925,29 +3925,49 @@ class MediaDependenciesInstallWorker(QThread):
             self.finished.emit(False, str(e))
 
 class PipInstallWorker(QThread):
-    progress = pyqtSignal(str) # Status message
-    finished = pyqtSignal(bool, str) # Success flag, message
-    
-    def __init__(self, package_name):
+    progress = pyqtSignal(str)        # streamed pip output lines
+    finished = pyqtSignal(bool, str)  # (success, message)
+
+    def __init__(self, commands):
+        """commands: list of pip-install arg-lists run sequentially.
+        Each inner list is appended to [sys.executable, -m, pip, install].
+        A bare list-of-strings is treated as a single command (legacy).
+        """
         super().__init__()
-        self.package_name = package_name
-        
+        if commands and isinstance(commands[0], str):
+            commands = [commands]
+        self.commands = commands
+
     def run(self):
         try:
-            self.progress.emit(f"Running pip install {self.package_name}...")
-            cmd = [sys.executable, "-m", "pip", "install", self.package_name]
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = proc.communicate()
-            
-            if proc.returncode == 0:
-                importlib.invalidate_caches()
-                try:
-                    importlib.import_module(self.package_name.replace("-", "_"))
-                    self.finished.emit(True, f"Successfully installed {self.package_name}")
-                except Exception as e:
-                    self.finished.emit(False, f"Package installed but failed to import: {e}")
-            else:
-                self.finished.emit(False, f"Pip exit code {proc.returncode}. Error: {stderr.decode(errors='ignore')}")
+            for args in self.commands:
+                label = " ".join(a for a in args if not a.startswith("-"))[:60]
+                self.progress.emit(f"[pip] Installing: {label}...")
+                cmd = [sys.executable, "-m", "pip", "install"] + args
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                )
+                last_line = ""
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        self.progress.emit(line)
+                        last_line = line
+                proc.wait()
+                if proc.returncode != 0:
+                    self.finished.emit(
+                        False,
+                        f"pip failed for [{label}] (exit {proc.returncode}).\n"
+                        f"Last output: {last_line}",
+                    )
+                    return
+            importlib.invalidate_caches()
+            # NOTE: Do NOT import torch-based packages here.
+            # PyTorch DLL (c10.dll) must be initialised on the main thread.
+            self.finished.emit(True, "All packages installed successfully.")
         except Exception as e:
             self.finished.emit(False, str(e))
 

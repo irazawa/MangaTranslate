@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.1
+﻿# Manga OCR & Typeset Tool v14.8.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -506,6 +506,15 @@ def check_manga_ocr(force=False):
 
 def get_manga_ocr_import_error():
     return _MANGA_OCR_IMPORT_ERROR
+
+def is_manga_ocr_installed():
+    """Return True if the manga_ocr package is present on disk (without importing it).
+
+    Uses importlib.util.find_spec so it never triggers DLL initialisation.
+    Useful to distinguish "not installed" from "installed but DLL failed to load".
+    """
+    import importlib.util
+    return importlib.util.find_spec("manga_ocr") is not None
 
 # --- Konfigurasi Tesseract ---
 IS_TESSERACT_AVAILABLE = False

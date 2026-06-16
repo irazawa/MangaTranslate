@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.1
+﻿# Manga OCR & Typeset Tool v14.8.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -5050,18 +5050,44 @@ class MangaOCRApp(QMainWindow):
         
         try:
             if engine == 'Manga-OCR':
-                from src.core.config import check_manga_ocr
+                from src.core.config import check_manga_ocr, is_manga_ocr_installed
                 if not check_manga_ocr():
                     if not getattr(self, '_is_initializing_core_engines', False):
-                        reply = QMessageBox.question(
-                            self,
-                            "Manga-OCR Not Installed",
-                            "Manga-OCR (offline/local engine) is not installed.\n"
-                            "Would you like to auto-install it now in the background?",
-                            QMessageBox.Yes | QMessageBox.No
-                        )
-                        if reply == QMessageBox.Yes:
-                            self.run_manga_ocr_installer()
+                        if is_manga_ocr_installed():
+                            # Package is on disk but PyTorch DLL failed to load.
+                            # This usually means torch was installed with CUDA support
+                            # but the required CUDA DLLs are missing on this machine.
+                            # Offer to reinstall using the CPU-only wheel.
+                            from src.core.config import get_manga_ocr_import_error
+                            err_detail = get_manga_ocr_import_error() or "Unknown error"
+                            msg = QMessageBox(self)
+                            msg.setWindowTitle("Manga-OCR Load Failed")
+                            msg.setIcon(QMessageBox.Warning)
+                            msg.setText(
+                                "Manga-OCR is installed but PyTorch failed to load its DLLs.\n"
+                                "This usually means the installed PyTorch requires CUDA, "
+                                "but CUDA is not available on this machine.\n\n"
+                                f"Error: {err_detail[:200]}"
+                            )
+                            msg.setInformativeText(
+                                "Would you like to reinstall Manga-OCR with CPU-only PyTorch? "
+                                "(Recommended for most users)"
+                            )
+                            btn_reinstall = msg.addButton("Reinstall (CPU-only)", QMessageBox.AcceptRole)
+                            msg.addButton("Cancel", QMessageBox.RejectRole)
+                            msg.exec_()
+                            if msg.clickedButton() == btn_reinstall:
+                                self.run_manga_ocr_installer(cpu_only=True)
+                        else:
+                            reply = QMessageBox.question(
+                                self,
+                                "Manga-OCR Not Installed",
+                                "Manga-OCR (offline/local engine) is not installed.\n"
+                                "Would you like to auto-install it now in the background?",
+                                QMessageBox.Yes | QMessageBox.No
+                            )
+                            if reply == QMessageBox.Yes:
+                                self.run_manga_ocr_installer()
                     return
                 else:
                     if self.manga_ocr_reader is None:
@@ -5123,16 +5149,34 @@ class MangaOCRApp(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
-    def run_manga_ocr_installer(self):
-        progress_dlg = QProgressDialog("Installing manga-ocr and its dependencies (PyTorch etc.)... This may take a few minutes.", "Cancel", 0, 0, self)
+    def run_manga_ocr_installer(self, cpu_only=False):
+        label = (
+            "Reinstalling Manga-OCR with CPU-only PyTorch... This may take several minutes."
+            if cpu_only else
+            "Installing manga-ocr and its dependencies (PyTorch etc.)... This may take a few minutes."
+        )
+        progress_dlg = QProgressDialog(label, "Cancel", 0, 0, self)
         progress_dlg.setWindowModality(Qt.WindowModal)
-        progress_dlg.setWindowTitle("Installing Manga-OCR")
+        progress_dlg.setWindowTitle("Reinstalling Manga-OCR (CPU)" if cpu_only else "Installing Manga-OCR")
         # Apply premium dark theme styling
         progress_dlg.setStyleSheet("QProgressDialog { background-color: #090a0f; color: #cbd5e1; } QLabel { color: #cbd5e1; } QPushButton { background-color: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background-color: #334155; border-color: #38bdf8; }")
         progress_dlg.show()
 
         from src.ui.dialogs import PipInstallWorker
-        worker = PipInstallWorker("manga-ocr")
+        if cpu_only:
+            # Step 1: replace torch/torchvision with CPU-only builds.
+            # Step 2: install manga-ocr from PyPI (torch already pinned to CPU).
+            # Using --index-url in step 1 replaces PyPI so manga-ocr must be a
+            # separate command that still uses the normal PyPI index.
+            commands = [
+                ["torch", "torchvision",
+                 "--force-reinstall",
+                 "--index-url", "https://download.pytorch.org/whl/cpu"],
+                ["manga-ocr"],
+            ]
+        else:
+            commands = [["manga-ocr"]]
+        worker = PipInstallWorker(commands)
 
         def on_progress(status):
             progress_dlg.setLabelText(status)
@@ -5140,16 +5184,16 @@ class MangaOCRApp(QMainWindow):
         def on_finished(success, message):
             progress_dlg.close()
             if success:
-                QMessageBox.information(self, "Success", "Manga-OCR has been successfully installed!")
-                from src.core.config import check_manga_ocr
-                if check_manga_ocr(force=True):
-                    try:
-                        from manga_ocr import MangaOcr as MO
-                        self.manga_ocr_reader = MO()
-                        self.statusBar().showMessage("Manga-OCR initialized.", 3000)
-                    except Exception as e:
-                        QMessageBox.critical(self, "Error", f"Failed to load Manga-OCR after installation: {e}")
+                # manga_ocr was installed successfully by pip.
+                # However, PyTorch DLL (c10.dll) cannot be loaded from a session that
+                # already failed to import it at startup — a restart is required.
                 self.populate_ocr_languages()
+                QMessageBox.information(
+                    self,
+                    "Installation Complete",
+                    "Manga-OCR has been successfully installed!\n\n"
+                    "Please restart the application to activate Manga-OCR.",
+                )
             else:
                 QMessageBox.critical(self, "Error", f"Failed to install Manga-OCR: {message}")
 
