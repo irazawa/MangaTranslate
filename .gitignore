@@ -35,6 +35,7 @@ src/ui/temp/
 
 # Large binary tools and executables
 *.exe
+!MangaTranslate.exe
 *.msi
 *.zip
 *.7z
