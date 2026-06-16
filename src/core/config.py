@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.0
+# Manga OCR & Typeset Tool v14.8.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -21,6 +21,7 @@ from PyQt5.QtCore import Qt
 
 from src.utils.helpers import check_dependency, ensure_dependencies
 from src.utils.crypto import encrypt_settings_keys, decrypt_settings_keys
+from src.core.app_info import APP_VERSION
 
 def get_effective_orientation(settings: dict, ocr_lang: str = ''):
     # SETTINGS may contain a 'lang_orientation' mapping like {'en': 'Horizontal', 'ja': 'Auto-Detect'}
@@ -43,7 +44,7 @@ YOLO = None
 try:
     from ultralytics import YOLO as YOLO_cls
     YOLO = YOLO_cls
-except ImportError:
+except Exception as exc:
     pass
 
 # --- Engine OCR ---
@@ -53,7 +54,7 @@ RapidOCR = None
 try:
     from rapidocr_onnxruntime import RapidOCR as RapidOCR_cls
     RapidOCR = RapidOCR_cls
-except ImportError:
+except Exception as exc:
     pass
 
 # --- [BARU] Engine Inpainting ---
@@ -360,11 +361,8 @@ def refresh_api_clients():
         if GEMINI_API_KEY:
             try:
                 genai.configure(api_key=GEMINI_API_KEY)
-                print("Gemini configured with active key.", file=sys.stderr)
             except Exception as e:
                 print(f"Gagal mengkonfigurasi Gemini API: {e}", file=sys.stderr)
-        else:
-            print("Gemini: no active key", file=sys.stderr)
     except Exception:
         pass
 
@@ -374,11 +372,8 @@ def refresh_api_clients():
         if openai and OPENAI_API_KEY:
             try:
                 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                print("OpenAI client created.", file=sys.stderr)
             except Exception as e:
                 print(f"Gagal mengkonfigurasi OpenAI API: {e}", file=sys.stderr)
-        else:
-            print("OpenAI: no active key or library missing", file=sys.stderr)
     except Exception:
         pass
 
@@ -482,22 +477,35 @@ MOUSE_BUTTON_NAME_MAP = {
 }
 
 # --- Konfigurasi Manga-OCR ---
+_MANGA_OCR_IMPORT_ERROR = None
+_MANGA_OCR_IMPORT_CHECKED = False
 try:
     from manga_ocr import MangaOcr
-except ImportError:
+    _MANGA_OCR_IMPORT_CHECKED = True
+except Exception as exc:
     MangaOcr = None
-    print("Peringatan: Pustaka 'manga-ocr' tidak ditemukan. Engine Manga-OCR dinonaktifkan.", file=sys.stderr)
+    _MANGA_OCR_IMPORT_ERROR = str(exc)
+    _MANGA_OCR_IMPORT_CHECKED = True
 
-def check_manga_ocr():
-    global MangaOcr
+def check_manga_ocr(force=False):
+    global MangaOcr, _MANGA_OCR_IMPORT_ERROR, _MANGA_OCR_IMPORT_CHECKED
     if MangaOcr is not None:
         return True
+    if _MANGA_OCR_IMPORT_CHECKED and not force:
+        return False
     try:
         from manga_ocr import MangaOcr as MO
         MangaOcr = MO
+        _MANGA_OCR_IMPORT_ERROR = None
+        _MANGA_OCR_IMPORT_CHECKED = True
         return True
-    except ImportError:
+    except Exception as exc:
+        _MANGA_OCR_IMPORT_ERROR = str(exc)
+        _MANGA_OCR_IMPORT_CHECKED = True
         return False
+
+def get_manga_ocr_import_error():
+    return _MANGA_OCR_IMPORT_ERROR
 
 # --- Konfigurasi Tesseract ---
 IS_TESSERACT_AVAILABLE = False

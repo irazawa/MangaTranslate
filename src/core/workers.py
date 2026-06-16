@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.0
+# Manga OCR & Typeset Tool v14.8.1
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -131,7 +131,7 @@ class ProjectSaveWorker(QObject):
                 'typeset_color': self.snapshot.get('typeset_color'),
                 'settings': copy.deepcopy(self.snapshot.get('settings', {})),
                 'saved_at': time.time(),
-                'app_version': self.snapshot.get('app_version', '16.1.0'),
+                'app_version': self.snapshot.get('app_version', APP_VERSION),
             }
 
             # Write to temporary file then replace atomically.

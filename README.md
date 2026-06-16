@@ -128,7 +128,7 @@ Setiap kotak dialog manga yang terjemahannya dibuat akan dikelola sebagai layer 
 
 ---
 
-## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.0)
+## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.1)
 
 MangaTranslate kini menghadirkan sistem **Undo/Redo berbasis snapshot** yang dilengkapi tampilan timeline visual interaktif di panel kanan, memberikan kendali penuh atas sejarah penyuntingan Anda:
 
@@ -165,7 +165,7 @@ Saat menerjemahkan satu halaman manga yang berisi banyak gelembung percakapan:
 
 ---
 
-## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.0)
+## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.1)
 
 Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi satu window bertab yang elegan ([UnifiedHelpDialog](file:///e:/Project/MangaTranslate/src/ui/unified_help_dialog.py)):
 
@@ -175,7 +175,7 @@ Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi 
 * **📁 Project Statistics**: Jumlah halaman, halaman yang sudah selesai (dengan persentase), total area typeset, area berteks, total kata, dan distribusi model AI yang digunakan.
 
 ### Tab 2 — 💰 Pricing Editor
-* Tabel lengkap semua model AI yang tersedia (Gemini, OpenAI, OpenRouter) beserta harga per token (input & output).
+* Tabel lengkap semua model AI yang tersedia (Gemini, OpenAI, OpenRouter) beserta harga per 1M token (input & output), sementara kalkulasi internal tetap memakai harga per token.
 * **Harga dapat diedit langsung** melalui `QDoubleSpinBox` di setiap sel — tidak perlu membuka file konfigurasi apapun.
 * Tombol **💾 Simpan Perubahan** untuk menerapkan harga baru ke sesi yang berjalan.
 * Tombol **🔄 Refresh dari OpenRouter** untuk mengambil harga model OpenRouter terbaru secara langsung.
@@ -291,4 +291,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.0*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.1*

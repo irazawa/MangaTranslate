@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.0
+# Manga OCR & Typeset Tool v14.8.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -26,7 +26,6 @@ import numpy as np
 import cv2
 import pytesseract
 import requests
-import easyocr
 import fitz  # from PyMuPDF
 import google.generativeai as genai
 from PIL import Image
@@ -41,6 +40,29 @@ import shutil
 from functools import partial
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+easyocr = None
+_easyocr_import_error = None
+
+
+def get_easyocr_module():
+    """Import EasyOCR lazily so Torch DLL failures do not block app startup."""
+    global easyocr, _easyocr_import_error
+    if easyocr is not None:
+        return easyocr
+    try:
+        easyocr = importlib.import_module("easyocr")
+        _easyocr_import_error = None
+        return easyocr
+    except Exception as exc:
+        _easyocr_import_error = exc
+        return None
+
+
+def easyocr_error_message():
+    if _easyocr_import_error is None:
+        return "EasyOCR is not available in this environment."
+    return str(_easyocr_import_error)
 
 # ==============================
 # ?? PyQt5 (dibagi per kategori)
@@ -72,8 +94,11 @@ from PyQt5.QtCore import (
 from src.core.config import *
 from src.core.workers import *
 from src.core.fonts import *
+from src.core.app_info import APP_VERSION, app_title
 from src.ui.dialogs import *
 from src.ui.canvas import *
+from src.ui.theme import app_stylesheet, compact_primary_button_qss, toggle_button_qss
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, about_html, welcome_subtitle_html
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
@@ -335,8 +360,9 @@ class MangaOCRApp(QMainWindow):
             self.content.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.setWidget(self.content)
             
-    def __init__(self):
+    def __init__(self, startup_status_callback=None):
         super().__init__()
+        self._startup_status_callback = startup_status_callback
         self.usage_mutex = QMutex(QMutex.Recursive)
         self.api_cost_signal.connect(self.add_api_cost)
         self.snippet_translated_signal.connect(self.increment_translated_count)
@@ -358,10 +384,12 @@ class MangaOCRApp(QMainWindow):
             ("PyQt5", "PyQt5"),
         ]
         try:
+            self._set_startup_status(StartupText.STATUS_CHECKING_DEPENDENCIES)
             ensure_dependencies(self, required_pkgs)
         except Exception:
             pass
-        self.setWindowTitle("Manga OCR & Typeset Tool v14.8.0")
+        self.setWindowTitle(app_title())
+        self._set_startup_status(StartupText.STATUS_PREPARING_SESSION)
         self.image_files = []
         self.current_image_path = None
         self.current_image_pil = None
@@ -575,6 +603,8 @@ class MangaOCRApp(QMainWindow):
 
         self.batch_save_worker = None
         self.batch_save_thread = None
+        self._batch_save_errors = []
+        self._batch_save_saved_count = 0
 
         self.project_dir = None
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.cache')
@@ -634,6 +664,7 @@ class MangaOCRApp(QMainWindow):
         self.is_rapidocr_available = RapidOCR is not None
         self.is_lama_available = lama_cleaner is not None
         self.is_openai_available = openai is not None and openai_client is not None
+        self.is_easyocr_available = False
 
         self.total_cost = 0.0
         self.usd_to_idr_rate = 16200.0
@@ -739,14 +770,20 @@ class MangaOCRApp(QMainWindow):
         self.last_detection_mode = None
         self.preview_mode_active = False
 
+        self._set_startup_status(StartupText.STATUS_BUILDING_UI)
         self.init_ui()
+        self._set_startup_status(StartupText.STATUS_APPLYING_THEME)
         self.setup_styles()
+        self._set_startup_status(StartupText.STATUS_SETTING_SHORTCUTS)
         self.setup_shortcuts()
+        self._set_startup_status(StartupText.STATUS_INITIALIZING_ENGINES)
         self.initialize_core_engines()
+        self._set_startup_status(StartupText.STATUS_APPLYING_SETTINGS)
         try:
             self.apply_defaults_from_settings()
         except Exception as e:
             print(f"Error applying default settings: {e}")
+        self._set_startup_status(StartupText.STATUS_LOADING_USAGE)
         self.load_usage_data()
         # load any saved custom translation styles
         try:
@@ -754,6 +791,7 @@ class MangaOCRApp(QMainWindow):
         except Exception:
             pass
         self.check_limits_and_update_ui()
+        self._set_startup_status(StartupText.STATUS_FETCHING_RATES)
         self.fetch_exchange_rate()
 
         # Keyboard Shortcuts for Copy/Paste Typeset
@@ -773,6 +811,16 @@ class MangaOCRApp(QMainWindow):
         # Tampilkan welcome screen di startup (hide nav bar & side panels)
         if not self.project_dir:
             self.show_welcome_screen()
+        self._set_startup_status(StartupText.STATUS_READY)
+
+    def _set_startup_status(self, message):
+        callback = getattr(self, '_startup_status_callback', None)
+        if callback is None:
+            return
+        try:
+            callback(message)
+        except Exception:
+            pass
 
     def setup_menu_bar(self):
         menu_bar = self.menuBar()
@@ -816,7 +864,7 @@ class MangaOCRApp(QMainWindow):
         self.toggle_tools_action.setShortcut(QKeySequence("F4"))
         self.toggle_tools_action.triggered.connect(self.toggle_right_panel)
         view_menu.addAction(self.toggle_tools_action)
-        self.toggle_focus_action = QAction('Toggle Focus Mode (Canvas Only)', self)
+        self.toggle_focus_action = QAction(NavText.FOCUS_MODE_ACTION, self)
         self.toggle_focus_action.setShortcut(QKeySequence("F2"))
         self.toggle_focus_action.triggered.connect(self.toggle_focus_mode)
         view_menu.addAction(self.toggle_focus_action)
@@ -839,7 +887,7 @@ class MangaOCRApp(QMainWindow):
         settings_center_action.triggered.connect(self.open_settings_dialog)
         settings_menu.addAction(settings_center_action)
         help_menu = menu_bar.addMenu('&Help / Usage')
-        about_action = QAction('📖 Help & Usage...', self)
+        about_action = QAction(ActionText.HELP_USAGE_MENU, self)
         about_action.triggered.connect(self.show_unified_help_dialog)
         help_menu.addAction(about_action)
 
@@ -920,28 +968,12 @@ class MangaOCRApp(QMainWindow):
         nav_zoom_layout.setContentsMargins(10, 5, 10, 5)
         
         # Premium toggle Folder btn
-        self.toggle_left_btn = QPushButton("Hide Folder")
+        self.toggle_left_btn = QPushButton(NavText.HIDE_FOLDER)
         self.toggle_left_btn.setToolTip("Toggle Left folder list panel (F3)")
         self.toggle_left_btn.setCheckable(True)
         self.toggle_left_btn.setChecked(True)
         self.toggle_left_btn.clicked.connect(self.toggle_left_panel)
-        self.toggle_left_btn.setStyleSheet("""
-            QPushButton {
-                background: #1c2a39;
-                border: 1px solid #2d3f52;
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #a4b6c7;
-            }
-            QPushButton:hover {
-                background: #25374a;
-                color: #e2e8f1;
-            }
-            QPushButton:checked {
-                background: #25374a;
-                color: #e2e8f1;
-            }
-        """)
+        self.toggle_left_btn.setStyleSheet(toggle_button_qss())
         nav_zoom_layout.addWidget(self.toggle_left_btn)
         
         self.prev_button = QPushButton("<< Prev")
@@ -956,47 +988,18 @@ class MangaOCRApp(QMainWindow):
         nav_zoom_layout.addStretch()
         
         # Premium Focus Mode btn
-        self.focus_mode_btn = QPushButton("Focus Mode")
+        self.focus_mode_btn = QPushButton(NavText.FOCUS_MODE)
         self.focus_mode_btn.setToolTip("Toggle Canvas Only view (F2)")
         self.focus_mode_btn.clicked.connect(self.toggle_focus_mode)
-        self.focus_mode_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #1a6f50, stop:1 #248c66);
-                border: 1px solid #227c5b;
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #e6f7f2;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #228c66, stop:1 #2ca67b);
-            }
-        """)
+        self.focus_mode_btn.setStyleSheet(compact_primary_button_qss())
         nav_zoom_layout.addWidget(self.focus_mode_btn)
 
         # Quick Compare toggle button
-        self.compare_mode_btn = QPushButton("👁 Compare")
+        self.compare_mode_btn = QPushButton(NavText.COMPARE_MODE)
         self.compare_mode_btn.setToolTip("Tahan untuk lihat gambar asli tanpa typeset overlay (Quick Compare)")
         self.compare_mode_btn.setCheckable(True)
         self.compare_mode_btn.toggled.connect(self._on_compare_mode_toggled)
-        self.compare_mode_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #3d1a6e, stop:1 #5a2a9a);
-                border: 1px solid #6b3ab8;
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #e8d5ff;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #5a2a9a, stop:1 #7a4ac0);
-            }
-            QPushButton:checked {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #7b1fa2, stop:1 #ab47bc);
-                color: #ffffff;
-                border-color: #ce93d8;
-            }
-        """)
+        self.compare_mode_btn.setStyleSheet(toggle_button_qss())
         nav_zoom_layout.addWidget(self.compare_mode_btn)
         
         self.next_button = QPushButton("Next >>")
@@ -1004,28 +1007,12 @@ class MangaOCRApp(QMainWindow):
         nav_zoom_layout.addWidget(self.next_button)
         
         # Premium toggle Tools btn
-        self.toggle_right_btn = QPushButton("Hide Tools")
+        self.toggle_right_btn = QPushButton(NavText.HIDE_TOOLS)
         self.toggle_right_btn.setToolTip("Toggle Right Tools & Workflows panel (F4)")
         self.toggle_right_btn.setCheckable(True)
         self.toggle_right_btn.setChecked(True)
         self.toggle_right_btn.clicked.connect(self.toggle_right_panel)
-        self.toggle_right_btn.setStyleSheet("""
-            QPushButton {
-                background: #1c2a39;
-                border: 1px solid #2d3f52;
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #a4b6c7;
-            }
-            QPushButton:hover {
-                background: #25374a;
-                color: #e2e8f1;
-            }
-            QPushButton:checked {
-                background: #25374a;
-                color: #e2e8f1;
-            }
-        """)
+        self.toggle_right_btn.setStyleSheet(toggle_button_qss())
         nav_zoom_layout.addWidget(self.toggle_right_btn)
         
         center_layout.addWidget(self.nav_zoom_widget)
@@ -1847,8 +1834,8 @@ class MangaOCRApp(QMainWindow):
         auto_translate_group = QGroupBox("Full-Page Translation (Instant)")
         auto_translate_layout = QVBoxLayout(auto_translate_group)
         
-        self.auto_translate_page_btn = QPushButton("🚀 Terjemahkan Halaman Ini")
-        self.auto_translate_page_btn.setStyleSheet("QPushButton { font-weight: bold; font-size: 10pt; color: #38bdf8; background-color: #0b0f19; border: 1px solid #1e293b; padding: 8px; border-radius: 8px; } QPushButton:hover { background-color: #1e293b; border-color: #38bdf8; }")
+        self.auto_translate_page_btn = QPushButton(ActionText.FULL_PAGE_TRANSLATE)
+        self.auto_translate_page_btn.setStyleSheet(compact_primary_button_qss())
         self.auto_translate_page_btn.clicked.connect(self.start_full_page_translation)
         
         self.use_ai_vision_checkbox = QCheckBox("Gunakan AI Vision (Gemini/GPT-4o)")
@@ -4373,7 +4360,7 @@ class MangaOCRApp(QMainWindow):
         return spin_box
 
     def setup_styles(self):
-        self.setStyleSheet(self.DARK_THEME_STYLESHEET)
+        self.setStyleSheet(app_stylesheet())
 
     def apply_defaults_from_settings(self):
         """Memuat default presets dari settings.json dan menerapkan ke UI."""
@@ -4527,7 +4514,7 @@ class MangaOCRApp(QMainWindow):
                             'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
                             'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
                             'settings': self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {},
-                            'app_version': '16.1.0',
+                            'app_version': APP_VERSION,
                         }
                     finally:
                         self.paint_mutex.unlock()
@@ -4574,7 +4561,7 @@ class MangaOCRApp(QMainWindow):
                         'typeset_color': snapshot.get('typeset_color'),
                         'settings': snapshot.get('settings', {}),
                         'saved_at': time.time(),
-                        'app_version': snapshot.get('app_version', '16.1.0'),
+                        'app_version': snapshot.get('app_version', APP_VERSION),
                     }
 
                     target_dir = os.path.dirname(self.current_project_path) or self.project_dir
@@ -4801,7 +4788,9 @@ class MangaOCRApp(QMainWindow):
                     self.OCR_LANGS[key] = {'code': code, 'engine': 'PaddleOCR'}
         
         # EasyOCR
-        if plugins_cfg.get('EasyOCR', True):
+        easyocr_module = get_easyocr_module() if plugins_cfg.get('EasyOCR', True) else None
+        self.is_easyocr_available = easyocr_module is not None
+        if easyocr_module is not None:
             easyocr_langs = {'Afrikaans': 'af', 'Arabic': 'ar', 'Azerbaijani': 'az', 'Belarusian': 'be', 'Bulgarian': 'bg', 'Bengali': 'bn', 'Bosnian': 'bs', 'Czech': 'cs', 'Chinese (Simplified)': 'ch_sim', 'Chinese (Traditional)': 'ch_tra', 'German': 'de', 'English': 'en', 'Spanish': 'es', 'Estonian': 'et', 'French': 'fr', 'Hindi': 'hi', 'Croatian': 'hr', 'Hungarian': 'hu', 'Indonesian': 'id', 'Italian': 'it', 'Japanese': 'ja', 'Korean': 'ko', 'Lithuanian': 'lt', 'Latvian': 'lv', 'Malay': 'ms', 'Dutch': 'nl', 'Polish': 'pl', 'Portuguese': 'pt', 'Romanian': 'ro', 'Russian': 'ru', 'Slovak': 'sk', 'Slovenian': 'sl', 'Albanian': 'sq', 'Swedish': 'sv', 'Thai': 'th', 'Turkish': 'tr', 'Ukrainian': 'uk', 'Urdu': 'ur', 'Uzbek': 'uz', 'Vietnamese': 'vi'}
             for name, code in easyocr_langs.items():
                 key = f'{name} (EasyOCR)'
@@ -4810,6 +4799,8 @@ class MangaOCRApp(QMainWindow):
                     continue
                 if key not in self.OCR_LANGS:
                     self.OCR_LANGS[key] = {'code': code, 'engine': 'EasyOCR'}
+        elif plugins_cfg.get('EasyOCR', True):
+            pass
 
         # Tesseract
         if IS_TESSERACT_AVAILABLE:
@@ -4898,11 +4889,13 @@ class MangaOCRApp(QMainWindow):
         self.statusBar().showMessage("Initializing core engines...")
 
         try:
+            self._set_startup_status(StartupText.STATUS_SYNCING_TESSDATA)
             from src.ui.dialogs import sync_tessdata_files
             sync_tessdata_files()
         except Exception as e:
             print(f"Error syncing tessdata at startup: {e}")
 
+        self._set_startup_status(StartupText.STATUS_LOADING_MODELS)
         self.populate_ocr_languages()
         self.populate_ai_models() # [BARU]
 
@@ -4910,6 +4903,7 @@ class MangaOCRApp(QMainWindow):
         from src.core.config import check_manga_ocr
         if check_manga_ocr():
             try:
+                self._set_startup_status(StartupText.STATUS_LOADING_MANGA_OCR)
                 from manga_ocr import MangaOcr as MO
                 self.manga_ocr_reader = MO()
                 self.statusBar().showMessage("Manga-OCR initialized.", 3000)
@@ -5033,10 +5027,9 @@ class MangaOCRApp(QMainWindow):
                                 'input': input_price,
                                 'output': output_price
                             }
-                        }
+                    }
                     # Pemicu reload list model agar harga langsung ter-apply
                     self._load_openrouter_models()
-                    print(f"OpenRouter pricing database updated dynamically with {len(data)} models.")
             except Exception as e:
                 print(f"Gagal memuat harga OpenRouter dari API: {e}")
                 
@@ -5076,9 +5069,15 @@ class MangaOCRApp(QMainWindow):
                         self.manga_ocr_reader = MO()
 
             elif engine == 'EasyOCR' and (self.easyocr_reader is None or self.easyocr_lang != lang_code):
+                easyocr_module = get_easyocr_module()
+                if easyocr_module is None:
+                    raise RuntimeError(
+                        "EasyOCR cannot be loaded. Torch may be installed but its DLLs failed to initialize.\n"
+                        f"Details: {easyocr_error_message()}"
+                    )
                 # EasyOCR expects a list of languages; include English as fallback
                 lang_list = sorted(list({l for l in ('en', lang_code) if l}))
-                self.easyocr_reader = easyocr.Reader(lang_list, gpu=use_gpu)
+                self.easyocr_reader = easyocr_module.Reader(lang_list, gpu=use_gpu)
                 self.easyocr_lang = lang_code
             
             # Inisialisasi PaddleOCR: try multiple constructor signatures to support different versions
@@ -5143,7 +5142,7 @@ class MangaOCRApp(QMainWindow):
             if success:
                 QMessageBox.information(self, "Success", "Manga-OCR has been successfully installed!")
                 from src.core.config import check_manga_ocr
-                if check_manga_ocr():
+                if check_manga_ocr(force=True):
                     try:
                         from manga_ocr import MangaOcr as MO
                         self.manga_ocr_reader = MO()
@@ -5408,7 +5407,6 @@ class MangaOCRApp(QMainWindow):
                 rate = data.get('rates', {}).get('IDR')
                 if rate:
                     self.usd_to_idr_rate = float(rate)
-                    print(f"Successfully fetched USD to IDR rate: {self.usd_to_idr_rate}")
             except requests.exceptions.RequestException as e:
                 print(f"Failed to fetch exchange rate: {e}. Using default.")
             finally:
@@ -7201,8 +7199,8 @@ class MangaOCRApp(QMainWindow):
         self.update_file_list()
         self.save_project(is_auto=True)
         if status_message is None:
-            status_message = "New project created and auto-saved."
-        self.setWindowTitle(f"Manga OCR & Typeset Tool v14.8.0 - {os.path.basename(self.current_project_path)}")
+            status_message = ActionText.NEW_PROJECT_AUTOSAVED
+        self.setWindowTitle(app_title(os.path.basename(self.current_project_path)))
         self.statusBar().showMessage(status_message, 4000)
         # Sembunyikan welcome screen, tampilkan canvas
         self.hide_welcome_screen()
@@ -7524,8 +7522,11 @@ class MangaOCRApp(QMainWindow):
 
         self.zoom_label.setText(f" Zoom: {self.zoom_factor:.1f}x ")
         scaled_size = pix_copy.size() * self.zoom_factor
-        scaled_pixmap = pix_copy.scaled(scaled_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.image_label.setPixmap(scaled_pixmap); self.image_label.adjustSize()
+        transform_mode = Qt.FastTransformation if getattr(self, 'is_transform_preview', False) else Qt.SmoothTransformation
+        scaled_pixmap = pix_copy.scaled(scaled_size, Qt.KeepAspectRatio, transform_mode)
+        self.image_label.setPixmap(scaled_pixmap)
+        if self.image_label.size() != scaled_pixmap.size():
+            self.image_label.adjustSize()
 
     def zoom_in(self):
         self.zoom_factor = min(self.zoom_factor + 0.2, 8.0); self.update_display()
@@ -10515,7 +10516,7 @@ class MangaOCRApp(QMainWindow):
             'scene_order': copy.deepcopy(self.scene_order),
             'current_scene_name': self.current_scene_name,
             'saved_at': time.time(),
-            'app_version': '16.1.0',
+            'app_version': APP_VERSION,
         }
         config_block = {'theme': self.current_theme}
         if getattr(self, 'autosave_timer', None):
@@ -10912,7 +10913,7 @@ class MangaOCRApp(QMainWindow):
 
             # Update judul window
             self.setWindowTitle(
-                f"Manga OCR & Typeset Tool v14.8.0 - {os.path.basename(self.current_project_path)}"
+                app_title(os.path.basename(self.current_project_path))
             )
 
             # Start autosave only if user enabled it
@@ -11023,7 +11024,7 @@ class MangaOCRApp(QMainWindow):
                     'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
                     'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
                     'settings': self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {},
-                    'app_version': '16.1.0',
+                    'app_version': APP_VERSION,
                 }
             finally:
                 self.paint_mutex.unlock()
@@ -11152,7 +11153,7 @@ class MangaOCRApp(QMainWindow):
             toggle_btn = getattr(self, 'toggle_left_btn', None)
             if toggle_btn:
                 toggle_btn.setChecked(was_visible)
-                toggle_btn.setText("Hide Folder" if was_visible else "Show Folder")
+                toggle_btn.setText(NavText.HIDE_FOLDER if was_visible else NavText.SHOW_FOLDER)
 
         # Kembalikan right panel ke state sebelumnya
         right = getattr(self, 'right_panel_scroll', None)
@@ -11163,7 +11164,7 @@ class MangaOCRApp(QMainWindow):
             toggle_btn = getattr(self, 'toggle_right_btn', None)
             if toggle_btn:
                 toggle_btn.setChecked(was_visible)
-                toggle_btn.setText("Hide Tools" if was_visible else "Show Tools")
+                toggle_btn.setText(NavText.HIDE_TOOLS if was_visible else NavText.SHOW_TOOLS)
 
     def _build_welcome_widget(self):
         """Bangun widget welcome screen yang indah dengan quick actions dan recent projects."""
@@ -11217,7 +11218,7 @@ class MangaOCRApp(QMainWindow):
         """)
         vbox.addWidget(header_lbl)
 
-        sub_lbl = QLabel("Manga OCR &amp; Typeset Tool — v14.8.0")
+        sub_lbl = QLabel(welcome_subtitle_html())
         sub_lbl.setAlignment(Qt.AlignCenter)
         sub_lbl.setTextFormat(Qt.RichText)
         sub_lbl.setStyleSheet("""
@@ -11371,7 +11372,7 @@ class MangaOCRApp(QMainWindow):
         shortcuts_data = [
             ("Space", "Next Image"),
             ("Esc", "Save Project"),
-            ("F2", "Focus Mode (Canvas Only)"),
+            ("F2", NavText.FOCUS_MODE_SHORTCUT),
             ("F3", "Toggle Folder Panel"),
             ("F4", "Toggle Tools Panel"),
             ("1–9", "Switch Selection Mode"),
@@ -11705,8 +11706,7 @@ class MangaOCRApp(QMainWindow):
         self.load_usage_data()
         provider, model_name = self.get_selected_model_name()
         if not model_name: return
-        about_text = (f"<b>Manga OCR & Typeset Tool v14.8.0</b><br><br>This tool was created to streamline the process of translating manga.<br><br>Powered by Python, PyQt5, and various AI APIs.<br>Enhanced with new features by Gemini.<br><br>Copyright © 2024")
-        QMessageBox.about(self, "About & API Usage", about_text)
+        QMessageBox.about(self, DialogText.ABOUT_TITLE, about_html())
 
     def show_project_stats_dialog(self):
         """Tampilkan dialog statistik project saat ini."""
@@ -11842,7 +11842,7 @@ class MangaOCRApp(QMainWindow):
 
         dlg = UnifiedHelpDialog(
             parent               = self,
-            app_version          = "14.8.0",
+            app_version          = APP_VERSION,
             ai_providers         = self.AI_PROVIDERS,
             openrouter_pricing_db= getattr(self, 'openrouter_pricing_db', {}),
             usage_data           = self.usage_data,
@@ -12746,6 +12746,8 @@ class MangaOCRApp(QMainWindow):
 
         self.overall_progress_bar.setVisible(True); self.overall_progress_bar.setValue(0)
         self.statusBar().showMessage("Starting batch save...")
+        self._batch_save_errors = []
+        self._batch_save_saved_count = 0
 
         # Get current settings dictionary on the main GUI thread safely
         current_settings = self.get_current_settings()
@@ -12771,19 +12773,41 @@ class MangaOCRApp(QMainWindow):
         self.batch_save_worker.moveToThread(self.batch_save_thread)
         self.batch_save_worker.signals.progress.connect(self.update_overall_progress)
         self.batch_save_worker.signals.file_saved.connect(self.on_batch_file_saved)
-        self.batch_save_worker.signals.error.connect(self.on_worker_error)
+        self.batch_save_worker.signals.error.connect(self.on_batch_save_error)
         self.batch_save_worker.signals.finished.connect(self.on_batch_save_finished)
         self.batch_save_thread.started.connect(self.batch_save_worker.run)
         self.batch_save_thread.start()
 
-    def on_batch_file_saved(self, file_path): pass
+    def on_batch_file_saved(self, file_path):
+        self._batch_save_saved_count += 1
+
+    def on_batch_save_error(self, error_msg):
+        self._batch_save_errors.append(error_msg)
+        self.statusBar().showMessage(error_msg, 5000)
 
     def on_batch_save_finished(self):
-        self.statusBar().showMessage("Batch save complete.", 5000)
+        errors = list(getattr(self, '_batch_save_errors', []))
+        saved_count = getattr(self, '_batch_save_saved_count', 0)
+        if errors:
+            self.statusBar().showMessage("Batch save finished with errors.", 5000)
+        else:
+            self.statusBar().showMessage("Batch save complete.", 5000)
         self.overall_progress_bar.setVisible(False)
         self.batch_save_thread.quit(); self.batch_save_thread.wait()
-        self.show_desktop_notification("Batch Save Selesai", "Semua halaman terpilih telah berhasil disimpan.")
-        QMessageBox.information(self, "Batch Save Complete", "All selected files have been saved.")
+        if errors:
+            shown_errors = "\n".join(errors[:8])
+            more = "" if len(errors) <= 8 else f"\n...and {len(errors) - 8} more error(s)."
+            QMessageBox.warning(
+                self,
+                "Batch Save Finished With Errors",
+                f"Saved {saved_count} file(s), but {len(errors)} file(s) failed:\n\n{shown_errors}{more}"
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Batch Save Complete",
+                f"All selected files have been saved.\nSaved file(s): {saved_count}"
+            )
 
     def check_if_saved(self, file_path):
         path_part, ext = os.path.splitext(file_path)
@@ -14430,7 +14454,7 @@ class MangaOCRApp(QMainWindow):
         if hasattr(self, 'toggle_left_btn') and self.toggle_left_btn is not None:
             blocker = QSignalBlocker(self.toggle_left_btn)
             self.toggle_left_btn.setChecked(not is_visible)
-            self.toggle_left_btn.setText("Show Folder" if is_visible else "Hide Folder")
+            self.toggle_left_btn.setText(NavText.SHOW_FOLDER if is_visible else NavText.HIDE_FOLDER)
             
     def toggle_right_panel(self):
         if not hasattr(self, 'right_panel_scroll') or self.right_panel_scroll is None:
@@ -14440,7 +14464,7 @@ class MangaOCRApp(QMainWindow):
         if hasattr(self, 'toggle_right_btn') and self.toggle_right_btn is not None:
             blocker = QSignalBlocker(self.toggle_right_btn)
             self.toggle_right_btn.setChecked(not is_visible)
-            self.toggle_right_btn.setText("Show Tools" if is_visible else "Hide Tools")
+            self.toggle_right_btn.setText(NavText.SHOW_TOOLS if is_visible else NavText.HIDE_TOOLS)
 
     def toggle_focus_mode(self):
         left_exists = hasattr(self, 'left_panel_widget') and self.left_panel_widget is not None
@@ -14454,7 +14478,7 @@ class MangaOCRApp(QMainWindow):
         if any_visible:
             if left_exists: self.left_panel_widget.setVisible(False)
             if right_exists: self.right_panel_scroll.setVisible(False)
-            self.statusBar().showMessage("Focus Mode: Canvas Only (Press F2 to restore)", 3000)
+            self.statusBar().showMessage(NavText.FOCUS_MODE_STATUS, 3000)
         else:
             if left_exists: self.left_panel_widget.setVisible(True)
             if right_exists: self.right_panel_scroll.setVisible(True)
@@ -14463,11 +14487,11 @@ class MangaOCRApp(QMainWindow):
         if left_exists and hasattr(self, 'toggle_left_btn') and self.toggle_left_btn is not None:
             blocker = QSignalBlocker(self.toggle_left_btn)
             self.toggle_left_btn.setChecked(self.left_panel_widget.isVisible())
-            self.toggle_left_btn.setText("Show Folder" if not self.left_panel_widget.isVisible() else "Hide Folder")
+            self.toggle_left_btn.setText(NavText.SHOW_FOLDER if not self.left_panel_widget.isVisible() else NavText.HIDE_FOLDER)
         if right_exists and hasattr(self, 'toggle_right_btn') and self.toggle_right_btn is not None:
             blocker = QSignalBlocker(self.toggle_right_btn)
             self.toggle_right_btn.setChecked(self.right_panel_scroll.isVisible())
-            self.toggle_right_btn.setText("Show Tools" if not self.right_panel_scroll.isVisible() else "Hide Tools")
+            self.toggle_right_btn.setText(NavText.SHOW_TOOLS if not self.right_panel_scroll.isVisible() else NavText.HIDE_TOOLS)
 
     def _on_compare_mode_toggled(self, checked: bool):
         """Aktifkan/nonaktifkan Quick Compare mode (tampilkan gambar asli tanpa typeset)."""
@@ -14802,7 +14826,7 @@ class MangaOCRApp(QMainWindow):
         self._full_page_worker.start()
 
     def on_full_page_translation_finished(self, created_areas, msg):
-        self.auto_translate_page_btn.setText("🚀 Terjemahkan Halaman Ini")
+        self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setEnabled(True)
         
         if not created_areas:
@@ -14829,7 +14853,7 @@ class MangaOCRApp(QMainWindow):
         self.statusBar().showMessage(f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", 4000)
 
     def on_full_page_translation_error(self, err_msg):
-        self.auto_translate_page_btn.setText("🚀 Terjemahkan Halaman Ini")
+        self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setEnabled(True)
         self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
         QMessageBox.critical(self, "Error", f"Gagal menerjemahkan halaman: {err_msg}")

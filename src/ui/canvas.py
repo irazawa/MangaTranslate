@@ -1,10 +1,11 @@
-# Manga OCR & Typeset Tool v14.8.0
+# Manga OCR & Typeset Tool v14.8.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
 import math
 import traceback
 import copy
+import time
 
 # ==============================
 # ?? Library pihak ketiga
@@ -788,6 +789,9 @@ class SelectableImageLabel(QLabel):
         self._transform_update_timer = QTimer(self)
         self._transform_update_timer.setSingleShot(True)
         self._transform_update_timer.timeout.connect(self._emit_transform_redraw)
+        self._last_transform_canvas_update = 0.0
+        self._transform_canvas_update_interval = 1.0 / 60.0
+        self._transform_redraw_interval_ms = 75
 
         self.panning = False
         self.pan_last_mouse_pos = QPoint()
@@ -818,6 +822,42 @@ class SelectableImageLabel(QLabel):
         except Exception:
             pass
 
+    def _is_transform_area_valid(self):
+        if not self.main_window:
+            return False
+        info = getattr(self, 'active_transform', None)
+        if not isinstance(info, dict):
+            return False
+        area = info.get('area')
+        if area is None or not getattr(self.main_window, 'original_pixmap', None):
+            return False
+        if area not in list(getattr(self.main_window, 'typeset_areas', [])):
+            return False
+        if not getattr(area, 'visible', True):
+            return False
+        return True
+
+    def _cancel_active_transform(self):
+        try:
+            self._transform_update_timer.stop()
+        except Exception:
+            pass
+        self._set_active_transform(None)
+        self._refresh_transform_handles()
+        self._set_transform_hover_handle(None)
+        self.restore_active_cursor()
+        self.update()
+
+    def _request_transform_redraw(self):
+        if not self._transform_update_timer.isActive():
+            self._transform_update_timer.start(self._transform_redraw_interval_ms)
+
+    def _request_transform_canvas_update(self):
+        now = time.monotonic()
+        if now - self._last_transform_canvas_update >= self._transform_canvas_update_interval:
+            self._last_transform_canvas_update = now
+            self.update()
+
     def get_selection_mode(self):
         return self.main_window.selection_mode_combo.currentText()
 
@@ -828,6 +868,11 @@ class SelectableImageLabel(QLabel):
         if self.transform_mode == enabled:
             return
         self.transform_mode = bool(enabled)
+        if not self.transform_mode:
+            try:
+                self._transform_update_timer.stop()
+            except Exception:
+                pass
         self._set_active_transform(None)
         self.transform_handles.clear()
         self.transform_hover_handle = None
@@ -1009,8 +1054,11 @@ class SelectableImageLabel(QLabel):
     def _emit_transform_redraw(self):
         if not self.main_window:
             return
+        if self.active_transform and not self._is_transform_area_valid():
+            self._cancel_active_transform()
+            return
         try:
-            self.main_window.schedule_typeset_redraw(45)
+            self.main_window.schedule_typeset_redraw(self._transform_redraw_interval_ms)
         except Exception:
             traceback.print_exc()
 
@@ -1050,6 +1098,7 @@ class SelectableImageLabel(QLabel):
         image_point = self._widget_point_to_image(event.pos())
         if image_point is None:
             return False
+        self._last_transform_canvas_update = 0.0
         handle = None
         for key, rect in self.transform_handles.items():
             if key.startswith('_'):
@@ -1083,6 +1132,7 @@ class SelectableImageLabel(QLabel):
             self._set_active_transform(transform)
             self.transform_hover_handle = None
             self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
             return True
         elif handle in ('nw', 'ne', 'se', 'sw'):
             anchor_map = {
@@ -1123,6 +1173,7 @@ class SelectableImageLabel(QLabel):
             self._set_active_transform(transform)
             self.transform_hover_handle = None
             self.setCursor(Qt.SizeFDiagCursor if handle in ('nw', 'se') else Qt.SizeBDiagCursor)
+            event.accept()
             return True
         elif self._point_in_area(selected_area, image_point):
             transform = {
@@ -1135,6 +1186,7 @@ class SelectableImageLabel(QLabel):
             self._set_active_transform(transform)
             self.transform_hover_handle = None
             self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
             return True
         else:
             self.main_window.clear_selected_area()
@@ -1147,6 +1199,9 @@ class SelectableImageLabel(QLabel):
             return False
         self.current_mouse_pos = event.pos()
         if self.active_transform:
+            if not self._is_transform_area_valid():
+                self._cancel_active_transform()
+                return True
             try:
                 image_point = self._widget_point_to_image(event.pos())
                 transform_type = self.active_transform.get('type') if isinstance(self.active_transform, dict) else None
@@ -1162,12 +1217,11 @@ class SelectableImageLabel(QLabel):
                     print(f"Warning: transform move error: {exc}")
                 except Exception:
                     pass
-                self._set_active_transform(None)
-                self._refresh_transform_handles()
-                self.update()
-                return False
+                self._cancel_active_transform()
+                return True
             self._refresh_transform_handles()
-            self.update()
+            self._request_transform_canvas_update()
+            event.accept()
             return True
         self._refresh_transform_handles()
         handle = None
@@ -1187,6 +1241,10 @@ class SelectableImageLabel(QLabel):
             return False
         if event.button() != Qt.LeftButton:
             return False
+        try:
+            self._transform_update_timer.stop()
+        except Exception:
+            pass
         self._set_active_transform(None)
         self._refresh_transform_handles()
         self._set_transform_hover_handle(None)
@@ -1194,6 +1252,7 @@ class SelectableImageLabel(QLabel):
         if hasattr(self.main_window, 'redraw_all_typeset_areas'):
             self.main_window.redraw_all_typeset_areas()
         self.update()
+        event.accept()
         return True
 
     def _update_transform_move(self, image_point):
@@ -1254,8 +1313,7 @@ class SelectableImageLabel(QLabel):
                 self.main_window.redo_stack.clear()
             except Exception:
                 pass
-        if not self._transform_update_timer.isActive():
-            self._transform_update_timer.start(16)
+        self._request_transform_redraw()
 
     def _update_transform_rotate(self, image_point):
         try:
@@ -1285,8 +1343,7 @@ class SelectableImageLabel(QLabel):
                     self.main_window.redo_stack.clear()
                 except Exception:
                     pass
-            if not self._transform_update_timer.isActive():
-                self._transform_update_timer.start(16)
+            self._request_transform_redraw()
         except Exception as exc:
             try:
                 print(f"Warning: _update_transform_rotate failed: {exc}")
@@ -1356,8 +1413,7 @@ class SelectableImageLabel(QLabel):
                     self.main_window.redo_stack.clear()
                 except Exception:
                     pass
-            if not self._transform_update_timer.isActive():
-                self._transform_update_timer.start(16)
+            self._request_transform_redraw()
         except Exception as exc:
             try:
                 print(f"Warning: _update_transform_scale failed: {exc}")

@@ -20,12 +20,28 @@ __pycache__/
 # User custom/local files
 .env
 .env.*
+*.key
+*.pem
+*.p12
+*.crt
+*.token
+settings.local.json
+settings.*.json
+!settings.example.json
 
 # Local temporary folders
 temp/
 src/ui/temp/
 
 # Large binary tools and executables
+*.exe
+*.msi
+*.zip
+*.7z
+build/
+dist/
+*.spec
+launcher.bat
 bin/*.exe
 bin/*.wav
 
@@ -40,6 +56,8 @@ Inpainting/
 # Secret documentation files
 code.md
 feature_ideas.md
+.agents/
+.agents/skills/*/references/code.md
 
 # Large model checkpoints
 src/models/

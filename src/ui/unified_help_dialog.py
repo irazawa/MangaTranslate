@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.0
+# Manga OCR & Typeset Tool v14.8.1
 # ============================================================
 # UnifiedHelpDialog — menggabungkan About, Project Stats,
 # Pricing Editor, dan Session Analytics dalam satu dialog tab.
@@ -16,6 +16,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QColor, QFont, QBrush
+
+from src.core.app_info import APP_VERSION
+from src.ui.texts import DialogText
 
 
 _STYLE = """
@@ -140,18 +143,19 @@ PROVIDER_COLORS = {
     'OpenRouter': '#f472b6',
 }
 DEFAULT_COLOR = '#94a3b8'
+PRICE_DISPLAY_MULTIPLIER = 1_000_000.0
 
 
 class UnifiedHelpDialog(QDialog):
     """
     Dialog terpadu Help / Usage yang menggabungkan:
       Tab 1 — 📋 Overview : About app + Project Statistics
-      Tab 2 — 💰 Pricing   : Daftar model + harga per token (bisa diedit user)
+      Tab 2 — 💰 Pricing   : Daftar model + harga per 1M token (bisa diedit user)
       Tab 3 — 📈 Analytics : Usage, biaya sesi, rate limit, export CSV
     """
 
     def __init__(self, parent=None, *,
-                 app_version="14.8.0",
+                 app_version=APP_VERSION,
                  ai_providers=None,
                  openrouter_pricing_db=None,
                  usage_data=None,
@@ -181,7 +185,7 @@ class UnifiedHelpDialog(QDialog):
         self.all_typeset_data = all_typeset_data or {}
         self.on_pricing_saved = on_pricing_saved   # callable(ai_providers_dict)
 
-        self.setWindowTitle("📖 Help & Usage")
+        self.setWindowTitle(DialogText.HELP_USAGE_TITLE)
         self.setModal(True)
         self.resize(820, 620)
         self.setStyleSheet(_STYLE)
@@ -200,7 +204,7 @@ class UnifiedHelpDialog(QDialog):
         hdr.setStyleSheet("background: #0e111a; border-bottom: 1px solid #1e293b;")
         hl = QHBoxLayout(hdr)
         hl.setContentsMargins(20, 12, 20, 12)
-        title = QLabel("📖  Help & Usage")
+        title = QLabel(DialogText.HELP_USAGE_HEADER)
         title.setStyleSheet("font-size:14pt; font-weight:bold; color:#38bdf8;")
         hl.addWidget(title)
         hl.addStretch(1)
@@ -353,8 +357,9 @@ class UnifiedHelpDialog(QDialog):
 
         info = QLabel(
             "<span style='color:#94a3b8;'>Harga di bawah digunakan untuk kalkulasi biaya sesi. "
-            "Kolom <b style='color:#38bdf8;'>Input $/tok</b> dan <b style='color:#38bdf8;'>Output $/tok</b> "
+            "Kolom <b style='color:#38bdf8;'>Input $/1M tok</b> dan <b style='color:#38bdf8;'>Output $/1M tok</b> "
             "bisa diedit langsung — klik sel, ubah nilainya, lalu tekan <b>💾 Simpan</b>.<br>"
+            "Nilai internal tetap disimpan per token agar kalkulasi biaya tetap akurat. "
             "Harga OpenRouter diambil <i>otomatis</i> dari API mereka saat startup. "
             "Model dengan harga 0 berarti gratis atau belum diketahui.</span>"
         )
@@ -363,7 +368,7 @@ class UnifiedHelpDialog(QDialog):
         outer_v.addWidget(info)
 
         # Tabel
-        headers = ["Provider", "Model ID", "Display Name", "Input $/tok", "Output $/tok", "Limits RPM/RPD"]
+        headers = ["Provider", "Model ID", "Display Name", "Input $/1M tok", "Output $/1M tok", "Limits RPM/RPD"]
         self._pricing_table = QTableWidget()
         self._pricing_table.setColumnCount(len(headers))
         self._pricing_table.setHorizontalHeaderLabels(headers)
@@ -447,24 +452,24 @@ class UnifiedHelpDialog(QDialog):
             tbl.setItem(row, 1, _item(model_id))
             tbl.setItem(row, 2, _item(display))
 
-            # Kolom Input $/tok — QDoubleSpinBox
+            # Kolom Input $/1M tok — QDoubleSpinBox
             spin_in = QDoubleSpinBox()
-            spin_in.setRange(0.0, 1.0)
-            spin_in.setDecimals(10)
-            spin_in.setSingleStep(0.000000001)
-            spin_in.setValue(float(pricing.get('input', 0.0)))
+            spin_in.setRange(0.0, 1_000_000.0)
+            spin_in.setDecimals(6)
+            spin_in.setSingleStep(0.01)
+            spin_in.setValue(float(pricing.get('input', 0.0)) * PRICE_DISPLAY_MULTIPLIER)
             spin_in.setProperty('_provider', provider)
             spin_in.setProperty('_model', model_id)
             spin_in.setProperty('_field', 'input')
             spin_in.setStyleSheet("QDoubleSpinBox { background: #0e111a; color: #93c5fd; border: none; }")
             tbl.setCellWidget(row, 3, spin_in)
 
-            # Kolom Output $/tok — QDoubleSpinBox
+            # Kolom Output $/1M tok — QDoubleSpinBox
             spin_out = QDoubleSpinBox()
-            spin_out.setRange(0.0, 1.0)
-            spin_out.setDecimals(10)
-            spin_out.setSingleStep(0.000000001)
-            spin_out.setValue(float(pricing.get('output', 0.0)))
+            spin_out.setRange(0.0, 1_000_000.0)
+            spin_out.setDecimals(6)
+            spin_out.setSingleStep(0.01)
+            spin_out.setValue(float(pricing.get('output', 0.0)) * PRICE_DISPLAY_MULTIPLIER)
             spin_out.setProperty('_provider', provider)
             spin_out.setProperty('_model', model_id)
             spin_out.setProperty('_field', 'output')
@@ -488,8 +493,8 @@ class UnifiedHelpDialog(QDialog):
                 continue
             provider  = spin_in.property('_provider')
             model_id  = spin_in.property('_model')
-            val_in    = spin_in.value()
-            val_out   = spin_out.value()
+            val_in    = spin_in.value() / PRICE_DISPLAY_MULTIPLIER
+            val_out   = spin_out.value() / PRICE_DISPLAY_MULTIPLIER
 
             # Update di ai_providers
             if provider in self.ai_providers and model_id in self.ai_providers[provider]:
@@ -507,7 +512,7 @@ class UnifiedHelpDialog(QDialog):
 
         QMessageBox.information(self, "Tersimpan",
                                 "Harga berhasil diperbarui.\n"
-                                "Perhitungan biaya berikutnya akan menggunakan nilai ini.")
+                                "Input tabel dibaca sebagai USD per 1M token; perhitungan biaya tetap memakai nilai per-token internal.")
 
     def _refresh_openrouter_prices(self):
         """Ambil ulang harga dari OpenRouter API dan refresh tabel."""
@@ -705,7 +710,7 @@ class UnifiedHelpDialog(QDialog):
             with open(path, 'w', newline='', encoding='utf-8') as f:
                 w = csv.writer(f)
                 w.writerow(["Date", "Provider", "Model", "Daily Count", "RPD Limit", "RPD %",
-                             "RPM (last)", "RPM Limit", "Input $/tok", "Output $/tok"])
+                             "RPM (last)", "RPM Limit", "Input $/1M tok", "Output $/1M tok"])
                 date_str = self.usage_data.get('date', '-')
                 for provider in sorted(provider_usage.keys()):
                     for model_id in sorted(provider_usage[provider].keys()):
@@ -720,7 +725,9 @@ class UnifiedHelpDialog(QDialog):
                         rpm_l = limits.get('rpm', 60)
                         rpd_pct = round(daily / rpd_l * 100, 2) if rpd_l else 0
                         w.writerow([date_str, provider, model_id, daily, rpd_l, f"{rpd_pct}%",
-                                    rpm, rpm_l, pr.get('input', 0), pr.get('output', 0)])
+                                    rpm, rpm_l,
+                                    pr.get('input', 0) * PRICE_DISPLAY_MULTIPLIER,
+                                    pr.get('output', 0) * PRICE_DISPLAY_MULTIPLIER])
                 w.writerow([])
                 w.writerow(["Total Cost (USD)", f"${self.total_cost:.6f}"])
                 w.writerow(["Estimasi IDR", f"Rp {self.total_cost * self.usd_to_idr_rate:,.0f}"])

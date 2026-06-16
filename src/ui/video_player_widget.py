@@ -81,7 +81,13 @@ class YouTubeUrlExtractor(QThread):
 
     def run(self):
         try:
-            import yt_dlp
+            try:
+                import yt_dlp
+            except Exception:
+                self.error.emit(
+                    "yt-dlp belum terpasang. Buka Settings > Media Tools lalu klik Install Media Tools."
+                )
+                return
             dummy_logger = YtdlDummyLogger()
             
             # 1. Extract flat playlist metadata first
