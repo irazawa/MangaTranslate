@@ -56,6 +56,7 @@ Inpainting/
 # Secret documentation files
 code.md
 feature_ideas.md
+AGENTS.md
 .agents/
 .agents/skills/*/references/code.md
 
