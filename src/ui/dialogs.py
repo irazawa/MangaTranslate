@@ -1,4 +1,4 @@
-﻿# Manga OCR & Typeset Tool v14.8.2
+# Manga OCR & Typeset Tool v14.8.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -541,6 +541,42 @@ class SettingsCenterDialog(QDialog):
         def_vbox.addWidget(self._make_option_row(
             "Default Bold", "Newly created text layers start with bold font enabled.",
             self.default_font_bold_checkbox))
+
+        # Default Text Outline State
+        self.default_outline_checkbox = QCheckBox()
+        current_outline = bool(SETTINGS.get('typeset', {}).get('outline_enabled', True))
+        self.default_outline_checkbox.setChecked(current_outline)
+        def_vbox.addWidget(self._make_option_row(
+            "Default Text Outline", "Newly created text layers start with outline enabled.",
+            self.default_outline_checkbox))
+
+        # Default Outline Color
+        self.default_outline_color_button = QPushButton("Pick Color")
+        self.default_outline_color_button.setFixedWidth(110)
+        self.default_outline_color = QColor(SETTINGS.get('typeset', {}).get('outline_color', '#ff00ff'))
+        if not self.default_outline_color.isValid():
+            self.default_outline_color = QColor('#ff00ff')
+        
+        def _update_default_outline_color_button_ui():
+            color = self.default_outline_color
+            luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+            text_color = '#000000' if luminance > 160 else '#f3f6fb'
+            self.default_outline_color_button.setStyleSheet(
+                f"QPushButton {{ background-color: {color.name()}; color: {text_color}; border: 1px solid #1f2b36; border-radius: 8px; padding: 6px 10px; }}"
+                " QPushButton:hover { border-color: #3a9bff; }"
+            )
+            
+        def _choose_default_outline_color():
+            color = QColorDialog.getColor(self.default_outline_color, self, "Select Default Outline Color")
+            if color.isValid():
+                self.default_outline_color = color
+                _update_default_outline_color_button_ui()
+                
+        self.default_outline_color_button.clicked.connect(_choose_default_outline_color)
+        _update_default_outline_color_button_ui()
+        def_vbox.addWidget(self._make_option_row(
+            "Default Outline Color", "Standard color for text outlines.",
+            self.default_outline_color_button))
 
         layout.addWidget(def_card)
 
@@ -1450,6 +1486,10 @@ class SettingsCenterDialog(QDialog):
         gen_cfg['default_font_family'] = self.default_font_combo.currentText()
         gen_cfg['default_font_size'] = self.default_font_size_spin.value()
         gen_cfg['default_font_bold'] = bool(self.default_font_bold_checkbox.isChecked())
+
+        typeset_cfg = SETTINGS.setdefault('typeset', {})
+        typeset_cfg['outline_enabled'] = bool(self.default_outline_checkbox.isChecked())
+        typeset_cfg['outline_color'] = self.default_outline_color.name()
 
         ec_cfg = SETTINGS.setdefault('emergency_close', {})
         action_map_reverse = {"Open URL": "url", "Launch Application": "app", "Focus Existing Window": "focus"}

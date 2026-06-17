@@ -1,4 +1,4 @@
-﻿# Manga OCR & Typeset Tool v14.8.2
+# Manga OCR & Typeset Tool v14.8.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -153,21 +153,46 @@ def default_settings() -> dict:
 
 
 def save_settings(settings: dict, path: str = SETTINGS_PATH):
-    tmp_path = path + '.tmp'
+    """Save settings to disk using an atomic write via a temp file in the
+    system temp directory.  Writing the temp file outside the project folder
+    avoids the Windows ACL-inheritance problem where newly-created files
+    inside the project directory don't receive the owner's FullControl ACE.
+    """
+    import time
+    import tempfile
+    tmp_fd = None
+    tmp_path = None
     try:
         # Encrypt API keys before writing to disk
         encrypted = encrypt_settings_keys(settings)
-        with open(tmp_path, 'w', encoding='utf-8') as fh:
+
+        # Write to a temp file in the system temp directory first
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix='.tmp', prefix='manga_settings_')
+        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as fh:
+            tmp_fd = None  # fdopen takes ownership
             json.dump(encrypted, fh, ensure_ascii=False, indent=2)
-        if os.path.exists(path):
+            fh.flush()
+            os.fsync(fh.fileno())
+
+        # shutil.move works across drives and handles the rename
+        max_retries = 10
+        for i in range(max_retries):
             try:
-                os.remove(path)
-            except Exception:
-                pass
-        os.replace(tmp_path, path)
+                shutil.move(tmp_path, path)
+                tmp_path = None  # successfully moved
+                break
+            except Exception as e:
+                if i == max_retries - 1:
+                    raise e
+                time.sleep(0.1)
     except Exception as e:
         try:
-            if os.path.exists(tmp_path):
+            if tmp_fd is not None:
+                os.close(tmp_fd)
+        except Exception:
+            pass
+        try:
+            if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except Exception:
             pass
@@ -204,13 +229,31 @@ def _migrate_openrouter_key(settings: dict) -> None:
 
 
 def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
+    import time
     try:
         if not os.path.exists(path):
             s = default_settings()
             save_settings(s, path)
             return s
-        with open(path, 'r', encoding='utf-8') as fh:
-            data = json.load(fh)
+            
+        data = None
+        max_retries = 10
+        for i in range(max_retries):
+            try:
+                with open(path, 'r', encoding='utf-8') as fh:
+                    data = json.load(fh)
+                break
+            except PermissionError as e:
+                if i == max_retries - 1:
+                    raise e
+                time.sleep(0.1)
+            except Exception:
+                if i == max_retries - 1:
+                    # Let other exceptions (like json parse errors) fall through
+                    with open(path, 'r', encoding='utf-8') as fh:
+                        data = json.load(fh)
+                else:
+                    time.sleep(0.1)
 
         # Decrypt API keys after reading from disk
         if isinstance(data, dict):

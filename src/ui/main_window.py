@@ -1,4 +1,4 @@
-﻿# Manga OCR & Typeset Tool v14.8.2
+# Manga OCR & Typeset Tool v14.8.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -406,6 +406,7 @@ class MangaOCRApp(QMainWindow):
         self.typeset_areas = []
         self.detected_panels = []
         self.selected_typeset_area = None
+        self.backup_typeset_settings = None
         self.redo_stack = []
         # --- Feature #1: Snapshot-based Undo/Redo History ---
         self._undo_history = []       # list of {'label': str, 'snapshot': [payload_dict]}
@@ -2346,6 +2347,11 @@ class MangaOCRApp(QMainWindow):
     def _sync_typeset_controls_from_selection(self):
         area = self.selected_typeset_area
         if not area:
+            if getattr(self, 'backup_typeset_settings', None) is not None:
+                self._apply_typeset_settings(self.backup_typeset_settings)
+                self.backup_typeset_settings = None
+            else:
+                self._apply_typeset_defaults()
             return
 
         # Synchronize color
@@ -2455,19 +2461,24 @@ class MangaOCRApp(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(18)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(14)
 
+        # ── Defaults card ──
         defaults_group = QGroupBox("Defaults")
-        defaults_layout = QHBoxLayout(defaults_group)
-        defaults_layout.setSpacing(12)
+        defaults_layout = QVBoxLayout(defaults_group)
+        defaults_layout.setContentsMargins(12, 14, 12, 12)
+        defaults_layout.setSpacing(10)
+
         defaults_description = QLabel("Save your current typography to reuse it on future text areas or restore the previously stored default.")
         defaults_description.setWordWrap(True)
-        defaults_layout.addWidget(defaults_description, 1)
+        defaults_description.setStyleSheet("color: #8fa6c5; font-size: 8.5pt;")
+        defaults_layout.addWidget(defaults_description)
+
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(8)
         self.save_typeset_defaults_button = QPushButton("Save Current")
@@ -2481,68 +2492,70 @@ class MangaOCRApp(QMainWindow):
         defaults_layout.addLayout(actions_layout)
         layout.addWidget(defaults_group)
 
+        # ── Typography card ──
         font_group = QGroupBox("Typography")
         font_layout = QGridLayout(font_group)
-        font_layout.setHorizontalSpacing(12)
+        font_layout.setContentsMargins(12, 14, 12, 12)
+        font_layout.setHorizontalSpacing(10)
         font_layout.setVerticalSpacing(10)
 
         font_layout.addWidget(QLabel("Font Group"), 0, 0)
-        group_row = QHBoxLayout()
-        group_row.setSpacing(6)
         self.font_group_combo = QComboBox()
-        self.font_group_combo.setMinimumWidth(180)
         self.font_group_combo.addItem("All")
         for group_name in getattr(self, 'font_groups', {}).keys():
             self.font_group_combo.addItem(group_name)
         self.font_group_combo.currentTextChanged.connect(lambda txt: self._on_font_group_changed(txt))
-        group_row.addWidget(self.font_group_combo, 1)
-        self.add_group_btn = QPushButton("New Group")
+        font_layout.addWidget(self.font_group_combo, 0, 1)
+
+        group_btn_layout = QHBoxLayout()
+        group_btn_layout.setSpacing(6)
+        self.add_group_btn = QPushButton("New")
         self.add_group_btn.setToolTip("Create a new font group.")
         self.add_group_btn.clicked.connect(self._on_add_font_group_clicked)
-        group_row.addWidget(self.add_group_btn)
+        group_btn_layout.addWidget(self.add_group_btn)
         self.remove_group_btn = QPushButton("Delete")
         self.remove_group_btn.setToolTip("Remove the selected font group.")
         self.remove_group_btn.clicked.connect(self._on_remove_font_group_clicked)
-        group_row.addWidget(self.remove_group_btn)
+        group_btn_layout.addWidget(self.remove_group_btn)
         self.add_font_to_group_btn = QPushButton("Add Font")
         self.add_font_to_group_btn.setToolTip("Add a font to the selected group.")
         self.add_font_to_group_btn.clicked.connect(self._on_add_font_to_group_clicked)
-        group_row.addWidget(self.add_font_to_group_btn)
-        group_row.addStretch(1)
-        font_layout.addLayout(group_row, 0, 1, 1, 2)
+        group_btn_layout.addWidget(self.add_font_to_group_btn)
+        font_layout.addLayout(group_btn_layout, 1, 1)
 
-        font_layout.addWidget(QLabel("Family"), 1, 0)
+        font_layout.addWidget(QLabel("Family"), 2, 0)
         self.font_dropdown = QComboBox()
-        self.font_dropdown.setMinimumWidth(240)
         from src.ui.widgets import FontDelegate
         self.font_dropdown.setItemDelegate(FontDelegate(self.font_manager, self.font_dropdown))
         self.font_dropdown.currentTextChanged.connect(self.on_typeset_font_change)
-        font_layout.addWidget(self.font_dropdown, 1, 1, 1, 2)
-
-        font_layout.addWidget(QLabel("Preview"), 2, 0)
-        self.font_preview_label = QLabel("AaBb123")
-        self.font_preview_label.setAlignment(Qt.AlignCenter)
-        self.font_preview_label.setMinimumHeight(64)
-        self.font_preview_label.setStyleSheet("border: 1px solid #1f2b3b; border-radius: 8px; padding: 12px; background-color: #161f2b;")
-        font_layout.addWidget(self.font_preview_label, 2, 1, 1, 2)
+        font_layout.addWidget(self.font_dropdown, 2, 1)
 
         self.import_font_button = QPushButton("Import Font...")
         self.import_font_button.setToolTip("Add new font files from your computer (TTF, OTF, TTC, OTC).")
         self.import_font_button.clicked.connect(self.import_font)
-        font_layout.addWidget(self.import_font_button, 3, 1, 1, 2)
-        
-        self.auto_font_checkbox = QCheckBox("Enable Auto-Font (Smart Detection)")
+        font_layout.addWidget(self.import_font_button, 3, 1)
+
+        font_layout.addWidget(QLabel("Preview"), 4, 0)
+        self.font_preview_label = QLabel("AaBb123")
+        self.font_preview_label.setAlignment(Qt.AlignCenter)
+        self.font_preview_label.setMinimumHeight(56)
+        self.font_preview_label.setStyleSheet("border: 1px solid #1f2b3b; border-radius: 8px; padding: 10px; background-color: #161f2b;")
+        font_layout.addWidget(self.font_preview_label, 4, 1)
+
+        self.auto_font_checkbox = QCheckBox("Enable Auto-Font (Smart)")
         self.auto_font_checkbox.setToolTip("Automatically selects the best font based on the translated text.")
         auto_font_enabled = SETTINGS.get('typeset', {}).get('auto_font_enabled', False)
         self.auto_font_checkbox.setChecked(auto_font_enabled)
         self.auto_font_checkbox.toggled.connect(self._on_auto_font_toggled)
-        font_layout.addWidget(self.auto_font_checkbox, 4, 0, 1, 3)
+        font_layout.addWidget(self.auto_font_checkbox, 5, 0, 1, 2)
         
         layout.addWidget(font_group)
 
+        # ── Appearance card ──
         appearance_group = QGroupBox("Appearance")
         appearance_layout = QGridLayout(appearance_group)
-        appearance_layout.setHorizontalSpacing(12)
+        appearance_layout.setContentsMargins(12, 14, 12, 12)
+        appearance_layout.setHorizontalSpacing(10)
         appearance_layout.setVerticalSpacing(10)
 
         appearance_layout.addWidget(QLabel("Style"), 0, 0)
@@ -2564,34 +2577,49 @@ class MangaOCRApp(QMainWindow):
         color_row = QHBoxLayout()
         color_row.setSpacing(6)
         self.color_button = QPushButton("Pick Color")
-        self.color_button.setMaximumWidth(160)
+        self.color_button.setMaximumWidth(120)
         self.color_button.clicked.connect(self.choose_color)
-        self.color_button.setToolTip("Pick the colour used for new text areas.")
+        self.color_button.setToolTip("Pick the color used for new text areas.")
         color_row.addWidget(self.color_button)
         color_row.addStretch(1)
         appearance_layout.addLayout(color_row, 1, 1)
 
         appearance_layout.addWidget(QLabel("Outline"), 2, 0)
-        outline_row = QHBoxLayout()
-        outline_row.setSpacing(6)
+        outline_toggle_row = QHBoxLayout()
+        outline_toggle_row.setSpacing(6)
         self.outline_toggle = self._create_tool_toggle(self._make_outline_icon(), "Toggle outline")
         self.outline_toggle.toggled.connect(self._on_typeset_outline_changed)
-        outline_row.addWidget(self.outline_toggle)
+        outline_toggle_row.addWidget(self.outline_toggle)
+        outline_toggle_row.addStretch(1)
+        appearance_layout.addLayout(outline_toggle_row, 2, 1)
+
+        appearance_layout.addWidget(QLabel("Outline Color"), 3, 0)
+        outline_color_row = QHBoxLayout()
+        outline_color_row.setSpacing(6)
         self.outline_color_button = QPushButton("Outline Color")
-        self.outline_color_button.setMaximumWidth(160)
+        self.outline_color_button.setMaximumWidth(120)
         self.outline_color_button.clicked.connect(self.choose_outline_color)
-        outline_row.addWidget(self.outline_color_button)
+        outline_color_row.addWidget(self.outline_color_button)
+        outline_color_row.addStretch(1)
+        appearance_layout.addLayout(outline_color_row, 3, 1)
+
+        appearance_layout.addWidget(QLabel("Outline Width"), 4, 0)
+        outline_width_row = QHBoxLayout()
+        outline_width_row.setSpacing(6)
         self.outline_width_spin = QDoubleSpinBox()
         self.outline_width_spin.setRange(0.0, 12.0)
         self.outline_width_spin.setDecimals(1)
         self.outline_width_spin.setSingleStep(0.1)
         self.outline_width_spin.setSuffix(" px")
+        self.outline_width_spin.setMaximumWidth(100)
         self.outline_width_spin.valueChanged.connect(self._on_outline_width_changed)
-        outline_row.addWidget(self.outline_width_spin)
-        outline_row.addStretch(1)
-        appearance_layout.addLayout(outline_row, 2, 1)
+        outline_width_row.addWidget(self.outline_width_spin)
+        outline_width_row.addStretch(1)
+        appearance_layout.addLayout(outline_width_row, 4, 1)
+
         layout.addWidget(appearance_group)
 
+        # ── Gradient card ──
         gradient_group = QGroupBox("Gradient Coloring")
         gradient_group.setCheckable(True)
         self.gradient_group = gradient_group
@@ -2607,14 +2635,15 @@ class MangaOCRApp(QMainWindow):
         self.grad_angle_spin.setRange(0.0, 360.0)
         self.grad_angle_spin.setSingleStep(15.0)
         self.grad_angle_spin.setSuffix(" °")
+        self.grad_angle_spin.setMaximumWidth(100)
         self.grad_angle_spin.valueChanged.connect(self._on_typeset_gradient_changed)
         angle_row.addWidget(self.grad_angle_spin)
+        angle_row.addStretch(1)
         grad_layout.addLayout(angle_row)
         
         grad_layout.addWidget(QLabel("Colors:"))
         self.grad_color_list = QListWidget()
         self.grad_color_list.setFixedHeight(80)
-        # Apply style to list items for color preview
         grad_layout.addWidget(self.grad_color_list)
         
         btn_row = QHBoxLayout()
@@ -2628,9 +2657,11 @@ class MangaOCRApp(QMainWindow):
         
         layout.addWidget(gradient_group)
 
+        # ── Spacing & Size card ──
         spacing_group = QGroupBox("Spacing & Size")
         spacing_layout = QGridLayout(spacing_group)
-        spacing_layout.setHorizontalSpacing(12)
+        spacing_layout.setContentsMargins(12, 14, 12, 12)
+        spacing_layout.setHorizontalSpacing(10)
         spacing_layout.setVerticalSpacing(10)
 
         spacing_layout.addWidget(QLabel("Font Size"), 0, 0)
@@ -2639,6 +2670,7 @@ class MangaOCRApp(QMainWindow):
         self.font_size_spin.setDecimals(1)
         self.font_size_spin.setSingleStep(1.0)
         self.font_size_spin.setSuffix(" pt")
+        self.font_size_spin.setMaximumWidth(100)
         self.font_size_spin.valueChanged.connect(self._on_typeset_font_size_changed)
         self.font_size_spin.setToolTip("Adjust the point size for new text areas.")
         spacing_layout.addWidget(self.font_size_spin, 0, 1)
@@ -2650,15 +2682,17 @@ class MangaOCRApp(QMainWindow):
         self.line_spacing_input.setRange(0.6, 3.0)
         self.line_spacing_input.setDecimals(2)
         self.line_spacing_input.setSingleStep(0.05)
+        self.line_spacing_input.setMaximumWidth(100)
         self.line_spacing_input.setToolTip("Adjust the spacing between lines (0.60x - 3.00x).")
         self.line_spacing_input.valueChanged.connect(self._on_typeset_line_spacing_changed)
-        line_row.addWidget(self.line_spacing_input, 1)
+        line_row.addWidget(self.line_spacing_input)
         self.line_spacing_value_label = QLabel("1.00x")
-        self.line_spacing_value_label.setMinimumWidth(60)
+        self.line_spacing_value_label.setMinimumWidth(50)
         line_row.addWidget(self.line_spacing_value_label)
+        line_row.addStretch(1)
         spacing_layout.addLayout(line_row, 1, 1)
 
-        spacing_layout.addWidget(QLabel("Character Spacing"), 2, 0)
+        spacing_layout.addWidget(QLabel("Char Spacing"), 2, 0)
         char_row = QHBoxLayout()
         char_row.setSpacing(8)
         self.char_spacing_input = QDoubleSpinBox()
@@ -2666,18 +2700,22 @@ class MangaOCRApp(QMainWindow):
         self.char_spacing_input.setDecimals(0)
         self.char_spacing_input.setSingleStep(1.0)
         self.char_spacing_input.setSuffix(" %")
+        self.char_spacing_input.setMaximumWidth(100)
         self.char_spacing_input.setToolTip("Adjust spacing between characters (percentage).")
         self.char_spacing_input.valueChanged.connect(self._on_typeset_char_spacing_changed)
-        char_row.addWidget(self.char_spacing_input, 1)
+        char_row.addWidget(self.char_spacing_input)
         self.char_spacing_value_label = QLabel("100%")
-        self.char_spacing_value_label.setMinimumWidth(60)
+        self.char_spacing_value_label.setMinimumWidth(50)
         char_row.addWidget(self.char_spacing_value_label)
+        char_row.addStretch(1)
         spacing_layout.addLayout(char_row, 2, 1)
         layout.addWidget(spacing_group)
 
+        # ── Layout card ──
         layout_group = QGroupBox("Layout")
         layout_grid = QGridLayout(layout_group)
-        layout_grid.setHorizontalSpacing(12)
+        layout_grid.setContentsMargins(12, 14, 12, 12)
+        layout_grid.setHorizontalSpacing(10)
         layout_grid.setVerticalSpacing(10)
 
         layout_grid.addWidget(QLabel("Alignment"), 0, 0)
@@ -2714,10 +2752,11 @@ class MangaOCRApp(QMainWindow):
         layout_grid.addLayout(orientation_row, 1, 1)
         layout.addWidget(layout_group)
 
-        # Warp & Curve Group (NEW)
+        # ── Warp & Curve card ──
         warp_group = QGroupBox("Text Warp & Curve")
         warp_layout = QGridLayout(warp_group)
-        warp_layout.setHorizontalSpacing(12)
+        warp_layout.setContentsMargins(12, 14, 12, 12)
+        warp_layout.setHorizontalSpacing(10)
         warp_layout.setVerticalSpacing(10)
 
         warp_layout.addWidget(QLabel("Warp Style"), 0, 0)
@@ -2732,6 +2771,7 @@ class MangaOCRApp(QMainWindow):
             "Wavy",
             "Jagged"
         ])
+        self.warp_style_combo.setMaximumWidth(160)
         self.warp_style_combo.currentTextChanged.connect(self._on_warp_style_changed)
         warp_layout.addWidget(self.warp_style_combo, 0, 1)
 
@@ -2740,11 +2780,13 @@ class MangaOCRApp(QMainWindow):
         self.warp_intensity_slider = QSlider(Qt.Horizontal)
         self.warp_intensity_slider.setRange(0, 100)
         self.warp_intensity_slider.setValue(20)
+        self.warp_intensity_slider.setMaximumWidth(120)
         self.warp_intensity_slider.valueChanged.connect(self._on_warp_intensity_changed)
         intensity_row.addWidget(self.warp_intensity_slider)
         self.warp_intensity_value_label = QLabel("20.0")
         self.warp_intensity_value_label.setMinimumWidth(40)
         intensity_row.addWidget(self.warp_intensity_value_label)
+        intensity_row.addStretch(1)
         warp_layout.addLayout(intensity_row, 1, 1)
 
         warp_layout.addWidget(QLabel("Curve Handles"), 2, 0)
@@ -2756,6 +2798,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(warp_group)
 
+        # ── Preview card ──
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_layout.setContentsMargins(12, 10, 12, 12)
@@ -2766,7 +2809,7 @@ class MangaOCRApp(QMainWindow):
         preview_layout.addWidget(self.typeset_preview_label)
         layout.addWidget(preview_group)
 
-        # Recent Translations Group (Feature #5)
+        # ── Recent Translations card ──
         recent_group = QGroupBox("Recent Translations")
         recent_layout = QVBoxLayout(recent_group)
         recent_layout.setContentsMargins(12, 10, 12, 12)
@@ -6851,6 +6894,11 @@ class MangaOCRApp(QMainWindow):
                 self._sync_cleanup_controls_from_selection()
                 self._sync_typeset_controls_from_selection()
             return
+
+        # Backup settings if we are about to overwrite the panel with a selection
+        if getattr(self, 'backup_typeset_settings', None) is None and area is not None and notify:
+            self.backup_typeset_settings = self._collect_current_typeset_defaults()
+
         self.selected_typeset_area = area
         if notify:
             self._sync_cleanup_controls_from_selection()
@@ -7863,6 +7911,10 @@ class MangaOCRApp(QMainWindow):
             'gradient_colors': [self.grad_color_list.item(i).text() for i in range(self.grad_color_list.count())] if getattr(self,'grad_color_list',None) else ["#FF0000", "#0000FF"],
         }
 
+    def _update_typeset_defaults_from_panel(self):
+        if getattr(self, 'selected_typeset_area', None) is None:
+            self.typeset_defaults = self._collect_current_typeset_defaults()
+
     def _handle_save_typeset_defaults(self):
         self.typeset_defaults = self._collect_current_typeset_defaults()
         status = self.statusBar() if hasattr(self, 'statusBar') else None
@@ -7893,39 +7945,38 @@ class MangaOCRApp(QMainWindow):
         if getattr(self, 'char_spacing_value_label', None):
             self.char_spacing_value_label.setText(f"{spacing:.0f}%")
 
-    def _apply_typeset_defaults(self):
-        if not getattr(self, 'font_dropdown', None):
+    def _apply_typeset_settings(self, settings_dict):
+        if not settings_dict or not getattr(self, 'font_dropdown', None):
             return
-        defaults = self.typeset_defaults or self._create_initial_typeset_defaults()
-        preferred_display = defaults.get('font_display')
+        preferred_display = settings_dict.get('font_display')
         self._populate_typeset_font_dropdown(preferred_display)
 
         if getattr(self, 'font_size_spin', None):
             with QSignalBlocker(self.font_size_spin):
-                self.font_size_spin.setValue(float(defaults.get('font_size', 24.0)))
+                self.font_size_spin.setValue(float(settings_dict.get('font_size', 24.0)))
         if getattr(self, 'bold_toggle', None):
             with QSignalBlocker(self.bold_toggle):
-                self.bold_toggle.setChecked(bool(defaults.get('bold', False)))
+                self.bold_toggle.setChecked(bool(settings_dict.get('bold', False)))
         if getattr(self, 'italic_toggle', None):
             with QSignalBlocker(self.italic_toggle):
-                self.italic_toggle.setChecked(bool(defaults.get('italic', False)))
+                self.italic_toggle.setChecked(bool(settings_dict.get('italic', False)))
         if getattr(self, 'underline_toggle', None):
             with QSignalBlocker(self.underline_toggle):
-                self.underline_toggle.setChecked(bool(defaults.get('underline', False)))
-        self._set_line_spacing_value(defaults.get('line_spacing', 1.1))
-        self._set_char_spacing_value(defaults.get('char_spacing', 100.0))
+                self.underline_toggle.setChecked(bool(settings_dict.get('underline', False)))
+        self._set_line_spacing_value(settings_dict.get('line_spacing', 1.1))
+        self._set_char_spacing_value(settings_dict.get('char_spacing', 100.0))
 
-        self.typeset_alignment = defaults.get('alignment', 'center')
-        self.typeset_orientation = defaults.get('orientation', 'horizontal')
+        self.typeset_alignment = settings_dict.get('alignment', 'center')
+        self.typeset_orientation = settings_dict.get('orientation', 'horizontal')
         self._update_alignment_buttons()
         self._update_orientation_buttons()
 
-        self.typeset_outline_enabled = bool(defaults.get('outline', False))
+        self.typeset_outline_enabled = bool(settings_dict.get('outline', False))
         if getattr(self, 'outline_toggle', None):
             with QSignalBlocker(self.outline_toggle):
                 self.outline_toggle.setChecked(self.typeset_outline_enabled)
 
-        outline_width = defaults.get('outline_width')
+        outline_width = settings_dict.get('outline_width')
         if outline_width is None:
             outline_width = SETTINGS.get('typeset', {}).get('outline_width', SETTINGS.get('typeset', {}).get('outline_thickness', self.typeset_outline_width))
         try:
@@ -7938,30 +7989,30 @@ class MangaOCRApp(QMainWindow):
             with QSignalBlocker(self.outline_width_spin):
                 self.outline_width_spin.setValue(self.typeset_outline_width)
 
-        outline_color_value = defaults.get('outline_color')
+        outline_color_value = settings_dict.get('outline_color')
         if outline_color_value is None:
             outline_color_value = SETTINGS.get('typeset', {}).get('outline_color', '#000000')
         outline_color = QColor(outline_color_value) if outline_color_value else QColor('#000000')
         if not outline_color.isValid():
             outline_color = QColor('#000000')
         self.typeset_outline_color = outline_color
-        style_val = (defaults.get('outline_style') or 'stroke')
+        style_val = (settings_dict.get('outline_style') or 'stroke')
         if isinstance(style_val, str):
             style_val = style_val.lower()
         self.typeset_outline_style = style_val if style_val in ('stroke', 'glow') else 'stroke'
         self._update_outline_color_button()
         self._refresh_outline_controls_enabled()
 
-        color_value = defaults.get('color', '#000000')
+        color_value = settings_dict.get('color', '#000000')
         color_obj = QColor(color_value)
         if color_obj.isValid():
             self.typeset_color = color_obj
         self._update_color_button()
         
         # Gradient defaults
-        self.typeset_gradient_enabled = bool(defaults.get('gradient_enabled', False))
-        self.typeset_gradient_angle = float(defaults.get('gradient_angle', 0.0))
-        self.typeset_gradient_colors = list(defaults.get('gradient_colors', ["#FF0000", "#0000FF"]))
+        self.typeset_gradient_enabled = bool(settings_dict.get('gradient_enabled', False))
+        self.typeset_gradient_angle = float(settings_dict.get('gradient_angle', 0.0))
+        self.typeset_gradient_colors = list(settings_dict.get('gradient_colors', ["#FF0000", "#0000FF"]))
         if getattr(self, 'gradient_group', None):
             with QSignalBlocker(self.gradient_group):
                 self.gradient_group.setChecked(self.typeset_gradient_enabled)
@@ -7973,6 +8024,10 @@ class MangaOCRApp(QMainWindow):
 
         self.typeset_font = self._build_current_font()
         self._update_typeset_preview()
+
+    def _apply_typeset_defaults(self):
+        defaults = self.typeset_defaults or self._create_initial_typeset_defaults()
+        self._apply_typeset_settings(defaults)
 
     def _build_current_font(self) -> QFont:
         display = None
@@ -8000,17 +8055,20 @@ class MangaOCRApp(QMainWindow):
     def _on_typeset_font_size_changed(self, value):
         self.typeset_font = self._build_current_font()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _on_typeset_line_spacing_changed(self, value):
         self._set_line_spacing_value(value)
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _on_typeset_char_spacing_changed(self, value):
         self._set_char_spacing_value(value)
         self.typeset_font = self._build_current_font()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _update_recent_translations_list(self):
@@ -8066,12 +8124,15 @@ class MangaOCRApp(QMainWindow):
     def _on_typeset_style_changed(self, *_):
         self.typeset_font = self._build_current_font()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _on_typeset_outline_changed(self, checked):
         self.typeset_outline_enabled = bool(checked)
         self._refresh_outline_controls_enabled()
         self._persist_typeset_preferences()
+        self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _on_typeset_gradient_toggled(self, checked):
@@ -8085,6 +8146,7 @@ class MangaOCRApp(QMainWindow):
             self.typeset_gradient_angle = self.grad_angle_spin.value()
 
         self._persist_typeset_preferences()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
         
         # Apply to selected area if any
@@ -8136,6 +8198,7 @@ class MangaOCRApp(QMainWindow):
         self.typeset_alignment = mode
         self._update_alignment_buttons()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _on_font_group_changed(self, group_name: str):
@@ -8267,6 +8330,7 @@ class MangaOCRApp(QMainWindow):
         self.typeset_orientation = mode
         self._update_orientation_buttons()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def _update_alignment_buttons(self):
@@ -8334,13 +8398,15 @@ class MangaOCRApp(QMainWindow):
             self.outline_width_spin.setEnabled(enabled)
 
     def _on_outline_width_changed(self, value):
-        try:
-            width = float(value)
-        except Exception:
-            width = self.typeset_outline_width
-        self.typeset_outline_width = max(0.0, min(width, 12.0))
-        self._persist_typeset_preferences()
-        self._update_typeset_preview()
+            try:
+                width = float(value)
+            except Exception:
+                width = self.typeset_outline_width
+            self.typeset_outline_width = max(0.0, min(width, 12.0))
+            self._persist_typeset_preferences()
+            self._apply_active_typeset_to_selected()
+            self._update_typeset_defaults_from_panel()
+            self._update_typeset_preview()
 
     def _persist_typeset_preferences(self):
         cfg = SETTINGS.setdefault('typeset', {})
@@ -8440,6 +8506,7 @@ class MangaOCRApp(QMainWindow):
             return
         self.typeset_font = self._build_current_font()
         self._apply_active_typeset_to_selected()
+        self._update_typeset_defaults_from_panel()
         self._update_typeset_preview()
 
     def import_font(self):
@@ -8485,6 +8552,8 @@ class MangaOCRApp(QMainWindow):
         if color.isValid():
             self.typeset_color = color
             self._update_color_button()
+            self._apply_active_typeset_to_selected()
+            self._update_typeset_defaults_from_panel()
             self._update_typeset_preview()
 
     def choose_outline_color(self):
@@ -8494,6 +8563,8 @@ class MangaOCRApp(QMainWindow):
             self.typeset_outline_color = color
             self._update_outline_color_button()
             self._persist_typeset_preferences()
+            self._apply_active_typeset_to_selected()
+            self._update_typeset_defaults_from_panel()
             self._update_typeset_preview()
 
     def unzoom_coords(self, selection_obj, as_point=False):
@@ -9398,7 +9469,7 @@ class MangaOCRApp(QMainWindow):
         painter.end()
         return expanded
 
-    def _render_text_glyph(self, painter: QPainter, char: str, font: QFont, color: QColor | str, position: QPointF, area=None):
+    def _render_text_glyph(self, painter: QPainter, char: str, font: QFont, color: QColor | str, position: QPointF, area=None, draw_mode='both'):
         if not char:
             return
         if char.isspace():
@@ -9412,68 +9483,75 @@ class MangaOCRApp(QMainWindow):
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         
         # --- 1. Vector Drop Shadow ---
-        if area is not None and getattr(area, 'shadow_enabled', False):
-            s_color = QColor(getattr(area, 'shadow_color', '#000000'))
-            s_blur = float(getattr(area, 'shadow_blur', 4.0))
-            s_opacity = float(getattr(area, 'shadow_opacity', 0.7))
-            s_dx = float(getattr(area, 'shadow_offset_x', 3.0))
-            s_dy = float(getattr(area, 'shadow_offset_y', 3.0))
-            s_color.setAlphaF(s_opacity)
-            
-            shadow_pos = position + QPointF(s_dx, s_dy)
-            shadow_path = QPainterPath()
-            shadow_path.addText(shadow_pos, font, char)
-            
-            if s_blur > 0.0:
-                steps = 5
-                for i in range(steps, 0, -1):
-                    sw = s_blur * (i / steps) * 2.0
-                    op = s_opacity * (1.0 - (i / steps)) * 0.5
-                    c = QColor(s_color)
-                    c.setAlphaF(op)
-                    spen = QPen(c)
-                    spen.setWidthF(sw)
-                    spen.setJoinStyle(Qt.RoundJoin)
-                    spen.setCapStyle(Qt.RoundCap)
-                    painter.strokePath(shadow_path, spen)
-                    
-            painter.fillPath(shadow_path, QBrush(s_color))
-            
-        # --- 2. Outlines & Concentric Outlines ---
-        if area is not None:
-            layers = getattr(area, 'outline_layers', [])
-            if layers:
-                sorted_layers = sorted(layers, key=lambda x: float(x.get('width', 2.0)), reverse=True)
-                for layer in sorted_layers:
-                    w = max(0.1, float(layer.get('width', 2.0)))
-                    c_str = layer.get('color', '#000000')
-                    c = QColor(c_str)
-                    if not c.isValid():
-                        c = QColor('#000000')
-                    pen = QPen(c)
-                    pen.setWidthF(w)
-                    pen.setJoinStyle(Qt.RoundJoin)
-                    pen.setCapStyle(Qt.RoundCap)
-                    pen.setCosmetic(True)
-                    painter.strokePath(path, pen)
-            elif getattr(area, 'has_text_outline', None) and area.has_text_outline():
-                outline_color = area.get_text_outline_color()
-                if not outline_color.isValid():
-                    outline_color = self._outline_for_text_color(qcolor)
-                outline_pen = QPen(outline_color)
-                width = max(0.2, float(area.get_text_outline_width()))
-                style = area.get_text_outline_style()
-                if style == 'glow':
-                    outline_color.setAlpha(max(80, min(255, int(outline_color.alpha() * 0.7))))
-                    outline_pen.setColor(outline_color)
-                    outline_pen.setWidthF(width * 1.6)
-                else:
-                    outline_pen.setWidthF(width)
-                outline_pen.setJoinStyle(Qt.RoundJoin)
-                outline_pen.setCapStyle(Qt.RoundCap)
-                outline_pen.setCosmetic(True)
-                painter.strokePath(path, outline_pen)
+        if draw_mode in ('both', 'outline'):
+            if area is not None and getattr(area, 'shadow_enabled', False):
+                s_color = QColor(getattr(area, 'shadow_color', '#000000'))
+                s_blur = float(getattr(area, 'shadow_blur', 4.0))
+                s_opacity = float(getattr(area, 'shadow_opacity', 0.7))
+                s_dx = float(getattr(area, 'shadow_offset_x', 3.0))
+                s_dy = float(getattr(area, 'shadow_offset_y', 3.0))
+                s_color.setAlphaF(s_opacity)
                 
+                shadow_pos = position + QPointF(s_dx, s_dy)
+                shadow_path = QPainterPath()
+                shadow_path.addText(shadow_pos, font, char)
+                
+                if s_blur > 0.0:
+                    steps = 5
+                    for i in range(steps, 0, -1):
+                        sw = s_blur * (i / steps) * 2.0
+                        op = s_opacity * (1.0 - (i / steps)) * 0.5
+                        c = QColor(s_color)
+                        c.setAlphaF(op)
+                        spen = QPen(c)
+                        spen.setWidthF(sw)
+                        spen.setJoinStyle(Qt.RoundJoin)
+                        spen.setCapStyle(Qt.RoundCap)
+                        painter.strokePath(shadow_path, spen)
+                        
+                painter.fillPath(shadow_path, QBrush(s_color))
+                
+            # --- 2. Outlines & Concentric Outlines ---
+            if area is not None:
+                layers = getattr(area, 'outline_layers', [])
+                if layers:
+                    sorted_layers = sorted(layers, key=lambda x: float(x.get('width', 2.0)), reverse=True)
+                    for layer in sorted_layers:
+                        w = max(0.1, float(layer.get('width', 2.0)))
+                        c_str = layer.get('color', '#000000')
+                        c = QColor(c_str)
+                        if not c.isValid():
+                            c = QColor('#000000')
+                        pen = QPen(c)
+                        pen.setWidthF(w)
+                        pen.setJoinStyle(Qt.RoundJoin)
+                        pen.setCapStyle(Qt.RoundCap)
+                        painter.strokePath(path, pen)
+                elif getattr(area, 'has_text_outline', None) and area.has_text_outline():
+                    use_auto_color = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+                    area_outline_color = area.get_text_outline_color()
+                    if use_auto_color and (area_outline_color.name() == '#000000' or not area_outline_color.isValid()):
+                        outline_color = self._outline_for_text_color(qcolor)
+                    else:
+                        outline_color = area_outline_color
+                        if not outline_color.isValid():
+                            outline_color = self._outline_for_text_color(qcolor)
+                    outline_pen = QPen(outline_color)
+                    width = max(0.2, float(area.get_text_outline_width()))
+                    style = area.get_text_outline_style()
+                    if style == 'glow':
+                        outline_color.setAlpha(max(80, min(255, int(outline_color.alpha() * 0.7))))
+                        outline_pen.setColor(outline_color)
+                        outline_pen.setWidthF(width * 1.6)
+                    else:
+                        outline_pen.setWidthF(width)
+                    outline_pen.setJoinStyle(Qt.RoundJoin)
+                    outline_pen.setCapStyle(Qt.RoundCap)
+                    painter.strokePath(path, outline_pen)
+                    
+        if draw_mode not in ('both', 'fill'):
+            return
+            
         # --- 3. Screentone & Pattern Fill ---
         brush = QBrush(qcolor)
         if area is not None and getattr(area, 'pattern_fill_enabled', False):
@@ -9770,11 +9848,21 @@ class MangaOCRApp(QMainWindow):
                         break
             except Exception:
                 doc_color = None
+                
+            use_auto_color = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+            if use_auto_color and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor):
+                doc_color = area._auto_text_color
+                
             if doc_color is None or not getattr(doc_color, 'isValid', lambda: False)():
                 doc_color = area.get_color()
-            outline_color = area.get_text_outline_color() if hasattr(area, 'get_text_outline_color') else QColor('#000000')
-            if not outline_color.isValid():
+                
+            area_outline_color = area.get_text_outline_color() if hasattr(area, 'get_text_outline_color') else QColor('#000000')
+            if use_auto_color and (area_outline_color.name() == '#000000' or not area_outline_color.isValid()):
                 outline_color = self._outline_for_text_color(doc_color)
+            else:
+                outline_color = area_outline_color
+                if not outline_color.isValid():
+                    outline_color = self._outline_for_text_color(doc_color)
             radius = max(1, int(math.ceil(area.get_text_outline_width() if hasattr(area, 'get_text_outline_width') else 2.0)))
             try:
                 style = area.get_text_outline_style()
@@ -9908,6 +9996,8 @@ class MangaOCRApp(QMainWindow):
             start_x = rect.left() + (rect.width() - total_width) / 2.0
 
         bend = intensity
+        
+        # Pass 1: Draw shadows and outlines
         current_x = start_x
         for glyph in glyphs:
             fm = QFontMetrics(glyph['font'])
@@ -9930,7 +10020,37 @@ class MangaOCRApp(QMainWindow):
                 glyph.get('font', QFont()),
                 glyph.get('color', QColor('#000000')),
                 QPointF(-advance / 2.0, 0),
-                area
+                area,
+                draw_mode='outline'
+            )
+            painter.restore()
+            current_x += advance
+
+        # Pass 2: Draw fills
+        current_x = start_x
+        for glyph in glyphs:
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            mid_x = current_x + advance / 2.0
+            
+            t = (mid_x - start_x) / max(1.0, total_width)
+            offset_y = -4.0 * bend * t * (1.0 - t)
+            slope = -4.0 * bend * (1.0 - 2.0 * t) / max(1.0, total_width)
+            angle = math.degrees(math.atan(slope))
+            
+            painter.save()
+            painter.translate(mid_x, baseline + offset_y)
+            painter.rotate(angle)
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                glyph.get('font', QFont()),
+                glyph.get('color', QColor('#000000')),
+                QPointF(-advance / 2.0, 0),
+                area,
+                draw_mode='fill'
             )
             painter.restore()
             current_x += advance
@@ -9948,6 +10068,8 @@ class MangaOCRApp(QMainWindow):
             start_x = rect.left() + (rect.width() - total_width) / 2.0
 
         bend = intensity
+        
+        # Pass 1: Draw shadows and outlines
         current_x = start_x
         for glyph in glyphs:
             fm = QFontMetrics(glyph['font'])
@@ -9967,7 +10089,34 @@ class MangaOCRApp(QMainWindow):
                 glyph.get('font', QFont()),
                 glyph.get('color', QColor('#000000')),
                 QPointF(-advance / 2.0, 0),
-                area
+                area,
+                draw_mode='outline'
+            )
+            painter.restore()
+            current_x += advance
+
+        # Pass 2: Draw fills
+        current_x = start_x
+        for glyph in glyphs:
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            mid_x = current_x + advance / 2.0
+            
+            t = (mid_x - start_x) / max(1.0, total_width)
+            offset_y = -4.0 * bend * t * (1.0 - t)
+            
+            painter.save()
+            painter.translate(mid_x, baseline + offset_y)
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                glyph.get('font', QFont()),
+                glyph.get('color', QColor('#000000')),
+                QPointF(-advance / 2.0, 0),
+                area,
+                draw_mode='fill'
             )
             painter.restore()
             current_x += advance
@@ -9985,6 +10134,8 @@ class MangaOCRApp(QMainWindow):
             start_x = rect.left() + (rect.width() - total_width) / 2.0
 
         amplitude = intensity
+        
+        # Pass 1: Draw shadows and outlines
         current_x = start_x
         for glyph in glyphs:
             fm = QFontMetrics(glyph['font'])
@@ -10007,7 +10158,37 @@ class MangaOCRApp(QMainWindow):
                 glyph.get('font', QFont()),
                 glyph.get('color', QColor('#000000')),
                 QPointF(-advance / 2.0, 0),
-                area
+                area,
+                draw_mode='outline'
+            )
+            painter.restore()
+            current_x += advance
+
+        # Pass 2: Draw fills
+        current_x = start_x
+        for glyph in glyphs:
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            mid_x = current_x + advance / 2.0
+            
+            t = (mid_x - start_x) / max(1.0, total_width)
+            offset_y = amplitude * math.sin(3.0 * math.pi * t)
+            slope = amplitude * (3.0 * math.pi / max(1.0, total_width)) * math.cos(3.0 * math.pi * t)
+            angle = math.degrees(math.atan(slope))
+            
+            painter.save()
+            painter.translate(mid_x, baseline + offset_y)
+            painter.rotate(angle)
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                glyph.get('font', QFont()),
+                glyph.get('color', QColor('#000000')),
+                QPointF(-advance / 2.0, 0),
+                area,
+                draw_mode='fill'
             )
             painter.restore()
             current_x += advance
@@ -10035,6 +10216,7 @@ class MangaOCRApp(QMainWindow):
         cp1 = scale_point(bezier_points[0]) if len(bezier_points) > 0 else QPointF(rect.left() + rect.width() * 0.3, center_y - rect.height() * 0.2)
         cp2 = scale_point(bezier_points[1]) if len(bezier_points) > 1 else QPointF(rect.left() + rect.width() * 0.7, center_y - rect.height() * 0.2)
 
+        # Pass 1: Draw shadows and outlines
         progress = 0.0
         for glyph in glyphs:
             fm = QFontMetrics(glyph['font'])
@@ -10055,10 +10237,37 @@ class MangaOCRApp(QMainWindow):
                 glyph.get('font', QFont()),
                 glyph.get('color', QColor('#000000')),
                 QPointF(-advance / 2.0, 0),
-                area
+                area,
+                draw_mode='outline'
             )
             painter.restore()
+            progress += advance
 
+        # Pass 2: Draw fills
+        progress = 0.0
+        for glyph in glyphs:
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            t_mid = min(1.0, max(0.0, (progress + advance / 2.0) / total_width))
+            point = self._evaluate_cubic_bezier(t_mid, p0, cp1, cp2, p3)
+            tangent = self._bezier_tangent(t_mid, p0, cp1, cp2, p3)
+            angle = math.degrees(math.atan2(tangent.y(), tangent.x())) if (tangent.x() or tangent.y()) else 0.0
+
+            painter.save()
+            painter.translate(point)
+            painter.rotate(angle)
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                glyph.get('font', QFont()),
+                glyph.get('color', QColor('#000000')),
+                QPointF(-advance / 2.0, 0),
+                area,
+                draw_mode='fill'
+            )
+            painter.restore()
             progress += advance
 
     def _draw_wavy_line(self, painter, rect, glyphs, baseline, intensity, alignment, area):
@@ -10076,6 +10285,7 @@ class MangaOCRApp(QMainWindow):
         amplitude = min(rect.height() * 0.3, max(2.0, intensity))
         frequency = (2.0 * math.pi) / max(total_width, 1.0)
 
+        # Pass 1: Draw shadows and outlines
         current_x = start_x
         for glyph in glyphs:
             fm = QFontMetrics(glyph['font'])
@@ -10090,7 +10300,28 @@ class MangaOCRApp(QMainWindow):
                 glyph.get('font', QFont()),
                 glyph.get('color', QColor('#000000')),
                 QPointF(current_x, baseline + wave_offset),
-                area
+                area,
+                draw_mode='outline'
+            )
+            current_x += advance
+
+        # Pass 2: Draw fills
+        current_x = start_x
+        for glyph in glyphs:
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            mid_x = current_x + advance / 2.0
+            wave_offset = math.sin(mid_x * frequency) * amplitude
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                glyph.get('font', QFont()),
+                glyph.get('color', QColor('#000000')),
+                QPointF(current_x, baseline + wave_offset),
+                area,
+                draw_mode='fill'
             )
             current_x += advance
 
@@ -10107,6 +10338,8 @@ class MangaOCRApp(QMainWindow):
             start_x = rect.left() + (rect.width() - total_width) / 2.0
 
         amplitude = min(rect.height() * 0.4, max(4.0, intensity * 1.2))
+        
+        # Pass 1: Draw shadows and outlines
         current_x = start_x
         for idx, glyph in enumerate(glyphs):
             fm = QFontMetrics(glyph['font'])
@@ -10125,7 +10358,33 @@ class MangaOCRApp(QMainWindow):
                 bold_font,
                 glyph.get('color', QColor('#000000')),
                 QPointF(0, 0),
-                area
+                area,
+                draw_mode='outline'
+            )
+            painter.restore()
+            current_x += advance
+
+        # Pass 2: Draw fills
+        current_x = start_x
+        for idx, glyph in enumerate(glyphs):
+            fm = QFontMetrics(glyph['font'])
+            advance = fm.horizontalAdvance(glyph['char'])
+            if advance <= 0:
+                continue
+            offset = amplitude if idx % 2 == 0 else -amplitude
+            painter.save()
+            painter.translate(current_x, baseline + offset)
+            painter.rotate(10 if idx % 2 == 0 else -10)
+            bold_font = QFont(glyph['font'])
+            bold_font.setWeight(max(bold_font.weight(), QFont.Black))
+            self._render_text_glyph(
+                painter,
+                glyph.get('char', ''),
+                bold_font,
+                glyph.get('color', QColor('#000000')),
+                QPointF(0, 0),
+                area,
+                draw_mode='fill'
             )
             painter.restore()
             current_x += advance

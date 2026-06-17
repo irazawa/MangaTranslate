@@ -1,4 +1,4 @@
-﻿# MangaTranslate 🎨🤖
+# MangaTranslate 🎨🤖
 
 MangaTranslate adalah aplikasi desktop premium berskala enterprise untuk menerjemahkan dan melakukan typesetting manga secara interaktif menggunakan Python 3 dan PyQt5. Aplikasi ini dirancang khusus untuk memodernisasi workflow scanlation secara profesional dengan menggabungkan deteksi bubble otomatis berbasis Deep Learning, multi-engine OCR, penerjemah kecerdasan buatan (AI) terintegrasi, workspace berbasis layer ala Photoshop, sistem undo/redo visual berbasis timeline, serta media center terintegrasi.
 
@@ -291,4 +291,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.2*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.3*
