@@ -128,7 +128,7 @@ Setiap kotak dialog manga yang terjemahannya dibuat akan dikelola sebagai layer 
 
 ---
 
-## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.2)
+## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.5)
 
 MangaTranslate kini menghadirkan sistem **Undo/Redo berbasis snapshot** yang dilengkapi tampilan timeline visual interaktif di panel kanan, memberikan kendali penuh atas sejarah penyuntingan Anda:
 
@@ -165,7 +165,7 @@ Saat menerjemahkan satu halaman manga yang berisi banyak gelembung percakapan:
 
 ---
 
-## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.2)
+## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.5)
 
 Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi satu window bertab yang elegan ([UnifiedHelpDialog](file:///e:/Project/MangaTranslate/src/ui/unified_help_dialog.py)):
 
@@ -291,4 +291,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.4*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.5*
