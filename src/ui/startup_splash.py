@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QProgressBar,
     QVBoxLayout,
     QWidget,
@@ -63,13 +64,20 @@ class SpinnerWidget(QWidget):
 
 
 class StartupSplash(QWidget):
-    """Frameless loading window shown while the main application initializes."""
+    """Loading window shown while the main application initializes."""
 
     def __init__(self, icon_path=None, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(460, 280)
+        self.setWindowTitle(APP_NAME)
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.CustomizeWindowHint
+            | Qt.WindowTitleHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowSystemMenuHint
+        )
+        self.setFixedSize(540, 400)
+        self._last_message = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -135,8 +143,16 @@ class StartupSplash(QWidget):
         hint.setWordWrap(True)
         card_layout.addWidget(hint)
 
+        self.log_output = QPlainTextEdit()
+        self.log_output.setObjectName("startupLog")
+        self.log_output.setReadOnly(True)
+        self.log_output.setMaximumBlockCount(120)
+        self.log_output.setFixedHeight(96)
+        card_layout.addWidget(self.log_output)
+
         outer.addWidget(card)
         self.setStyleSheet(self._stylesheet())
+        self.append_log(StartupText.STATUS_STARTING)
 
     def show_centered(self):
         screen = QApplication.primaryScreen()
@@ -148,19 +164,24 @@ class StartupSplash(QWidget):
             )
         self.spinner.start()
         self.show()
-        self.raise_()
         QApplication.processEvents()
 
     def set_status(self, message):
         if message:
             self.status_label.setText(message)
+            self.append_log(message)
         QApplication.processEvents()
+
+    def append_log(self, message):
+        if not message or message == self._last_message:
+            return
+        self._last_message = message
+        self.log_output.appendPlainText(message)
+        scrollbar = self.log_output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def finish(self, window=None):
         self.spinner.stop()
-        if window is not None:
-            window.raise_()
-            window.activateWindow()
         self.close()
         QApplication.processEvents()
 
@@ -169,12 +190,16 @@ class StartupSplash(QWidget):
         QWidget {{
             font-family: {FONT_FAMILY};
             color: {COLORS["text"]};
-            background: transparent;
+            background: {COLORS["bg"]};
         }}
         QFrame#startupCard {{
             background-color: {COLORS["panel"]};
             border: 1px solid {COLORS["border"]};
             border-radius: 14px;
+        }}
+        QLabel {{
+            background: transparent;
+            color: {COLORS["text"]};
         }}
         QLabel#startupTitle {{
             color: #f8fafc;
@@ -198,6 +223,14 @@ class StartupSplash(QWidget):
         QLabel#startupHint {{
             color: {COLORS["muted"]};
             font-size: 9pt;
+        }}
+        QPlainTextEdit#startupLog {{
+            background-color: {COLORS["card_alt"]};
+            border: 1px solid {COLORS["border"]};
+            border-radius: 8px;
+            color: #94a3b8;
+            font-size: 8.5pt;
+            padding: 8px;
         }}
         QProgressBar {{
             background-color: {COLORS["card_alt"]};

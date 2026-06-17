@@ -291,4 +291,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.3*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.4*

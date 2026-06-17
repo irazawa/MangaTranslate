@@ -50,6 +50,30 @@ class StartupText:
     STATUS_READY = "Hampir siap..."
 
 
+class BootstrapText:
+    TITLE = "MangaTranslate Setup"
+    SUBTITLE = "Menyiapkan environment lokal untuk menjalankan aplikasi."
+    HINT = "Setup bisa memakan waktu saat pertama kali dibuka. Window ini bisa diminimize."
+    STATUS_STARTING = "Memulai setup awal..."
+    STATUS_CHECKING = "Memeriksa file aplikasi dan virtual environment..."
+    STATUS_CREATING_VENV = "Membuat virtual environment..."
+    STATUS_UPGRADING_PIP = "Mengupdate pip..."
+    STATUS_INSTALLING_REQUIREMENTS = "Menginstall requirements.txt..."
+    STATUS_READY = "Setup selesai. Membuka aplikasi..."
+    STATUS_FAILED = "Setup gagal. Periksa log di bawah."
+    PYTHON_MISSING = (
+        "Python tidak ditemukan di PATH. Install Python 3.10+ terlebih dahulu, "
+        "centang Add Python to PATH, lalu jalankan aplikasi lagi."
+    )
+    MAIN_MISSING = "main.py tidak ditemukan di folder aplikasi."
+    REQUIREMENTS_MISSING = "requirements.txt tidak ditemukan di folder aplikasi."
+
+
+class WorkspaceText:
+    RIGHT_PANEL_TITLE = "Tools & Workspace"
+    RIGHT_PANEL_TOGGLE_TOOLTIP = "Toggle Tools & Workspace panel (F4)"
+
+
 def welcome_subtitle_html() -> str:
     return f"{escape(APP_NAME)} &mdash; v{APP_VERSION}"
 
