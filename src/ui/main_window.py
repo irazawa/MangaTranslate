@@ -77,7 +77,7 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QFormLayout,
     QFontComboBox, QDoubleSpinBox, QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
-    QKeySequenceEdit
+    QKeySequenceEdit, QSizePolicy, QAbstractScrollArea
 )
 from PyQt5.QtGui import (
     QPixmap, QPainter, QPen, QColor, QFont, QKeySequence, QPolygon,
@@ -97,11 +97,53 @@ from src.core.fonts import *
 from src.core.app_info import APP_VERSION, app_title
 from src.ui.dialogs import *
 from src.ui.canvas import *
+from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, toggle_button_qss
-from src.ui.texts import ActionText, DialogText, NavText, StartupText, about_html, welcome_subtitle_html
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
+
+
+class FindReplaceWorker(QObject):
+    finished = pyqtSignal(int, int, object)  # replaced_count, affected_pages, updates
+    error = pyqtSignal(str)
+
+    def __init__(self, search_rows, find_text, replace_text, match_case=False, whole_word=False):
+        super().__init__()
+        self.search_rows = list(search_rows or [])
+        self.find_text = find_text or ""
+        self.replace_text = replace_text or ""
+        self.match_case = bool(match_case)
+        self.whole_word = bool(whole_word)
+
+    def run(self):
+        try:
+            if not self.find_text:
+                self.finished.emit(0, 0, [])
+                return
+
+            flags = 0 if self.match_case else re.IGNORECASE
+            escaped_find = re.escape(self.find_text)
+            expression = rf"\b{escaped_find}\b" if self.whole_word else escaped_find
+            pattern = re.compile(expression, flags)
+
+            updates = []
+            affected_keys = set()
+            replaced_count = 0
+            for key, area_index, text in self.search_rows:
+                if not text:
+                    continue
+                new_text, count = pattern.subn(self.replace_text, text)
+                if count > 0:
+                    updates.append((key, area_index, new_text))
+                    affected_keys.add(key)
+                    replaced_count += count
+
+            self.finished.emit(replaced_count, len(affected_keys), updates)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
 
 class MangaOCRApp(QMainWindow):
     api_cost_signal = pyqtSignal(int, int, str, str)
@@ -606,6 +648,9 @@ class MangaOCRApp(QMainWindow):
         self.batch_save_thread = None
         self._batch_save_errors = []
         self._batch_save_saved_count = 0
+        self.find_replace_worker = None
+        self.find_replace_thread = None
+        self._find_replace_context = None
 
         self.project_dir = None
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.cache')
@@ -775,6 +820,7 @@ class MangaOCRApp(QMainWindow):
         self.init_ui()
         self._set_startup_status(StartupText.STATUS_APPLYING_THEME)
         self.setup_styles()
+        self.notification_center = NotificationCenter(self)
         self._set_startup_status(StartupText.STATUS_SETTING_SHORTCUTS)
         self.setup_shortcuts()
         self._set_startup_status(StartupText.STATUS_INITIALIZING_ENGINES)
@@ -822,6 +868,25 @@ class MangaOCRApp(QMainWindow):
             callback(message)
         except Exception:
             pass
+
+    def show_toast(self, title, message="", kind="info", timeout_ms=3500):
+        return notify_toast(self, title, message, kind=kind, timeout_ms=timeout_ms)
+
+    def show_banner(self, key, title, message="", kind="warning", action_text=None, action=None):
+        return notify_banner(
+            self,
+            key,
+            title,
+            message,
+            kind=kind,
+            action_text=action_text,
+            action=action,
+        )
+
+    def dismiss_banner(self, key):
+        center = getattr(self, 'notification_center', None)
+        if center is not None:
+            center.dismiss_banner(key)
 
     def setup_menu_bar(self):
         menu_bar = self.menuBar()
@@ -1009,7 +1074,7 @@ class MangaOCRApp(QMainWindow):
         
         # Premium toggle Tools btn
         self.toggle_right_btn = QPushButton(NavText.HIDE_TOOLS)
-        self.toggle_right_btn.setToolTip("Toggle Right Tools & Workflows panel (F4)")
+        self.toggle_right_btn.setToolTip(WorkspaceText.RIGHT_PANEL_TOGGLE_TOOLTIP)
         self.toggle_right_btn.setCheckable(True)
         self.toggle_right_btn.setChecked(True)
         self.toggle_right_btn.clicked.connect(self.toggle_right_panel)
@@ -1025,12 +1090,10 @@ class MangaOCRApp(QMainWindow):
         right_panel_content.setObjectName("right-panel")
         right_panel_content.setLayout(right_panel_layout)
 
-        self.right_panel_scroll = QScrollArea()
-        self.right_panel_scroll.setWidgetResizable(True)
-        self.right_panel_scroll.setFrameShape(QFrame.NoFrame)
-        self.right_panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.right_panel_scroll.setMinimumWidth(360)
-        self.right_panel_scroll.setWidget(right_panel_content)
+        self.right_panel_scroll = right_panel_content
+        self.right_panel_scroll.setMinimumWidth(380)
+        self.right_panel_scroll.setMaximumWidth(600)
+        self.right_panel_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.splitter.addWidget(self.right_panel_scroll)
 
         # Make splitter adaptive across screen sizes
@@ -1041,17 +1104,53 @@ class MangaOCRApp(QMainWindow):
         self.splitter.setStretchFactor(2, 0)
 
         # Load saved splitter sizes if present
-        saved_sizes = SETTINGS.get('splitter_sizes')
-        if saved_sizes and len(saved_sizes) == 3:
-            self.splitter.setSizes(saved_sizes)
-        else:
-            self.splitter.setSizes([260, 960, 420])
+        self.splitter.setSizes(self._normalized_workspace_splitter_sizes(SETTINGS.get('splitter_sizes')))
 
         main_layout.addWidget(self.splitter)
         self._apply_right_panel_styles()
 
+    def _normalized_workspace_splitter_sizes(self, saved_sizes):
+        default_sizes = [260, 960, 430]
+        if isinstance(saved_sizes, (list, tuple)) and len(saved_sizes) == 3:
+            try:
+                sizes = [max(0, int(size)) for size in saved_sizes]
+            except (TypeError, ValueError):
+                sizes = default_sizes[:]
+        else:
+            sizes = default_sizes[:]
+        sizes[2] = max(380, min(600, sizes[2]))
+        return sizes
+
+    def _configure_workspace_scroll_area(self, scroll):
+        if not isinstance(scroll, QScrollArea):
+            return scroll
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
+        scroll.setMinimumWidth(0)
+        scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        widget = scroll.widget()
+        if widget is not None:
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        return scroll
+
+    def _fit_workspace_combo(self, combo, minimum_chars=14):
+        if combo is None:
+            return
+        combo.setMinimumWidth(0)
+        combo.setMinimumContentsLength(minimum_chars)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        try:
+            combo.view().setTextElideMode(Qt.ElideRight)
+        except Exception:
+            pass
+
     def setup_right_panel(self):
-        """Modern icon-sidebar + stacked-widget layout untuk Tools & Workflows panel."""
+        """Modern icon-sidebar + stacked-widget layout untuk Tools & Workspace panel."""
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -1068,7 +1167,7 @@ class MangaOCRApp(QMainWindow):
         header_icon.setStyleSheet("font-size:16px; background:transparent; color:#38bdf8;")
         header_h.addWidget(header_icon)
 
-        header = QLabel("Tools & Workflows")
+        header = QLabel(WorkspaceText.RIGHT_PANEL_TITLE)
         header.setObjectName("panel-title")
         header_h.addWidget(header)
         header_h.addStretch()
@@ -1082,6 +1181,8 @@ class MangaOCRApp(QMainWindow):
 
         # ── Body: icon sidebar (left) + stacked content (right) ─────────────────
         body_widget = QWidget()
+        body_widget.setMinimumWidth(0)
+        body_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         body_h = QHBoxLayout(body_widget)
         body_h.setContentsMargins(0, 0, 0, 0)
         body_h.setSpacing(0)
@@ -1089,7 +1190,7 @@ class MangaOCRApp(QMainWindow):
         # ── Icon sidebar ─────────────────────────────────────────────────────────
         sidebar = QWidget()
         sidebar.setObjectName("rp-sidebar")
-        sidebar.setFixedWidth(58)
+        sidebar.setFixedWidth(70)
         sidebar_v = QVBoxLayout(sidebar)
         sidebar_v.setContentsMargins(4, 8, 4, 8)
         sidebar_v.setSpacing(2)
@@ -1116,9 +1217,26 @@ class MangaOCRApp(QMainWindow):
             # Insert chat after OCR
             tab_defs.insert(1, ("Chat", "💬", "AI Chat & Video", None))
 
+        compact_markers = {
+            "OCR": "OCR",
+            "Typeset": "TXT",
+            "Layers": "LYR",
+            "Cleanup": "CLN",
+            "History": "HIS",
+            "Scenes": "SCN",
+            "AI Cfg": "AI",
+            "Chat": "CHAT",
+        }
+        tab_defs = [
+            (label, compact_markers.get(label, marker), tip, builder)
+            for label, marker, tip, builder in tab_defs
+        ]
+
         # QStackedWidget as content area
         self.right_stack = QStackedWidget()
         self.right_stack.setObjectName("rp-stack")
+        self.right_stack.setMinimumWidth(0)
+        self.right_stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
         # Compatibility alias so code referencing self.tabs still works for tab switching
         # We create a minimal shim object
@@ -1147,14 +1265,14 @@ class MangaOCRApp(QMainWindow):
         self._sidebar_buttons = []
         self._stack_page_map = {}  # page_index -> btn
 
-        def _make_sidebar_btn(emoji, label, tip, page_idx):
+        def _make_sidebar_btn(marker, label, tip, page_idx):
             btn = QToolButton()
             btn.setObjectName("rp-nav-btn")
-            btn.setText(f"{emoji}\n{label}")
+            btn.setText(f"{marker}\n{label}")
             btn.setToolTip(tip)
             btn.setCheckable(True)
-            btn.setFixedSize(50, 52)
-            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            btn.setFixedSize(60, 56)
+            btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
             btn.setProperty("page", page_idx)
             btn.clicked.connect(lambda checked, idx=page_idx: self._on_sidebar_nav(idx))
             sidebar_v.addWidget(btn)
@@ -1163,15 +1281,18 @@ class MangaOCRApp(QMainWindow):
             return btn
 
         page_idx = 0
-        for short_label, emoji, tip, builder in tab_defs:
+        for short_label, marker, tip, builder in tab_defs:
             if builder is None:
                 # Chat widget — already built
                 widget = self._chat_widget
                 page = widget
+                if page is not None:
+                    page.setMinimumWidth(0)
+                    page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
             else:
                 widget = builder()
                 if isinstance(widget, QScrollArea):
-                    page = widget
+                    page = self._configure_workspace_scroll_area(widget)
                 else:
                     scroll = QScrollArea()
                     scroll.setWidgetResizable(True)
@@ -1179,10 +1300,10 @@ class MangaOCRApp(QMainWindow):
                     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
                     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
                     scroll.setWidget(widget)
-                    page = scroll
+                    page = self._configure_workspace_scroll_area(scroll)
 
             self.right_stack.addWidget(page)
-            _make_sidebar_btn(emoji, short_label, tip, page_idx)
+            _make_sidebar_btn(marker, short_label, tip, page_idx)
             page_idx += 1
 
         sidebar_v.addStretch()
@@ -1216,12 +1337,14 @@ class MangaOCRApp(QMainWindow):
         batch_row.setSpacing(6)
         self.process_batch_button = QPushButton("⚡ Batch Now")
         self.process_batch_button.setObjectName("rp-action-btn")
+        self.process_batch_button.setText("Batch Now")
         self.process_batch_button.setToolTip("Process batch queue now")
         self.process_batch_button.clicked.connect(self.start_batch_processing)
         batch_row.addWidget(self.process_batch_button)
 
         self.batch_process_button = QPushButton("🔍 Detect All")
         self.batch_process_button.setObjectName("rp-action-btn")
+        self.batch_process_button.setText("Detect All")
         self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder")
         self.batch_process_button.clicked.connect(self.start_interactive_batch_detection)
         batch_row.addWidget(self.batch_process_button)
@@ -1233,11 +1356,13 @@ class MangaOCRApp(QMainWindow):
         detect_row.setSpacing(6)
         self.confirm_items_button = QPushButton("✔ Confirm (0)")
         self.confirm_items_button.setObjectName("rp-confirm-btn")
+        self.confirm_items_button.setText("Confirm (0)")
         self.confirm_items_button.clicked.connect(self.process_confirmed_detections)
         self.confirm_items_button.setVisible(False)
         detect_row.addWidget(self.confirm_items_button)
         self.cancel_detection_button = QPushButton("✕ Cancel")
         self.cancel_detection_button.setObjectName("rp-danger-btn")
+        self.cancel_detection_button.setText("Cancel")
         self.cancel_detection_button.clicked.connect(self.cancel_interactive_batch)
         self.cancel_detection_button.setVisible(False)
         detect_row.addWidget(self.cancel_detection_button)
@@ -1248,23 +1373,27 @@ class MangaOCRApp(QMainWindow):
         edit_row.setSpacing(6)
         self.undo_button = QPushButton("↩ Undo")
         self.undo_button.setObjectName("rp-action-btn")
+        self.undo_button.setText("Undo")
         self.undo_button.clicked.connect(self.undo_last_action)
         self.undo_button.setEnabled(False)
         edit_row.addWidget(self.undo_button)
 
         self.redo_button = QPushButton("↪ Redo")
         self.redo_button.setObjectName("rp-action-btn")
+        self.redo_button.setText("Redo")
         self.redo_button.clicked.connect(self.redo_last_action)
         self.redo_button.setEnabled(False)
         edit_row.addWidget(self.redo_button)
 
         self.reset_button = QPushButton("🔄 Reset")
         self.reset_button.setObjectName("rp-action-btn")
+        self.reset_button.setText("Reset")
         self.reset_button.clicked.connect(self.reset_view_to_original)
         edit_row.addWidget(self.reset_button)
 
         self.save_button = QPushButton("💾 Save")
         self.save_button.setObjectName("rp-save-btn")
+        self.save_button.setText("Save")
         self.save_button.clicked.connect(self.save_image)
         edit_row.addWidget(self.save_button)
         bottom_v.addLayout(edit_row)
@@ -1275,10 +1404,12 @@ class MangaOCRApp(QMainWindow):
         timeline_header.setSpacing(4)
         timeline_title_lbl = QLabel("🕐 History")
         timeline_title_lbl.setObjectName("rp-tiny-label")
+        timeline_title_lbl.setText("History")
         timeline_header.addWidget(timeline_title_lbl)
         timeline_header.addStretch(1)
         self._timeline_clear_btn = QPushButton("✕")
         self._timeline_clear_btn.setObjectName("rp-action-btn")
+        self._timeline_clear_btn.setText("x")
         self._timeline_clear_btn.setFixedSize(18, 18)
         self._timeline_clear_btn.setToolTip("Clear undo history")
         self._timeline_clear_btn.clicked.connect(self._clear_undo_history)
@@ -1327,7 +1458,7 @@ class MangaOCRApp(QMainWindow):
         metrics_widget.setObjectName("rp-metrics")
         metrics_grid = QGridLayout(metrics_widget)
         metrics_grid.setContentsMargins(8, 6, 8, 6)
-        metrics_grid.setHorizontalSpacing(16)
+        metrics_grid.setHorizontalSpacing(8)
         metrics_grid.setVerticalSpacing(3)
 
         def _mlabel(text, bold=False):
@@ -1364,10 +1495,14 @@ class MangaOCRApp(QMainWindow):
         # Row 2 — provider + model  (spans full width)
         metrics_grid.addWidget(_mlabel("Provider"), 2, 0)
         self.provider_label = QLabel("-"); self.provider_label.setObjectName("rp-metric-val")
+        self.provider_label.setMinimumWidth(0)
+        self.provider_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         metrics_grid.addWidget(self.provider_label, 2, 1)
         metrics_grid.addWidget(_mlabel("Model"), 2, 2)
         self.model_label = QLabel("-"); self.model_label.setObjectName("rp-metric-val")
         self.model_label.setWordWrap(True)
+        self.model_label.setMinimumWidth(0)
+        self.model_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         metrics_grid.addWidget(self.model_label, 2, 3, 1, 3)
 
         bottom_v.addWidget(metrics_widget)
@@ -1393,6 +1528,7 @@ class MangaOCRApp(QMainWindow):
         # ── Cooldown label ───────────────────────────────────────────────────────
         self.countdown_label = QLabel("⏳ Cooldown: 60s")
         self.countdown_label.setObjectName("rp-countdown")
+        self.countdown_label.setText("Cooldown: 60s")
         self.countdown_label.setVisible(False)
         bottom_v.addWidget(self.countdown_label)
 
@@ -1411,9 +1547,9 @@ class MangaOCRApp(QMainWindow):
             btn.setChecked(btn.property("page") == page_idx)
 
     def _apply_right_panel_styles(self):
-        """Apply modern dark sidebar skin to the Tools & Workflows column."""
+        """Apply modern dark sidebar skin to the Tools & Workspace column."""
         try:
-            panel_widget = self.right_panel_scroll.widget()
+            panel_widget = self.right_panel_scroll
         except Exception:
             return
         if not panel_widget:
@@ -1939,7 +2075,7 @@ class MangaOCRApp(QMainWindow):
                 use_inpaint_val = bool(self.inpaint_checkbox.isChecked())
                 self._set_global_cleanup_default('use_background_box', use_box_val)
                 self._set_global_cleanup_default('use_inpaint', use_inpaint_val)
-                QMessageBox.information(self, "Apply to All", "Global defaults updated. Existing areas keep their individual overrides.")
+                self.show_toast("Apply to all", "Global defaults updated. Existing areas keep their individual overrides.", kind="success")
                 self._sync_cleanup_controls_from_selection()
                 dlg.accept()
 
@@ -1972,7 +2108,7 @@ class MangaOCRApp(QMainWindow):
                     except Exception:
                         pass
                 self._sync_cleanup_controls_from_selection()
-                QMessageBox.information(self, "Apply to All", "Global defaults updated and applied to every typeset area.")
+                self.show_toast("Apply to all", "Global defaults updated and applied to every typeset area.", kind="success")
                 dlg.accept()
 
             update_defaults_btn.clicked.connect(_update_defaults_only)
@@ -2459,11 +2595,11 @@ class MangaOCRApp(QMainWindow):
 
     def _create_typeset_tab(self):
         scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._configure_workspace_scroll_area(scroll)
 
         container = QWidget()
+        container.setMinimumWidth(0)
+        container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(14)
@@ -2481,14 +2617,14 @@ class MangaOCRApp(QMainWindow):
 
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(8)
-        self.save_typeset_defaults_button = QPushButton("Save Current")
+        self.save_typeset_defaults_button = QPushButton("Save")
         self.save_typeset_defaults_button.setToolTip("Store the current typography as the default for new areas.")
         self.save_typeset_defaults_button.clicked.connect(self._handle_save_typeset_defaults)
-        actions_layout.addWidget(self.save_typeset_defaults_button)
-        self.reset_typeset_defaults_button = QPushButton("Reset Defaults")
+        actions_layout.addWidget(self.save_typeset_defaults_button, 1)
+        self.reset_typeset_defaults_button = QPushButton("Reset")
         self.reset_typeset_defaults_button.setToolTip("Restore the saved default typography settings.")
         self.reset_typeset_defaults_button.clicked.connect(self._handle_reset_typeset_defaults)
-        actions_layout.addWidget(self.reset_typeset_defaults_button)
+        actions_layout.addWidget(self.reset_typeset_defaults_button, 1)
         defaults_layout.addLayout(actions_layout)
         layout.addWidget(defaults_group)
 
@@ -2498,12 +2634,14 @@ class MangaOCRApp(QMainWindow):
         font_layout.setContentsMargins(12, 14, 12, 12)
         font_layout.setHorizontalSpacing(10)
         font_layout.setVerticalSpacing(10)
+        font_layout.setColumnStretch(1, 1)
 
         font_layout.addWidget(QLabel("Font Group"), 0, 0)
         self.font_group_combo = QComboBox()
         self.font_group_combo.addItem("All")
         for group_name in getattr(self, 'font_groups', {}).keys():
             self.font_group_combo.addItem(group_name)
+        self._fit_workspace_combo(self.font_group_combo, 14)
         self.font_group_combo.currentTextChanged.connect(lambda txt: self._on_font_group_changed(txt))
         font_layout.addWidget(self.font_group_combo, 0, 1)
 
@@ -2518,27 +2656,31 @@ class MangaOCRApp(QMainWindow):
         self.remove_group_btn.clicked.connect(self._on_remove_font_group_clicked)
         group_btn_layout.addWidget(self.remove_group_btn)
         self.add_font_to_group_btn = QPushButton("Add Font")
+        self.add_font_to_group_btn.setText("Add")
         self.add_font_to_group_btn.setToolTip("Add a font to the selected group.")
         self.add_font_to_group_btn.clicked.connect(self._on_add_font_to_group_clicked)
         group_btn_layout.addWidget(self.add_font_to_group_btn)
-        font_layout.addLayout(group_btn_layout, 1, 1)
+        font_layout.addLayout(group_btn_layout, 1, 0, 1, 2)
 
         font_layout.addWidget(QLabel("Family"), 2, 0)
         self.font_dropdown = QComboBox()
         from src.ui.widgets import FontDelegate
         self.font_dropdown.setItemDelegate(FontDelegate(self.font_manager, self.font_dropdown))
+        self._fit_workspace_combo(self.font_dropdown, 16)
         self.font_dropdown.currentTextChanged.connect(self.on_typeset_font_change)
         font_layout.addWidget(self.font_dropdown, 2, 1)
 
         self.import_font_button = QPushButton("Import Font...")
         self.import_font_button.setToolTip("Add new font files from your computer (TTF, OTF, TTC, OTC).")
         self.import_font_button.clicked.connect(self.import_font)
-        font_layout.addWidget(self.import_font_button, 3, 1)
+        font_layout.addWidget(self.import_font_button, 3, 0, 1, 2)
 
         font_layout.addWidget(QLabel("Preview"), 4, 0)
         self.font_preview_label = QLabel("AaBb123")
         self.font_preview_label.setAlignment(Qt.AlignCenter)
         self.font_preview_label.setMinimumHeight(56)
+        self.font_preview_label.setMinimumWidth(0)
+        self.font_preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.font_preview_label.setStyleSheet("border: 1px solid #1f2b3b; border-radius: 8px; padding: 10px; background-color: #161f2b;")
         font_layout.addWidget(self.font_preview_label, 4, 1)
 
@@ -2557,6 +2699,7 @@ class MangaOCRApp(QMainWindow):
         appearance_layout.setContentsMargins(12, 14, 12, 12)
         appearance_layout.setHorizontalSpacing(10)
         appearance_layout.setVerticalSpacing(10)
+        appearance_layout.setColumnStretch(1, 1)
 
         appearance_layout.addWidget(QLabel("Style"), 0, 0)
         style_row = QHBoxLayout()
@@ -2644,6 +2787,8 @@ class MangaOCRApp(QMainWindow):
         grad_layout.addWidget(QLabel("Colors:"))
         self.grad_color_list = QListWidget()
         self.grad_color_list.setFixedHeight(80)
+        self.grad_color_list.setMinimumWidth(0)
+        self.grad_color_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         grad_layout.addWidget(self.grad_color_list)
         
         btn_row = QHBoxLayout()
@@ -2663,6 +2808,7 @@ class MangaOCRApp(QMainWindow):
         spacing_layout.setContentsMargins(12, 14, 12, 12)
         spacing_layout.setHorizontalSpacing(10)
         spacing_layout.setVerticalSpacing(10)
+        spacing_layout.setColumnStretch(1, 1)
 
         spacing_layout.addWidget(QLabel("Font Size"), 0, 0)
         self.font_size_spin = QDoubleSpinBox()
@@ -2717,6 +2863,7 @@ class MangaOCRApp(QMainWindow):
         layout_grid.setContentsMargins(12, 14, 12, 12)
         layout_grid.setHorizontalSpacing(10)
         layout_grid.setVerticalSpacing(10)
+        layout_grid.setColumnStretch(1, 1)
 
         layout_grid.addWidget(QLabel("Alignment"), 0, 0)
         alignment_row = QHBoxLayout()
@@ -2758,6 +2905,7 @@ class MangaOCRApp(QMainWindow):
         warp_layout.setContentsMargins(12, 14, 12, 12)
         warp_layout.setHorizontalSpacing(10)
         warp_layout.setVerticalSpacing(10)
+        warp_layout.setColumnStretch(1, 1)
 
         warp_layout.addWidget(QLabel("Warp Style"), 0, 0)
         self.warp_style_combo = ScrollableComboBox()
@@ -2771,7 +2919,7 @@ class MangaOCRApp(QMainWindow):
             "Wavy",
             "Jagged"
         ])
-        self.warp_style_combo.setMaximumWidth(160)
+        self._fit_workspace_combo(self.warp_style_combo, 12)
         self.warp_style_combo.currentTextChanged.connect(self._on_warp_style_changed)
         warp_layout.addWidget(self.warp_style_combo, 0, 1)
 
@@ -2805,6 +2953,8 @@ class MangaOCRApp(QMainWindow):
         self.typeset_preview_label = QLabel()
         self.typeset_preview_label.setAlignment(Qt.AlignCenter)
         self.typeset_preview_label.setMinimumHeight(180)
+        self.typeset_preview_label.setMinimumWidth(0)
+        self.typeset_preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.typeset_preview_label.setStyleSheet("background-color: #172330; border: 1px solid #1f2b3b; border-radius: 12px;")
         preview_layout.addWidget(self.typeset_preview_label)
         layout.addWidget(preview_group)
@@ -2815,11 +2965,14 @@ class MangaOCRApp(QMainWindow):
         recent_layout.setContentsMargins(12, 10, 12, 12)
         
         recent_desc = QLabel("Click to apply recent translation to active text area.")
+        recent_desc.setWordWrap(True)
         recent_desc.setStyleSheet("color: #8fa6c5; font-size: 8.5pt;")
         recent_layout.addWidget(recent_desc)
         
         self.typeset_recent_list = QListWidget()
         self.typeset_recent_list.setMaximumHeight(160)
+        self.typeset_recent_list.setMinimumWidth(0)
+        self.typeset_recent_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.typeset_recent_list.itemClicked.connect(self._on_recent_translation_clicked)
         recent_layout.addWidget(self.typeset_recent_list)
         layout.addWidget(recent_group)
@@ -2950,16 +3103,16 @@ class MangaOCRApp(QMainWindow):
         Result: Each bubble gets updated with contextual translation.
         """
         if not self.proofreader_entries:
-            QMessageBox.information(self, "No PF Entries", "Tidak ada entry PF yang bisa diproses.")
+            self.show_toast("No PF entries", "Tidak ada entry PF yang bisa diproses.", kind="info")
             return
         provider, model_name = self.get_selected_model_name()
         if not model_name:
-            QMessageBox.warning(self, "AI Model Missing", "Pilih AI model dulu sebelum batch PF.")
+            self.show_banner("batch-pf-no-model", "AI model missing", "Pilih AI model dulu sebelum batch PF.", kind="warning")
             return
         # Build prompt: send all original texts, ask AI to translate contextually so text flows naturally
         pf_texts = [e.get('original_text', '') for e in self.proofreader_entries if e.get('original_text')]
         if not pf_texts:
-            QMessageBox.information(self, "No Texts", "Tidak ada original text di PF entries.")
+            self.show_toast("No texts", "Tidak ada original text di PF entries.", kind="info")
             return
         # Request JSON array first to make parsing reliable
         prompt = (
@@ -2975,7 +3128,7 @@ class MangaOCRApp(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         if not response_text:
-            QMessageBox.warning(self, "AI Error", "Tidak ada respon dari AI.")
+            self.show_banner("batch-pf-ai-error", "AI error", "Tidak ada respon dari AI.", kind="error")
             return
         # Parse response: get list of results
         results = self._parse_ai_list_response(response_text, expected_count=len(pf_texts))
@@ -3237,7 +3390,7 @@ class MangaOCRApp(QMainWindow):
         name, ok = QInputDialog.getText(self, "New Scene", "Scene Name:")
         if ok and name:
             if not self.create_scene(name):
-                QMessageBox.warning(self, "Error", "Could not create scene. Name might be empty or duplicate.")
+                self.show_banner("scene-create-error", "Scene not created", "Could not create scene. Name might be empty or duplicate.", kind="warning")
             else:
                 self.scene_selector.setCurrentText(name) 
                 self.refresh_scene_ui_state() # Force UI refresh
@@ -3254,7 +3407,7 @@ class MangaOCRApp(QMainWindow):
         if not self.current_scene_name: return
         entries = self.scenes.get(self.current_scene_name, [])
         if not entries:
-            QMessageBox.information(self, "Empty", "Scene is empty.")
+            self.show_toast("Empty scene", "Scene is empty.", kind="info")
             return
 
         # Determine Model
@@ -3263,7 +3416,7 @@ class MangaOCRApp(QMainWindow):
             if hasattr(self, 'ai_model_combo'):
                  full_text = self.ai_model_combo.currentText()
                  if not full_text or not self.ai_model_combo.isEnabled(): 
-                      QMessageBox.warning(self, "Model Error", "Please select an AI model in the Hardware/Settings tab first.")
+                      self.show_banner("scene-model-missing", "Model error", "Please select an AI model in the Hardware/Settings tab first.", kind="warning")
                       return
                  # Parse "Provider: Model" or just "Model"
                  if ":" in full_text:
@@ -3275,7 +3428,7 @@ class MangaOCRApp(QMainWindow):
                      provider = "google" 
                      model_name = full_text
             else:
-                 QMessageBox.warning(self, "Error", "Main AI Model configuration not found.")
+                 self.show_banner("scene-model-config-missing", "Model error", "Main AI Model configuration not found.", kind="warning")
                  return
         else:
             # Use specific scene combo
@@ -3290,7 +3443,7 @@ class MangaOCRApp(QMainWindow):
                 model_name = full_text
 
         if not model_name:
-             QMessageBox.warning(self, "No Model", "Select AI Model first.")
+             self.show_banner("scene-no-model", "No model", "Select AI Model first.", kind="warning")
              return
 
         # Context-aware Prompting (Batch Bottom-Up)
@@ -3344,7 +3497,7 @@ class MangaOCRApp(QMainWindow):
             self.statusBar().clearMessage()
 
         if not response_text:
-            QMessageBox.warning(self, "Error", "AI request failed or empty response.")
+            self.show_banner("scene-ai-empty", "AI request failed", "AI request failed or empty response.", kind="error")
             return
 
         # Parse Output (Tag-based)
@@ -3395,7 +3548,7 @@ class MangaOCRApp(QMainWindow):
                     count += 1
             
             self.refresh_history_views()
-            QMessageBox.information(self, "Done", f"Applied changes to {count} items.")
+            self.show_toast("Applied", f"Applied changes to {count} items.", kind="success")
 
     def apply_scene_to_canvas(self):
         if not self.current_scene_name: return
@@ -3411,10 +3564,10 @@ class MangaOCRApp(QMainWindow):
                 count += 1
         
         self.redraw_all_typeset_areas()
-        QMessageBox.information(self, "Applied", f"Applied {count} updates to canvas.")
+        self.show_toast("Applied", f"Applied {count} updates to canvas.", kind="success")
 
         self.refresh_history_views()
-        QMessageBox.information(self, "Batch PF Selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.")
+        self.show_toast("Batch PF selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.", kind="success", timeout_ms=5000)
 
     def batch_qc_style_tone_check(self):
         """
@@ -3422,15 +3575,15 @@ class MangaOCRApp(QMainWindow):
         Result: Each bubble gets updated with validated/adjusted translation.
         """
         if not self.quality_entries:
-            QMessageBox.information(self, "No QC Entries", "Tidak ada entry QC yang bisa diproses.")
+            self.show_toast("No QC entries", "Tidak ada entry QC yang bisa diproses.", kind="info")
             return
         provider, model_name = self.get_selected_model_name()
         if not model_name:
-            QMessageBox.warning(self, "AI Model Missing", "Pilih AI model dulu sebelum batch QC.")
+            self.show_banner("batch-qc-no-model", "AI model missing", "Pilih AI model dulu sebelum batch QC.", kind="warning")
             return
         qc_texts = [e.get('translated_text', '') for e in self.quality_entries if e.get('translated_text')]
         if not qc_texts:
-            QMessageBox.information(self, "No Texts", "Tidak ada hasil translate di QC entries.")
+            self.show_toast("No texts", "Tidak ada hasil translate di QC entries.", kind="info")
             return
         prompt = (
             "IMPORTANT: Return ONLY a JSON array of strings. Example: [\"rev1\", \"rev2\"]\n"
@@ -3445,7 +3598,7 @@ class MangaOCRApp(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         if not response_text:
-            QMessageBox.warning(self, "AI Error", "Tidak ada respon dari AI.")
+            self.show_banner("batch-qc-ai-error", "AI error", "Tidak ada respon dari AI.", kind="error")
             return
         results = self._parse_ai_list_response(response_text, expected_count=len(qc_texts))
         if len(results) != len(qc_texts):
@@ -3465,7 +3618,7 @@ class MangaOCRApp(QMainWindow):
             entry['staged'] = True
 
         self.refresh_history_views()
-        QMessageBox.information(self, "Batch QC Selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.")
+        self.show_toast("Batch QC selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.", kind="success", timeout_ms=5000)
 
     def _create_result_table(self):
         table = QTableWidget()
@@ -3779,7 +3932,7 @@ class MangaOCRApp(QMainWindow):
     def open_result_editor(self, history_id, source):
         entry = self._get_entry_by_source(source, history_id)
         if not entry:
-            QMessageBox.warning(self, "Entry Missing", "Unable to find this entry. It may have been removed.")
+            self.show_banner("result-entry-missing", "Entry missing", "Unable to find this entry. It may have been removed.", kind="warning")
             return
 
         styles = self.get_translation_styles()
@@ -3799,7 +3952,7 @@ class MangaOCRApp(QMainWindow):
         entry = self._get_entry_by_source(source, history_id)
         if not entry:
             if not quiet:
-                QMessageBox.warning(self, "Entry Missing", "Unable to find this entry. It may have been removed.")
+                self.show_banner("result-entry-missing", "Entry missing", "Unable to find this entry. It may have been removed.", kind="warning")
             return False
 
         ai_model_label = entry.get('ai_model')
@@ -3830,7 +3983,7 @@ class MangaOCRApp(QMainWindow):
             return True
         else:
             if not quiet:
-                QMessageBox.warning(self, "Apply Failed", "The original bubble could not be located.")
+                self.show_banner("result-apply-failed", "Apply failed", "The original bubble could not be located.", kind="warning")
             return False
 
     def confirm_all_result_entries(self, source):
@@ -3840,7 +3993,7 @@ class MangaOCRApp(QMainWindow):
 
         dataset = self.proofreader_entries if source_key == 'proofreader' else self.quality_entries
         if not dataset:
-            QMessageBox.information(self, "No Entries", "Tidak ada entry yang siap dikonfirmasi.")
+            self.show_toast("No entries", "Tidak ada entry yang siap dikonfirmasi.", kind="info")
             return
 
         failures = []
@@ -3852,9 +4005,9 @@ class MangaOCRApp(QMainWindow):
                 failures.append(history_id)
 
         if failures:
-            QMessageBox.warning(self, "Sebagian Gagal", f"{len(failures)} entry gagal diterapkan. Periksa kembali data yang bermasalah.")
+            self.show_banner("confirm-all-failed", "Sebagian gagal", f"{len(failures)} entry gagal diterapkan. Periksa kembali data yang bermasalah.", kind="warning")
         else:
-            self.statusBar().showMessage("Semua entry berhasil dikonfirmasi.", 3000)
+            self.show_toast("Confirmed", "Semua entry berhasil dikonfirmasi.", kind="success")
 
     def send_history_entry_to_proofreader(self, history_id):
         self._stage_history_entry_for_review(history_id, 'proofreader')
@@ -3949,7 +4102,7 @@ class MangaOCRApp(QMainWindow):
 
         entry = self.get_history_entry(history_id)
         if not entry:
-            QMessageBox.warning(self, "Entry Missing", "Unable to find this history entry. It may have been removed.")
+            self.show_banner("history-entry-missing", "Entry missing", "Unable to find this history entry. It may have been removed.", kind="warning")
             return
 
         record = {
@@ -4012,7 +4165,7 @@ class MangaOCRApp(QMainWindow):
         if name not in self.scenes:
             return False
         if name == "Deleted History": # Protect this special scene
-            QMessageBox.warning(self, "Cannot Delete", "The 'Deleted History' scene cannot be deleted.")
+            self.show_banner("scene-delete-protected", "Cannot delete", "The 'Deleted History' scene cannot be deleted.", kind="warning")
             return False
 
         del self.scenes[name]
@@ -4099,31 +4252,31 @@ class MangaOCRApp(QMainWindow):
         mode = (mode or '').lower()
         entry = self.get_history_entry(history_id)
         if not entry:
-            QMessageBox.warning(self, "Entry Missing", "Unable to find this history entry. It may have been removed.")
+            self.show_banner("history-entry-missing", "Entry missing", "Unable to find this history entry. It may have been removed.", kind="warning")
             return
 
         provider, model_name = self.get_selected_model_name()
         if not model_name:
-            QMessageBox.warning(self, "AI Model Missing", "Select an AI model before sending entries for review.")
+            self.show_banner("review-no-model", "AI model missing", "Select an AI model before sending entries for review.", kind="warning")
             return
 
         provider_lower = (provider or '').lower()
         if provider_lower == 'gemini' and (not GEMINI_API_KEY or "your_gemini_key_here" in GEMINI_API_KEY):
-            QMessageBox.warning(self, "Gemini Not Configured", "Add a valid Gemini API key before using this feature.")
+            self.show_banner("review-gemini-not-configured", "Gemini not configured", "Add a valid Gemini API key before using this feature.", kind="warning")
             return
         if provider_lower == 'openai' and not getattr(self, 'is_openai_available', False):
-            QMessageBox.warning(self, "OpenAI Not Configured", "Add a valid OpenAI API key before using this feature.")
+            self.show_banner("review-openai-not-configured", "OpenAI not configured", "Add a valid OpenAI API key before using this feature.", kind="warning")
             return
 
         prompt = self._build_review_prompt([entry], mode)
         if not prompt.strip():
-            QMessageBox.information(self, "No Data", "There is no translation data to review for this entry.")
+            self.show_toast("No data", "There is no translation data to review for this entry.", kind="info")
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             if not self.check_and_increment_usage(provider, model_name):
-                QMessageBox.information(self, "API Limit", "Rate limit reached for the selected model. Please wait a moment and try again.")
+                self.show_banner("api-usage-limit", "API limit reached", "Rate limit reached for the selected model. Please wait a moment and try again.", kind="warning")
                 return
 
             temperature = 0.35 if mode == 'proofreader' else 0.3
@@ -4132,12 +4285,12 @@ class MangaOCRApp(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         if not response_text:
-            QMessageBox.warning(self, "Review Failed", "No response from AI.")
+            self.show_banner("review-failed-empty", "Review failed", "No response from AI.", kind="error")
             return
 
         normalized = response_text.strip()
         if normalized.startswith('[') and any(token in normalized.upper() for token in ("ERROR", "NOT CONFIGURED", "FAILED")):
-            QMessageBox.warning(self, "Review Failed", normalized)
+            self.show_banner("review-failed-response", "Review failed", normalized, kind="error")
             return
 
         # Prefer structured list responses (JSON array or one-per-line) so we don't rely on visible IDs.
@@ -4149,7 +4302,7 @@ class MangaOCRApp(QMainWindow):
             improved_text = suggestions.get(history_id) or suggestions.get(entry.get('id')) or normalized
         improved_text = improved_text.strip()
         if not improved_text:
-            QMessageBox.information(self, "No Suggestions", "The review did not return any updates.")
+            self.show_toast("No suggestions", "The review did not return any updates.", kind="info")
             return
 
         record = {
@@ -4951,7 +5104,7 @@ class MangaOCRApp(QMainWindow):
                 self.manga_ocr_reader = MO()
                 self.statusBar().showMessage("Manga-OCR initialized.", 3000)
             except Exception as e:
-                QMessageBox.critical(self, "Manga-OCR Error", f"Could not initialize Manga-OCR.\nError: {e}")
+                self.show_banner("manga-ocr-init-error", "Manga-OCR error", f"Could not initialize Manga-OCR. Error: {e}", kind="error")
                 self.manga_ocr_reader = None
         
         # Engine lain diinisialisasi on-demand
@@ -5188,7 +5341,7 @@ class MangaOCRApp(QMainWindow):
 
             self.statusBar().showMessage(f"{engine} initialized.", 3000)
         except Exception as e:
-            QMessageBox.critical(self, f"{engine} Error", f"Could not initialize {engine}.\nError: {e}")
+            self.show_banner(f"{engine.lower()}-init-error", f"{engine} error", f"Could not initialize {engine}. Error: {e}", kind="error")
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -5231,14 +5384,15 @@ class MangaOCRApp(QMainWindow):
                 # However, PyTorch DLL (c10.dll) cannot be loaded from a session that
                 # already failed to import it at startup — a restart is required.
                 self.populate_ocr_languages()
-                QMessageBox.information(
-                    self,
+                self.show_banner(
+                    "manga-ocr-install-complete",
                     "Installation Complete",
                     "Manga-OCR has been successfully installed!\n\n"
                     "Please restart the application to activate Manga-OCR.",
+                    kind="success",
                 )
             else:
-                QMessageBox.critical(self, "Error", f"Failed to install Manga-OCR: {message}")
+                self.show_banner("manga-ocr-install-error", "Manga-OCR install failed", message, kind="error")
 
         worker.progress.connect(on_progress)
         worker.finished.connect(on_finished)
@@ -5408,7 +5562,7 @@ class MangaOCRApp(QMainWindow):
     def increment_translated_count(self):
         self.translated_count += 1
         if hasattr(self, "translated_label"):
-            self.translated_label.setText(f"Translated Snippets: {self.translated_count}")
+            self.translated_label.setText(str(self.translated_count))
 
     def add_api_cost(self, input_tokens, output_tokens, provider, model_name):
         """
@@ -5453,17 +5607,13 @@ class MangaOCRApp(QMainWindow):
             self.total_output_tokens += output_tokens
 
             # ?? Update status detail
-            self.provider_label.setText(f"Provider: {provider}")
+            self.provider_label.setText(str(provider))
             model_display = model_info.get('display') or model_info.get('name') or model_name
-            self.model_label.setText(f"Model: {model_display}")
-            self.input_tokens_label.setText(
-                f"Input Tokens: {input_tokens:,} (Total: {self.total_input_tokens:,})"
-            )
-            self.output_tokens_label.setText(
-                f"Output Tokens: {output_tokens:,} (Total: {self.total_output_tokens:,})"
-            )
-            self.rate_label_input.setText(f"Rate Input: ${pricing['input']:.9f} / token")
-            self.rate_label_output.setText(f"Rate Output: ${pricing['output']:.9f} / token")
+            self.model_label.setText(str(model_display))
+            self.input_tokens_label.setText(f"In: {self.total_input_tokens:,} tok")
+            self.output_tokens_label.setText(f"Out: {self.total_output_tokens:,} tok")
+            self.rate_label_input.setText(f"${pricing['input']:.9f}/in")
+            self.rate_label_output.setText(f"${pricing['output']:.9f}/out")
 
             # Update tampilan cost
             self.update_cost_display()
@@ -5477,9 +5627,9 @@ class MangaOCRApp(QMainWindow):
         """
         Update tampilan biaya (USD & IDR).
         """
-        self.cost_label.setText(f"Cost (USD): ${self.total_cost:.4f}")
+        self.cost_label.setText(f"${self.total_cost:.4f}")
         cost_idr = self.total_cost * self.usd_to_idr_rate
-        self.cost_idr_label.setText(f"Cost (IDR): Rp {cost_idr:,.0f}")
+        self.cost_idr_label.setText(f"Rp {cost_idr:,.0f}")
 
     def fetch_exchange_rate(self):
         if self.exchange_rate_thread and self.exchange_rate_thread.isRunning():
@@ -6750,13 +6900,13 @@ class MangaOCRApp(QMainWindow):
         self.manage_worker_pool()
 
     def update_active_workers_label(self):
-        self.active_workers_label.setText(f"Active Workers: {len(self.worker_pool)}")
+        self.active_workers_label.setText(str(len(self.worker_pool)))
 
     def on_worker_error(self, error_msg):
         QTimer.singleShot(0, lambda: self.handle_worker_error_ui(error_msg))
 
     def handle_worker_error_ui(self, error_msg):
-        QMessageBox.critical(self, "Processing Error", f"An error occurred in a worker thread:\n{error_msg}")
+        self.show_banner("worker-error", "Processing error", f"An error occurred in a worker thread: {error_msg}", kind="error")
         self.overall_progress_bar.setVisible(False)
         self.batch_process_button.setEnabled(True)
 
@@ -7170,8 +7320,8 @@ class MangaOCRApp(QMainWindow):
         rpm = model_usage.get('minute_count', 0)
         rpd = model_usage.get('daily_count', 0)
 
-        self.rpm_label.setText(f"RPM: {rpm} / {model_limits['rpm']}")
-        self.rpd_label.setText(f"RPD: {rpd} / {model_limits['rpd']}")
+        self.rpm_label.setText(f"{rpm}/{model_limits['rpm']}")
+        self.rpd_label.setText(f"{rpd}/{model_limits['rpd']}")
 
     def check_limits_and_update_ui(self):
         self.load_usage_data()
@@ -7195,22 +7345,66 @@ class MangaOCRApp(QMainWindow):
             self.save_usage_data()
 
         self.update_usage_display()
-        daily_limit_reached = model_usage.get('daily_count', 0) >= model_limits['rpd']
-        minute_limit_reached = model_usage.get('minute_count', 0) >= model_limits['rpm']
+        rpd_limit = int(model_limits.get('rpd', 0) or 0)
+        rpm_limit = int(model_limits.get('rpm', 0) or 0)
+        daily_count = int(model_usage.get('daily_count', 0) or 0)
+        minute_count = int(model_usage.get('minute_count', 0) or 0)
+        daily_limit_reached = rpd_limit > 0 and daily_count >= rpd_limit
+        minute_limit_reached = rpm_limit > 0 and minute_count >= rpm_limit
 
         ai_disabled = daily_limit_reached or minute_limit_reached
         tooltip_message = ""
+        limit_banner_key = "api-usage-limit"
+        banner_action = lambda: self.show_unified_help_dialog(start_tab=2)
 
         if daily_limit_reached:
             tooltip_message = f"AI features disabled: Daily API limit reached for {model_name}."
             self.countdown_label.setVisible(False)
+            self.show_banner(
+                limit_banner_key,
+                "Daily API limit reached",
+                f"{model_name} has used {daily_count}/{rpd_limit} requests today. AI features are paused for this model.",
+                kind="error",
+                action_text="View Usage",
+                action=banner_action,
+            )
         elif minute_limit_reached:
             seconds_until_next_minute = 60 - int(time.strftime('%S', time.localtime(now)))
             tooltip_message = f"AI features disabled: Per-minute limit reached for {model_name}."
             self.countdown_label.setText(f"Cooldown: {seconds_until_next_minute}s")
             self.countdown_label.setVisible(True)
+            self.show_banner(
+                limit_banner_key,
+                "Per-minute API limit reached",
+                f"{model_name} has used {minute_count}/{rpm_limit} requests this minute. Cooldown: {seconds_until_next_minute}s.",
+                kind="error",
+                action_text="View Usage",
+                action=banner_action,
+            )
         else:
             self.countdown_label.setVisible(False)
+            daily_ratio = (daily_count / rpd_limit) if rpd_limit > 0 else 0
+            minute_ratio = (minute_count / rpm_limit) if rpm_limit > 0 else 0
+            if daily_ratio >= 0.85:
+                self.show_banner(
+                    limit_banner_key,
+                    "Daily API usage almost full",
+                    f"{model_name} has used {daily_count}/{rpd_limit} requests today.",
+                    kind="warning",
+                    action_text="View Usage",
+                    action=banner_action,
+                )
+            elif minute_ratio >= 0.85:
+                self.show_banner(
+                    limit_banner_key,
+                    "Per-minute API usage almost full",
+                    f"{model_name} has used {minute_count}/{rpm_limit} requests this minute.",
+                    kind="warning",
+                    action_text="View Usage",
+                    action=banner_action,
+                )
+            else:
+                self.dismiss_banner(limit_banner_key)
 
         is_worker_running = (self.batch_save_thread and self.batch_save_thread.isRunning()) or \
                                  (self.detection_thread and self.detection_thread.isRunning()) or \
@@ -7450,7 +7644,7 @@ class MangaOCRApp(QMainWindow):
             self._refresh_detection_overlay()
             self.refresh_history_views()
         except Exception as e:
-            QMessageBox.critical(self, "Error Loading Image", f"Could not load image: {file_path}\nError: {e}")
+            self.show_banner("image-load-error", "Error loading image", f"Could not load image: {file_path}\nError: {e}", kind="error")
             self.clear_view()
 
     def apply_curves_lut(self, lut, points):
@@ -7486,12 +7680,12 @@ class MangaOCRApp(QMainWindow):
             self.statusBar().showMessage("Applied image Curves adjustment successfully.", 3000)
         except Exception as e:
             traceback.print_exc()
-            QMessageBox.critical(self, "Curves Error", f"Failed to apply Curves adjustment: {e}")
+            self.show_banner("curves-error", "Curves error", f"Failed to apply Curves adjustment: {e}", kind="error")
 
     def open_image_curves_dialog(self):
         """Launches the Photoshop-style Curves adjustment dialog."""
         if self.current_image_pil is None:
-            QMessageBox.warning(self, "No Image", "Please load an image first before adjusting Curves.")
+            self.show_banner("curves-no-image", "No image", "Please load an image first before adjusting Curves.", kind="warning")
             return
             
         from src.ui.dialogs import ImageCurvesDialog
@@ -7506,7 +7700,7 @@ class MangaOCRApp(QMainWindow):
                 self.current_pdf_page = 0
             self.load_pdf_page(self.current_pdf_page)
         except Exception as e:
-            QMessageBox.critical(self, "Error Loading PDF", f"Could not load PDF file: {file_path}\nError: {e}")
+            self.show_banner("pdf-load-error", "Error loading PDF", f"Could not load PDF file: {file_path}\nError: {e}", kind="error")
             self.pdf_document = None
             self.current_pdf_page = -1
 
@@ -8173,7 +8367,7 @@ class MangaOCRApp(QMainWindow):
         if row >= 0:
             count = self.grad_color_list.count()
             if count <= 2:
-                QMessageBox.warning(self, "Limit", "Gradient must have at least 2 colors.")
+                self.show_toast("Gradient limit", "Gradient must have at least 2 colors.", kind="warning")
                 return
             self.grad_color_list.takeItem(row)
             self._on_typeset_gradient_changed()
@@ -8219,7 +8413,7 @@ class MangaOCRApp(QMainWindow):
         # Open a simple modal to add a font family to the currently selected group
         current_group = self.font_group_combo.currentText()
         if not current_group or current_group == 'All':
-            QMessageBox.information(self, "Select Group", "Please select a specific group to add a font to.")
+            self.show_toast("Select group", "Please select a specific group to add a font to.", kind="info")
             return
 
         dialog = QDialog(self)
@@ -8255,7 +8449,7 @@ class MangaOCRApp(QMainWindow):
 
         chosen = font_input.text().strip() or (installed_combo.currentText() if installed_combo.currentText() != "(none)" and installed_combo.currentText() != "(could not list)" else '')
         if not chosen:
-            QMessageBox.information(self, "No font selected", "No font was provided. Operation cancelled.")
+            self.show_toast("No font selected", "No font was provided. Operation cancelled.", kind="info")
             return
 
         # Add to mapping and refresh UI
@@ -8273,7 +8467,7 @@ class MangaOCRApp(QMainWindow):
             save_settings(SETTINGS)
         except Exception:
             pass
-        QMessageBox.information(self, "Added", f"'{chosen}' added to group '{current_group}'.")
+        self.show_toast("Font group updated", f"'{chosen}' added to group '{current_group}'.", kind="success")
 
     def _on_add_font_group_clicked(self):
         name, ok = QInputDialog.getText(self, "Add Font Group", "Group name:")
@@ -8283,7 +8477,7 @@ class MangaOCRApp(QMainWindow):
         if not getattr(self, 'font_groups', None):
             self.font_groups = {}
         if grp in self.font_groups:
-            QMessageBox.information(self, "Exists", f"Group '{grp}' already exists.")
+            self.show_toast("Group exists", f"Group '{grp}' already exists.", kind="info")
             return
         self.font_groups[grp] = []
         # update combo
@@ -8295,12 +8489,12 @@ class MangaOCRApp(QMainWindow):
             save_settings(SETTINGS)
         except Exception:
             pass
-        QMessageBox.information(self, "Created", f"Group '{grp}' created.")
+        self.show_toast("Group created", f"Group '{grp}' created.", kind="success")
 
     def _on_remove_font_group_clicked(self):
         grp = self.font_group_combo.currentText()
         if not grp or grp == 'All':
-            QMessageBox.information(self, "Select Group", "Please select a specific group to remove.")
+            self.show_toast("Select group", "Please select a specific group to remove.", kind="info")
             return
         confirm = QMessageBox.question(self, "Remove Group", f"Remove group '{grp}' and all its entries?", QMessageBox.Yes | QMessageBox.No)
         if confirm != QMessageBox.Yes:
@@ -8316,9 +8510,9 @@ class MangaOCRApp(QMainWindow):
             SETTINGS.setdefault('font_groups', {})
             SETTINGS['font_groups'] = copy.deepcopy(self.font_groups)
             save_settings(SETTINGS)
-            QMessageBox.information(self, "Removed", f"Group '{grp}' removed.")
+            self.show_toast("Group removed", f"Group '{grp}' removed.", kind="success")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to remove group: {e}")
+            self.show_banner("font-group-remove-error", "Failed to remove group", str(e), kind="error")
 
     def _on_orientation_button_toggled(self, checked):
         if not checked:
@@ -8543,9 +8737,9 @@ class MangaOCRApp(QMainWindow):
         if added:
             self.typeset_font = self._build_current_font()
             self._update_typeset_preview()
-            QMessageBox.information(self, "Fonts Imported", f"Imported {len(added)} font(s):\n" + ", ".join(added))
+            self.show_toast("Fonts imported", f"Imported {len(added)} font(s): " + ", ".join(added), kind="success", timeout_ms=5000)
         if skipped:
-            QMessageBox.warning(self, "Fonts Skipped", "\n".join(skipped))
+            self.show_banner("fonts-skipped", "Fonts skipped", "\n".join(skipped), kind="warning")
 
     def choose_color(self):
         color = QColorDialog.getColor(self.typeset_color, self)
@@ -10478,7 +10672,7 @@ class MangaOCRApp(QMainWindow):
         points = self.image_label.get_polygon_points()
         if len(points) < 3:
             if warn_if_invalid:
-                QMessageBox.warning(self, "Invalid Shape", "Please select at least 3 points.")
+                self.show_toast("Invalid shape", "Please select at least 3 points.", kind="warning")
             else:
                 self.statusBar().showMessage("No pen selection to confirm.", 2000)
             return False
@@ -10496,7 +10690,9 @@ class MangaOCRApp(QMainWindow):
         self.update_pen_tool_buttons_visibility(False)
 
     def save_image(self):
-        if not self.typeset_pixmap: QMessageBox.warning(self, "No Image", "There is no image to save."); return
+        if not self.typeset_pixmap:
+            self.show_banner("save-image-no-image", "No image", "There is no image to save.", kind="warning")
+            return
 
         # Get settings
         gen_cfg = SETTINGS.get('general', {})
@@ -10557,12 +10753,12 @@ class MangaOCRApp(QMainWindow):
             self.image_save_thread = None
         self.image_save_worker = None
         if success:
-            QMessageBox.information(self, "Success", message)
+            self.show_toast("Image saved", message, kind="success")
         else:
-            QMessageBox.critical(self, "Error", message)
+            self.show_banner("image-save-error", "Image save failed", message, kind="error")
 
     def on_image_save_error(self, msg):
-        self.statusBar().showMessage(f"Image save error: {msg}", 5000)
+        self.show_banner("image-save-error", "Image save failed", msg, kind="error")
 
     def delete_typeset_area(self, area_to_delete):
         if area_to_delete in self.typeset_areas:
@@ -11228,15 +11424,16 @@ class MangaOCRApp(QMainWindow):
 
             # Tampilkan warning jika ada
             if warnings and show_dialogs:
-                QMessageBox.warning(
-                    self,
-                    "Project Loaded with Warnings",
-                    "\n".join(f"? {w}" for w in warnings)
+                self.show_banner(
+                    "project-load-warnings",
+                    "Project loaded with warnings",
+                    "\n".join(warnings),
+                    kind="warning",
                 )
 
             # Info success
             if show_dialogs:
-                QMessageBox.information(self, "Success", "Project loaded successfully.")
+                self.show_toast("Project loaded", "Project loaded successfully.", kind="success")
             elif warnings:
                 self.statusBar().showMessage("; ".join(warnings), 5000)
 
@@ -11247,7 +11444,7 @@ class MangaOCRApp(QMainWindow):
 
         except Exception as exc:
             if show_dialogs:
-                QMessageBox.critical(self, "Error", f"Failed to load project: {exc}")
+                self.show_banner("project-load-error", "Project load failed", str(exc), kind="error")
             else:
                 self.statusBar().showMessage(f"Failed to load project: {exc}", 5000)
             return False
@@ -11255,7 +11452,7 @@ class MangaOCRApp(QMainWindow):
     def save_project(self, is_auto=False):
         if not self.project_dir:
             if not is_auto:
-                QMessageBox.warning(self, "No Project", "Please load a folder before saving a project.")
+                self.show_banner("save-project-no-folder", "No project", "Please load a folder before saving a project.", kind="warning")
             return False
 
         # Commit active typeset areas to in-memory dictionary first to avoid copy-paste loss
@@ -11333,7 +11530,7 @@ class MangaOCRApp(QMainWindow):
                 self.paint_mutex.unlock()
         except Exception as exc:
             if not is_auto:
-                QMessageBox.critical(self, "Error", f"Failed to prepare project data: {exc}")
+                self.show_banner("project-save-prepare-error", "Project save failed", f"Failed to prepare project data: {exc}", kind="error")
             return False
         # Ensure target directory exists
         target_dir = os.path.dirname(self.current_project_path) or (self.project_dir or os.getcwd())
@@ -11345,7 +11542,7 @@ class MangaOCRApp(QMainWindow):
         # Prevent concurrent project saves
         if getattr(self, 'project_save_thread', None) and getattr(self, 'project_save_thread', None).isRunning():
             if not is_auto:
-                QMessageBox.information(self, "Save In Progress", "A project save is already in progress.")
+                self.show_toast("Save in progress", "A project save is already running.", kind="info")
             return False
 
         # Store save state
@@ -11380,16 +11577,16 @@ class MangaOCRApp(QMainWindow):
         is_auto = getattr(self, 'project_save_is_auto', False)
         if not is_auto:
             if success:
-                QMessageBox.information(self, "Success", message)
+                self.show_toast("Project saved", message, kind="success")
             else:
-                QMessageBox.critical(self, "Error", message)
+                self.show_banner("project-save-error", "Project save failed", message, kind="error")
 
     def _on_save_thread_finished(self):
         self.project_save_thread = None
         self.project_save_worker = None
 
     def on_project_save_error(self, msg):
-        self.statusBar().showMessage(f"Error saving project: {msg}", 5000)
+        self.show_banner("project-save-error", "Project save failed", msg, kind="error")
     
     def auto_save_project(self):
         if QApplication.activeModalWidget() is not None:
@@ -11907,8 +12104,12 @@ class MangaOCRApp(QMainWindow):
     def open_recent_project(self, file_path: str):
         """Buka project dari recent projects list."""
         if not os.path.exists(file_path):
-            QMessageBox.warning(self, 'File Not Found',
-                f'Project file not found:\n{file_path}\n\nIt will be removed from recent projects.')
+            self.show_banner(
+                "recent-project-missing",
+                "File not found",
+                f"Project file not found:\n{file_path}\n\nIt will be removed from recent projects.",
+                kind="warning",
+            )
             recent = list(SETTINGS.get('recent_projects', []))
             if file_path in recent:
                 recent.remove(file_path)
@@ -12016,7 +12217,7 @@ class MangaOCRApp(QMainWindow):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QScrollArea, QWidget, QGridLayout, QFrame
 
         if not self.project_dir:
-            QMessageBox.information(self, "No Project", "Load a folder/project first.")
+            self.show_toast("No project", "Load a folder/project first.", kind="info")
             return
 
         # --- Hitung statistik ---
@@ -12186,7 +12387,100 @@ class MangaOCRApp(QMainWindow):
             else:
                 self.openrouter_pricing_db[model_id] = info
 
-        self.statusBar().showMessage("✅ Harga model berhasil diperbarui dari Pricing Editor.", 4000)
+        self.show_toast("Pricing updated", "Harga model berhasil diperbarui dari Pricing Editor.", kind="success")
+
+    def _set_find_replace_busy(self, is_busy):
+        ctx = getattr(self, '_find_replace_context', None)
+        if not ctx:
+            return
+        ctx['busy'] = bool(is_busy)
+        for widget in ctx.get('widgets', []):
+            try:
+                widget.setEnabled(not is_busy)
+            except RuntimeError:
+                pass
+        replace_button = ctx.get('replace_button')
+        if replace_button is not None:
+            try:
+                replace_button.setText("Replacing..." if is_busy else "Replace All")
+            except RuntimeError:
+                pass
+        if is_busy and not ctx.get('cursor_set'):
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            ctx['cursor_set'] = True
+        elif not is_busy and ctx.get('cursor_set'):
+            QApplication.restoreOverrideCursor()
+            ctx['cursor_set'] = False
+
+    def _apply_find_replace_update(self, key, area_index, new_text):
+        rec = self.all_typeset_data.get(key)
+        if not isinstance(rec, dict):
+            return False
+        areas = rec.get('areas', [])
+        if area_index < 0 or area_index >= len(areas):
+            return False
+
+        area = areas[area_index]
+        if hasattr(area, 'update_plain_text') and callable(area.update_plain_text):
+            area.update_plain_text(new_text)
+        elif hasattr(area, 'text'):
+            area.text = new_text
+            if hasattr(area, 'text_segments'):
+                area.text_segments = None
+        elif isinstance(area, dict):
+            area['text'] = new_text
+            area['segments'] = None
+        else:
+            return False
+        return True
+
+    def _on_find_replace_finished(self, replaced_count, affected_pages, updates):
+        self._set_find_replace_busy(False)
+        ctx = getattr(self, '_find_replace_context', None) or {}
+        dlg = ctx.get('dialog') or self
+        find_txt = ctx.get('find_text', '')
+
+        if replaced_count > 0:
+            affected_keys = {key for key, _, _ in updates}
+            current_key = self.get_current_data_key() if self.current_image_path else None
+            if current_key in affected_keys and hasattr(self, '_push_undo_snapshot'):
+                self._push_undo_snapshot(f"Replace All: {find_txt[:24]}")
+
+            for key, area_index, new_text in updates:
+                self._apply_find_replace_update(key, area_index, new_text)
+
+            if current_key in affected_keys:
+                self.typeset_areas = self.all_typeset_data[current_key]['areas']
+                self.redraw_all_typeset_areas()
+                if hasattr(self, '_refresh_layers_list'):
+                    self._refresh_layers_list()
+
+            save_started = self.save_project(is_auto=True)
+            save_note = "Project save started in background." if save_started else "Changes applied; project save is already in progress."
+
+            self.show_toast(
+                "Replace complete",
+                f"Replaced {replaced_count} occurrences across {affected_pages} pages. {save_note}",
+                kind="success",
+                timeout_ms=5000,
+            )
+            try:
+                dlg.accept()
+            except RuntimeError:
+                pass
+        else:
+            notify_toast(dlg, "No matches", f"No occurrences of '{find_txt}' were found.", kind="info")
+
+        self._find_replace_context = None
+
+    def _on_find_replace_error(self, message):
+        self._set_find_replace_busy(False)
+        self.show_banner("find-replace-error", "Replace failed", f"Find & Replace failed: {message}", kind="error")
+        self._find_replace_context = None
+
+    def _on_find_replace_thread_finished(self):
+        self.find_replace_thread = None
+        self.find_replace_worker = None
 
     def open_find_replace_dialog(self):
         """Membuka dialog Find and Replace teks terjemahan global."""
@@ -12361,7 +12655,7 @@ class MangaOCRApp(QMainWindow):
         def do_find():
             pattern = get_search_pattern()
             if not pattern:
-                QMessageBox.warning(dlg, "Empty Search", "Please enter text to find.")
+                notify_toast(dlg, "Empty search", "Please enter text to find.", kind="warning")
                 return
             
             # Disable selection changed trigger during table rebuild
@@ -12411,64 +12705,80 @@ class MangaOCRApp(QMainWindow):
             else:
                 results_group.setVisible(False)
                 dlg.resize(380, 200)
-                QMessageBox.information(dlg, "No Matches", f"No occurrences of '{find_input.text()}' were found.")
+                notify_toast(dlg, "No matches", f"No occurrences of '{find_input.text()}' were found.", kind="info")
 
         def do_replace_all():
             find_txt = find_input.text()
             rep_txt = rep_input.text()
             pattern = get_search_pattern()
             if not pattern:
-                QMessageBox.warning(dlg, "Empty Search", "Please enter text to find.")
+                notify_toast(dlg, "Empty search", "Please enter text to find.", kind="warning")
                 return
-            
-            replaced_count = 0
-            affected_pages = 0
-            
+
+            try:
+                replace_running = bool(getattr(self.find_replace_thread, 'isRunning', lambda: False)()) if getattr(self, 'find_replace_thread', None) else False
+            except RuntimeError:
+                self.find_replace_thread = None
+                self.find_replace_worker = None
+                replace_running = False
+
+            if replace_running:
+                notify_toast(dlg, "Replace in progress", "A find/replace operation is already running.", kind="info")
+                return
+
+            search_rows = []
             for key, rec in list(self.all_typeset_data.items()):
                 areas = rec.get('areas', [])
-                page_changed = False
-                for area in areas:
+                for area_index, area in enumerate(areas):
                     if hasattr(area, 'text'):
-                        orig = area.text or ''
+                        text = area.text or ''
                     elif isinstance(area, dict):
-                        orig = area.get('text', '') or ''
+                        text = area.get('text', '') or ''
                     else:
                         continue
-                        
-                    if not orig:
+
+                    if not text:
                         continue
-                        
-                    if pattern.search(orig):
-                        new_text, count = pattern.subn(rep_txt, orig)
-                        if count > 0:
-                            replaced_count += count
-                            page_changed = True
-                            if hasattr(area, 'update_plain_text') and callable(area.update_plain_text):
-                                area.update_plain_text(new_text)
-                            elif hasattr(area, 'text'):
-                                area.text = new_text
-                            elif isinstance(area, dict):
-                                area['text'] = new_text
-                                area['segments'] = None
-                if page_changed:
-                    affected_pages += 1
-            
-            if replaced_count > 0:
-                # Reload active page if it was affected
-                if self.current_image_path:
-                    curr_key = self.get_current_data_key()
-                    if curr_key in self.all_typeset_data:
-                        self.typeset_areas = self.all_typeset_data[curr_key]['areas']
-                        self.redraw_all_typeset_areas()
-                
-                self.save_project(is_auto=True)
-                
-                QMessageBox.information(self, "Replace Complete", 
-                    f"Successfully replaced {replaced_count} occurrences across {affected_pages} pages.\n"
-                    "Project automatically saved.")
-                dlg.accept()
-            else:
-                QMessageBox.information(dlg, "No Matches", f"No occurrences of '{find_txt}' were found.")
+
+                    search_rows.append((key, area_index, text))
+
+            if not search_rows:
+                notify_toast(dlg, "No matches", f"No occurrences of '{find_txt}' were found.", kind="info")
+                return
+
+            worker = FindReplaceWorker(
+                search_rows,
+                find_txt,
+                rep_txt,
+                match_case=case_cb.isChecked(),
+                whole_word=whole_cb.isChecked()
+            )
+            thread = QThread()
+            worker.moveToThread(thread)
+
+            self._find_replace_context = {
+                'dialog': dlg,
+                'find_text': find_txt,
+                'replace_button': replace_all_btn,
+                'widgets': (find_input, rep_input, case_cb, whole_cb, find_btn, replace_all_btn, close_btn, results_table),
+                'cursor_set': False,
+            }
+
+            worker.finished.connect(self._on_find_replace_finished)
+            worker.error.connect(self._on_find_replace_error)
+            worker.finished.connect(thread.quit)
+            worker.error.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.error.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._on_find_replace_thread_finished)
+
+            self.find_replace_worker = worker
+            self.find_replace_thread = thread
+
+            self._set_find_replace_busy(True)
+            thread.started.connect(worker.run)
+            thread.start()
 
         def on_selection_changed():
             row_idx = results_table.currentRow()
@@ -12562,7 +12872,7 @@ class MangaOCRApp(QMainWindow):
 
     def export_to_pdf(self):
         if not self.project_dir:
-            QMessageBox.warning(self, "No Folder Loaded", "Please load a folder containing images first.")
+            self.show_banner("export-no-folder", "No folder loaded", "Please load a folder containing images first.", kind="warning")
             return
 
         image_files_to_export = []
@@ -12577,7 +12887,7 @@ class MangaOCRApp(QMainWindow):
                 image_files_to_export.append(typeset_path)
 
         if not image_files_to_export:
-            QMessageBox.warning(self, "No Typeset Files Found", "No '_typeset.png' files were found in the current folder to export.")
+            self.show_banner("export-no-typeset-files", "No typeset files found", "No '_typeset.png' files were found in the current folder to export.", kind="warning")
             return
 
         folder_name = os.path.basename(self.project_dir)
@@ -12605,12 +12915,12 @@ class MangaOCRApp(QMainWindow):
             if images_pil:
                 self.update_overall_progress(100, "Saving PDF...")
                 images_pil[0].save(self._get_safe_path(pdf_path), "PDF", resolution=100.0, save_all=True, append_images=images_pil[1:])
-                QMessageBox.information(self, "Success", f"Successfully exported {len(images_pil)} typeset images to:\n{pdf_path}")
+                self.show_toast("PDF exported", f"Exported {len(images_pil)} typeset images to {pdf_path}", kind="success", timeout_ms=5000)
             else:
                 raise Exception("No images could be processed.")
 
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"An error occurred while exporting to PDF:\n{e}")
+            self.show_banner("pdf-export-error", "PDF export failed", str(e), kind="error")
         finally:
             QApplication.restoreOverrideCursor() # DIUBAH: hapus argumen
             self.overall_progress_bar.setVisible(False)
@@ -12619,7 +12929,7 @@ class MangaOCRApp(QMainWindow):
     def export_to_cbz(self):
         """Export semua halaman yang sudah di-typeset ke format CBZ (Comic Book Zip)."""
         if not self.project_dir:
-            QMessageBox.warning(self, "No Folder Loaded", "Please load a folder containing images first.")
+            self.show_banner("export-no-folder", "No folder loaded", "Please load a folder containing images first.", kind="warning")
             return
 
         import zipfile
@@ -12637,8 +12947,12 @@ class MangaOCRApp(QMainWindow):
                     break
 
         if not image_files_to_export:
-            QMessageBox.warning(self, "No Typeset Files Found",
-                "No typeset images were found. Please run Batch Save first to generate typeset files.")
+            self.show_banner(
+                "export-no-typeset-files",
+                "No typeset files found",
+                "No typeset images were found. Please run Batch Save first to generate typeset files.",
+                kind="warning",
+            )
             return
 
         # Urutkan secara natural (1, 2, 10 bukan 1, 10, 2)
@@ -12671,12 +12985,15 @@ class MangaOCRApp(QMainWindow):
                     arcname = f"{i + 1:04d}_{os.path.basename(img_path)}"
                     zf.write(self._get_safe_path(img_path), arcname)
 
-            QMessageBox.information(self, "Success",
-                f"Successfully exported {len(image_files_to_export)} typeset pages to:\n{cbz_path}")
+            self.show_toast(
+                "CBZ exported",
+                f"Exported {len(image_files_to_export)} typeset pages to {cbz_path}",
+                kind="success",
+                timeout_ms=5000,
+            )
 
         except Exception as e:
-            QMessageBox.critical(self, "Export Error",
-                f"An error occurred while exporting to CBZ:\n{e}")
+            self.show_banner("cbz-export-error", "CBZ export failed", str(e), kind="error")
         finally:
             QApplication.restoreOverrideCursor()
             self.overall_progress_bar.setVisible(False)
@@ -12773,7 +13090,7 @@ class MangaOCRApp(QMainWindow):
     def start_batch_processing(self):
         if not self.batch_processing_queue: return
         if self.batch_processor_thread and self.batch_processor_thread.isRunning():
-            QMessageBox.warning(self, "Busy", "A batch is already being processed."); return
+            self.show_toast("Batch busy", "A batch is already being processed.", kind="info"); return
 
         self.statusBar().showMessage(f"Starting to process batch of {len(self.batch_processing_queue)} items...")
 
@@ -12793,6 +13110,7 @@ class MangaOCRApp(QMainWindow):
     def on_api_batch_finished(self):
         self.statusBar().showMessage("Batch processing finished.", 5000)
         self.batch_processor_thread.quit()
+        self.show_toast("Batch translate complete", "Proses batch translation untuk halaman yang dipilih telah selesai.", kind="success")
         self.show_desktop_notification("Batch Translate Selesai", "Proses batch translation untuk halaman yang dipilih telah selesai.")
 
     def split_extended_bubbles(self, detections, split_threshold=2.5):
@@ -12821,11 +13139,11 @@ class MangaOCRApp(QMainWindow):
 
     def start_interactive_batch_detection(self):
         if not self.image_files:
-            QMessageBox.warning(self, "No Files Loaded", "Please load a folder first to use this feature.")
+            self.show_banner("batch-detect-no-files", "No files loaded", "Please load a folder first to use this feature.", kind="warning")
             return
 
         if self.detection_thread and self.detection_thread.isRunning():
-            QMessageBox.warning(self, "Busy", "A detection process is already running.")
+            self.show_toast("Detection busy", "A detection process is already running.", kind="info")
             return
         
         # [DIUBAH] Menggunakan mode deteksi yang dipilih user
@@ -12882,6 +13200,7 @@ class MangaOCRApp(QMainWindow):
             self.cancel_detection_button.setText("Cancel Detection")
 
         self.statusBar().showMessage("Detection complete. Please review the highlighted areas.", 5000)
+        self.show_toast("Detection complete", "Please review the highlighted areas.", kind="success")
         self.show_desktop_notification("Bubble Detection Selesai", "Proses pendeteksian balon teks/teks otomatis telah selesai.")
         self.set_ui_for_confirmation(True)
 
@@ -12891,7 +13210,7 @@ class MangaOCRApp(QMainWindow):
 
         total_items = sum(len(items) for items in self.detected_items_map.values())
         if total_items == 0:
-            QMessageBox.information(self, "No Items", "No items were confirmed for processing.")
+            self.show_toast("No items", "No items were confirmed for processing.", kind="info")
             self.cancel_interactive_batch()
             return
 
@@ -13024,22 +13343,22 @@ class MangaOCRApp(QMainWindow):
 
     def update_confirmation_button_text(self):
         total_items = sum(len(items) for items in self.detected_items_map.values())
-        self.confirm_items_button.setText(f"Confirm & Process ({total_items}) Items")
+        self.confirm_items_button.setText(f"Confirm ({total_items})")
 
     def open_batch_save_dialog(self):
         if not self.image_files:
-            QMessageBox.warning(self, "No Folder Loaded", "Please load a folder to use the batch save feature.")
+            self.show_banner("batch-save-no-folder", "No folder loaded", "Please load a folder to use the batch save feature.", kind="warning")
             return
 
         dialog = BatchSaveDialog(self.image_files, self)
         if dialog.exec_() == QDialog.Accepted:
             files_to_save = dialog.get_selected_files()
             if files_to_save: self.execute_batch_save(files_to_save)
-            else: self.statusBar().showMessage("No files were selected to save.", 3000)
+            else: self.show_toast("No files selected", "No files were selected to save.", kind="info")
 
     def execute_batch_save(self, files_to_save):
         if self.batch_save_thread and self.batch_save_thread.isRunning():
-            QMessageBox.warning(self, "Busy", "A batch save process is already running.")
+            self.show_toast("Batch save in progress", "A batch save process is already running.", kind="info")
             return
 
         # Get settings
@@ -13086,7 +13405,7 @@ class MangaOCRApp(QMainWindow):
 
     def on_batch_save_error(self, error_msg):
         self._batch_save_errors.append(error_msg)
-        self.statusBar().showMessage(error_msg, 5000)
+        self.show_banner("batch-save-error-live", "Batch save issue", error_msg, kind="warning")
 
     def on_batch_save_finished(self):
         errors = list(getattr(self, '_batch_save_errors', []))
@@ -13100,16 +13419,20 @@ class MangaOCRApp(QMainWindow):
         if errors:
             shown_errors = "\n".join(errors[:8])
             more = "" if len(errors) <= 8 else f"\n...and {len(errors) - 8} more error(s)."
-            QMessageBox.warning(
-                self,
+            self.show_banner(
+                "batch-save-errors",
                 "Batch Save Finished With Errors",
-                f"Saved {saved_count} file(s), but {len(errors)} file(s) failed:\n\n{shown_errors}{more}"
+                f"Saved {saved_count} file(s), but {len(errors)} file(s) failed:\n\n{shown_errors}{more}",
+                kind="warning",
             )
         else:
-            QMessageBox.information(
-                self,
+            self.dismiss_banner("batch-save-error-live")
+            self.dismiss_banner("batch-save-errors")
+            self.show_toast(
                 "Batch Save Complete",
-                f"All selected files have been saved.\nSaved file(s): {saved_count}"
+                f"All selected files have been saved. Saved file(s): {saved_count}",
+                kind="success",
+                timeout_ms=5000,
             )
 
     def check_if_saved(self, file_path):
@@ -13128,7 +13451,7 @@ class MangaOCRApp(QMainWindow):
         
         settings = self.get_current_settings()
         if not settings.get('use_dl_detector'):
-            QMessageBox.warning(self, "Detector Disabled", "Please enable 'Gunakan DL Model untuk Bubble' in the Cleanup tab to use this feature.")
+            self.show_banner("bubble-detector-disabled", "Detector disabled", "Please enable 'Gunakan DL Model untuk Bubble' in the Cleanup tab to use this feature.", kind="warning")
             self.image_label.clear_selection()
             return
             
@@ -13309,6 +13632,17 @@ class MangaOCRApp(QMainWindow):
             except Exception:
                 pass
 
+        if getattr(self, 'find_replace_thread', None):
+            try:
+                try:
+                    if getattr(self.find_replace_thread, 'isRunning', lambda: False)():
+                        self.find_replace_thread.quit()
+                        self.find_replace_thread.wait()
+                except RuntimeError:
+                    pass
+            except Exception:
+                pass
+
         # Quit/wait project save thread if running
         try:
             if getattr(self, 'project_save_thread', None):
@@ -13389,9 +13723,9 @@ class MangaOCRApp(QMainWindow):
             }
             json_text = json.dumps(container, ensure_ascii=False)
             QApplication.clipboard().setText(json_text)
-            self.statusBar().showMessage("Typeset area copied to clipboard.", 2000)
+            self.show_toast("Copied", "Typeset area copied to clipboard.", kind="success", timeout_ms=2200)
         except Exception as e:
-            self.statusBar().showMessage(f"Failed to copy: {e}", 3000)
+            self.show_banner("copy-typeset-error", "Copy failed", str(e), kind="error")
 
     def paste_typeset_area(self):
         """Tempel area typeset dari clipboard."""
@@ -13448,12 +13782,12 @@ class MangaOCRApp(QMainWindow):
                 key = self.get_current_data_key()
                 self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
 
-            self.statusBar().showMessage("Typeset area pasted.", 2000)
+            self.show_toast("Pasted", "Typeset area pasted.", kind="success", timeout_ms=2200)
 
         except json.JSONDecodeError:
             pass # Bukan JSON valid
         except Exception as e:
-            self.statusBar().showMessage(f"Failed to paste: {e}", 3000)
+            self.show_banner("paste-typeset-error", "Paste failed", str(e), kind="error")
             traceback.print_exc()
 
     def detect_text_with_ocr_engine(self, cv_image, settings):
@@ -14727,11 +15061,11 @@ class MangaOCRApp(QMainWindow):
         if file_path:
             try:
                 display_name = self.font_manager.import_font(file_path)
-                QMessageBox.information(self, "Success", f"Font '{display_name}' imported successfully.")
+                self.show_toast("Font imported", f"Font '{display_name}' imported successfully.", kind="success")
                 self._populate_typeset_font_dropdown(display_name)
                 self.typeset_font = self._build_current_font()
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to import font:\n{str(e)}")
+                self.show_banner("font-import-error", "Font import failed", str(e), kind="error")
 
     def _on_auto_font_toggled(self, checked):
         if 'typeset' not in SETTINGS:
@@ -14858,13 +15192,13 @@ class MangaOCRApp(QMainWindow):
         def on_finished(success, msg):
             progress_dlg.close()
             if success:
-                QMessageBox.information(self, "Success", "Model YOLO26 panel detector berhasil diunduh!")
+                self.show_toast("Panel model downloaded", "Model YOLO26 panel detector berhasil diunduh.", kind="success")
                 self.panel_model_path_input.setText(model_path)
                 self.on_panel_model_path_changed(model_path)
                 callback()
             else:
                 if msg != "Cancelled":
-                    QMessageBox.critical(self, "Error", f"Gagal mengunduh model: {msg}")
+                    self.show_banner("panel-model-download-error", "Model download failed", msg, kind="error")
 
         self._downloader_worker.progress.connect(on_progress)
         self._downloader_worker.finished.connect(on_finished)
@@ -14873,7 +15207,7 @@ class MangaOCRApp(QMainWindow):
 
     def detect_panels_yolo(self):
         if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "Buka gambar manga terlebih dahulu.")
+            self.show_banner("panel-detect-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
             return
 
         model_path = self.panel_model_path_input.text().strip()
@@ -14896,7 +15230,7 @@ class MangaOCRApp(QMainWindow):
 
         from src.core.config import YOLO
         if YOLO is None:
-            QMessageBox.critical(self, "Dependency Error", "Pustaka 'ultralytics' (YOLO) tidak terpasang atau tidak terdeteksi.")
+            self.show_banner("panel-detect-dependency", "Dependency error", "Pustaka 'ultralytics' (YOLO) tidak terpasang atau tidak terdeteksi.", kind="error")
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -14941,10 +15275,10 @@ class MangaOCRApp(QMainWindow):
                 if reply == QMessageBox.Yes:
                     self.sort_areas_rtl()
             else:
-                QMessageBox.information(self, "Deteksi Selesai", "Tidak ditemukan panel pada halaman ini.")
+                self.show_toast("Deteksi selesai", "Tidak ditemukan panel pada halaman ini.", kind="info")
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Gagal mendeteksi panel: {e}")
+            self.show_banner("panel-detect-error", "Panel detection failed", f"Gagal mendeteksi panel: {e}", kind="error")
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -15061,7 +15395,7 @@ class MangaOCRApp(QMainWindow):
 
     def sort_areas_rtl(self):
         if not self.typeset_areas:
-            QMessageBox.information(self, "No Areas", "Tidak ada balon teks untuk diurutkan.")
+            self.show_toast("No areas", "Tidak ada balon teks untuk diurutkan.", kind="info")
             return
 
         panels = getattr(self, 'detected_panels', [])
@@ -15084,7 +15418,7 @@ class MangaOCRApp(QMainWindow):
 
     def start_full_page_translation(self):
         if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "Buka gambar manga terlebih dahulu.")
+            self.show_banner("full-page-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
             return
 
         settings = self.get_current_settings()
@@ -15133,7 +15467,7 @@ class MangaOCRApp(QMainWindow):
         self.auto_translate_page_btn.setEnabled(True)
         
         if not created_areas:
-            QMessageBox.information(self, "Selesai", f"Selesai: {msg}")
+            self.show_toast("Selesai", str(msg), kind="info")
             return
 
         for area_payload in created_areas:
@@ -15154,12 +15488,13 @@ class MangaOCRApp(QMainWindow):
         
         self.redraw_all_typeset_areas(refresh_layers=True)
         self.statusBar().showMessage(f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", 4000)
+        self.show_toast("Page translated", f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", kind="success")
 
     def on_full_page_translation_error(self, err_msg):
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setEnabled(True)
         self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
-        QMessageBox.critical(self, "Error", f"Gagal menerjemahkan halaman: {err_msg}")
+        self.show_banner("full-page-translation-error", "Penerjemahan halaman gagal", str(err_msg), kind="error")
 
 class FileDownloadWorker(QThread):
     progress = pyqtSignal(int, str)

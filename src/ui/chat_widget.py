@@ -41,6 +41,8 @@ from PyQt5.QtGui import (
     QIcon, QPainter, QBrush, QPen
 )
 
+from src.ui.notifications import notify_banner, notify_toast
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -1113,7 +1115,7 @@ class AIChatWidgetContent(QWidget):
     def _open_history(self):
         sessions = ChatHistoryManager.list_sessions()
         if not sessions:
-            QMessageBox.information(self, "History", "Belum ada history chat.")
+            notify_toast(self, "History", "Belum ada history chat.", kind="info")
             return
         dlg = HistoryDialog(sessions, self)
         dlg.session_selected.connect(self._load_session)
@@ -1122,7 +1124,7 @@ class AIChatWidgetContent(QWidget):
     def _load_session(self, session_id: str):
         data = ChatHistoryManager.load(session_id)
         if not data:
-            QMessageBox.warning(self, "Error", "Gagal memuat sesi chat.")
+            notify_banner(self, "chat-load-session-failed", "Error", "Gagal memuat sesi chat.", kind="error")
             return
         self._session = data
         self._clear_message_bubbles()

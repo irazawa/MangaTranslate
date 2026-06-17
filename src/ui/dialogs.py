@@ -38,6 +38,7 @@ import requests
 from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
+from src.ui.notifications import notify_banner, notify_toast
 from src.utils.helpers import *
 from src.core.fonts import *
 
@@ -69,7 +70,7 @@ class APIManagerDialog(QDialog):
         if exported is None:
             warnings = "\n".join(self.panel.validation_messages())
             details = f"\n\n{warnings}" if warnings else ""
-            QMessageBox.warning(self, "Validation", f"Please fix the highlighted issues before saving.{details}")
+            notify_banner(self, "api-manager-validation", "Validation", f"Please fix the highlighted issues before saving.{details}", kind="warning")
             return
 
         SETTINGS.setdefault('apis', {})
@@ -92,7 +93,7 @@ class APIManagerDialog(QDialog):
             except Exception:
                 pass
 
-        QMessageBox.information(self, "Success", "API settings updated successfully.")
+        notify_toast(self, "Success", "API settings updated successfully.", kind="success")
         self.accept()
 
 class SettingsDialog(QDialog):
@@ -1347,9 +1348,9 @@ class SettingsCenterDialog(QDialog):
             self.refresh_media_deps_btn.setEnabled(True)
             self._refresh_media_dependency_status()
             if success:
-                QMessageBox.information(self, "Media Tools Ready", message)
+                notify_toast(self, "Media tools ready", message, kind="success", timeout_ms=5000)
             else:
-                QMessageBox.warning(self, "Media Tools Install Failed", message)
+                notify_banner(self, "media-tools-install-failed", "Media tools install failed", message, kind="error")
 
         worker.progress.connect(on_progress)
         worker.finished.connect(on_finished)
@@ -1466,7 +1467,7 @@ class SettingsCenterDialog(QDialog):
         if api_export is None:
             warnings = "\n".join(self.api_panel.validation_messages())
             details = f"\n\n{warnings}" if warnings else ""
-            QMessageBox.warning(self, "API Settings", f"Please fix the highlighted API settings issues before saving.{details}")
+            notify_banner(self, "settings-api-validation", "API settings", f"Please fix the highlighted API settings issues before saving.{details}", kind="warning")
             self.tabs.setCurrentWidget(self.api_tab)
             return
 
@@ -1779,17 +1780,17 @@ class SettingsCenterDialog(QDialog):
         if ret == QMessageBox.Yes:
             success, msg = uninstall_tessdata_lang(lang_code)
             if success:
-                QMessageBox.information(self, "Success", msg)
+                notify_toast(self, "Success", msg, kind="success")
                 self._refresh_tesseract_languages_table()
                 if hasattr(self.main_window, 'populate_ocr_languages'):
                     self.main_window.populate_ocr_languages()
             else:
-                QMessageBox.critical(self, "Error", msg)
+                notify_banner(self, "tessdata-uninstall-failed", "Error", msg, kind="error")
 
     def _download_lang_model(self, lang_code):
         writable_path = get_writable_tessdata_path()
         if not writable_path:
-            QMessageBox.critical(self, "Error", "Could not locate a writable tessdata directory.")
+            notify_banner(self, "tessdata-path-missing", "Error", "Could not locate a writable tessdata directory.", kind="error")
             return
             
         progress_dlg = QProgressDialog("Downloading language model from GitHub...", "Cancel", 0, 100, self)
@@ -1809,12 +1810,12 @@ class SettingsCenterDialog(QDialog):
         def on_finished(success, message):
             progress_dlg.close()
             if success:
-                QMessageBox.information(self, "Download Complete", f"Successfully downloaded '{lang_code}' language model.")
+                notify_toast(self, "Download complete", f"Successfully downloaded '{lang_code}' language model.", kind="success")
                 self._refresh_tesseract_languages_table()
                 if hasattr(self.main_window, 'populate_ocr_languages'):
                     self.main_window.populate_ocr_languages()
             else:
-                QMessageBox.critical(self, "Download Failed", f"Failed to download language model: {message}")
+                notify_banner(self, "tessdata-download-failed", "Download failed", f"Failed to download language model: {message}", kind="error")
                 
         worker.progress.connect(on_progress)
         worker.finished.connect(on_finished)
@@ -1842,7 +1843,7 @@ class SettingsCenterDialog(QDialog):
             self.install_tess_btn.setEnabled(True)
             self.install_tess_btn.setText("🚀 Auto-Install Tesseract")
             if success:
-                QMessageBox.information(self, "Success", f"Tesseract successfully installed!\nPath: {path_or_err}")
+                notify_toast(self, "Success", f"Tesseract successfully installed. Path: {path_or_err}", kind="success", timeout_ms=5000)
                 self.tess_status_label.setText("🟢 Installed & Ready")
                 self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
                 self.tess_path_label.setText(f"Path: {path_or_err}")
@@ -1859,7 +1860,7 @@ class SettingsCenterDialog(QDialog):
                 if hasattr(self.main_window, 'populate_ocr_languages'):
                     self.main_window.populate_ocr_languages()
             else:
-                QMessageBox.critical(self, "Error", f"Failed to install Tesseract: {path_or_err}")
+                notify_banner(self, "tesseract-install-failed", "Error", f"Failed to install Tesseract: {path_or_err}", kind="error")
                 
         worker.progress.connect(on_progress)
         worker.finished.connect(on_finished)
@@ -2353,7 +2354,7 @@ class AdvancedTextEditDialog(QDialog):
                     parent._sync_cleanup_controls_from_selection()
                 except Exception:
                     pass
-            QMessageBox.information(self, "Reverted", "This area's overrides have been cleared and global defaults will be used.")
+            notify_toast(self, "Reverted", "This area's overrides have been cleared and global defaults will be used.", kind="success")
         self.revert_button.clicked.connect(_on_revert_clicked)
         main_layout.addWidget(self.revert_button)
 
@@ -2767,7 +2768,7 @@ class AdvancedTextEditDialog(QDialog):
 
         provider, model_name = parent.get_selected_model_name()
         if not model_name:
-            QMessageBox.warning(self, "No Model", "Please select an AI model in the main window first.")
+            notify_banner(self, "advanced-edit-no-model", "No model", "Please select an AI model in the main window first.", kind="warning")
             return
 
         self.ai_translate_btn.setEnabled(False)
@@ -2785,7 +2786,7 @@ class AdvancedTextEditDialog(QDialog):
             else:
                 self.text_edit.setPlainText(str(translated))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Translation failed: {str(e)}")
+            notify_banner(self, "advanced-edit-translation-failed", "Error", f"Translation failed: {str(e)}", kind="error")
         finally:
             self.ai_translate_btn.setEnabled(True)
             self.ai_translate_btn.setText("AI Translate")
@@ -3221,7 +3222,7 @@ class AdvancedTextEditDialog(QDialog):
             self._last_text_cursor = QTextCursor(self.text_edit.document())
         except Exception as e:
             traceback.print_exc()
-            QMessageBox.warning(self, "Apply Failed", f"Failed to apply text changes: {str(e)}")
+            notify_banner(self, "advanced-edit-apply-failed", "Apply failed", f"Failed to apply text changes: {str(e)}", kind="error")
 
     def get_result(self):
         return self.result
@@ -3542,7 +3543,7 @@ class HistoryEditDialog(QDialog):
             self.grad_colors.pop(row)
             self._refresh_grad_list()
         elif len(self.grad_colors) <= 2:
-            QMessageBox.warning(self, "Limit", "Gradient must have at least 2 colors.")
+            notify_toast(self, "Limit", "Gradient must have at least 2 colors.", kind="warning")
 
     def handle_accept(self):
         self.result = {
@@ -3570,7 +3571,7 @@ class HistoryEditDialog(QDialog):
              provider, model_name = parent.get_selected_model_name()
 
         if not model_name:
-            QMessageBox.warning(self, "No Model", "Please select an AI model.")
+            notify_banner(self, "history-edit-no-model", "No model", "Please select an AI model.", kind="warning")
             return
 
         self.translate_button.setEnabled(False)
@@ -3590,7 +3591,7 @@ class HistoryEditDialog(QDialog):
             self.translated_edit.setPlainText(str(translated))
         except Exception as e:
             traceback.print_exc()
-            QMessageBox.critical(self, "Error", f"Translation failed: {str(e)}")
+            notify_banner(self, "history-edit-translation-failed", "Error", f"Translation failed: {str(e)}", kind="error")
         finally:
             self.translate_button.setEnabled(True)
             self.translate_button.setText("Translate")
@@ -4581,9 +4582,9 @@ class SessionAnalyticsDialog(QDialog):
                 writer.writerow(["Total Input Tokens", self.total_input_tokens])
                 writer.writerow(["Total Output Tokens", self.total_output_tokens])
 
-            QMessageBox.information(self, "Export Berhasil", f"Analytics berhasil disimpan ke:\n{path}")
+            notify_toast(self, "Export berhasil", f"Analytics berhasil disimpan ke: {path}", kind="success", timeout_ms=5000)
         except Exception as e:
-            QMessageBox.critical(self, "Export Gagal", f"Gagal menyimpan CSV:\n{e}")
+            notify_banner(self, "analytics-export-failed", "Export gagal", f"Gagal menyimpan CSV: {e}", kind="error")
 
     # ------------------------------------------------------------------
     # Reset usage
@@ -4608,6 +4609,6 @@ class SessionAnalyticsDialog(QDialog):
         if self.parent() and hasattr(self.parent(), 'save_usage_data'):
             self.parent().save_usage_data()
 
-        QMessageBox.information(self, "Reset Selesai", "Usage data berhasil direset.")
+        notify_toast(self, "Reset selesai", "Usage data berhasil direset.", kind="success")
         self.accept()
 

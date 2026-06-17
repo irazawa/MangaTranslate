@@ -18,6 +18,7 @@ from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QColor, QFont, QBrush
 
 from src.core.app_info import APP_VERSION
+from src.ui.notifications import notify_banner, notify_toast
 from src.ui.texts import DialogText
 
 
@@ -510,21 +511,26 @@ class UnifiedHelpDialog(QDialog):
         if callable(self.on_pricing_saved):
             self.on_pricing_saved(self.ai_providers, self.openrouter_pricing_db)
 
-        QMessageBox.information(self, "Tersimpan",
-                                "Harga berhasil diperbarui.\n"
-                                "Input tabel dibaca sebagai USD per 1M token; perhitungan biaya tetap memakai nilai per-token internal.")
+        notify_toast(
+            self,
+            "Tersimpan",
+            "Harga berhasil diperbarui. Input tabel dibaca sebagai USD per 1M token; perhitungan biaya tetap memakai nilai per-token internal.",
+            kind="success",
+        )
 
     def _refresh_openrouter_prices(self):
         """Ambil ulang harga dari OpenRouter API dan refresh tabel."""
         parent = self.parent()
         if parent and hasattr(parent, 'fetch_openrouter_pricing_async'):
-            QMessageBox.information(self, "Refresh",
-                                    "Permintaan harga terbaru OpenRouter sedang diambil di latar belakang.\n"
-                                    "Tutup dan buka kembali dialog ini setelah beberapa detik.")
+            notify_toast(
+                self,
+                "Refresh",
+                "Permintaan harga terbaru OpenRouter sedang diambil di latar belakang. Tutup dan buka kembali dialog ini setelah beberapa detik.",
+                kind="info",
+            )
             parent.fetch_openrouter_pricing_async()
         else:
-            QMessageBox.warning(self, "Tidak Tersedia",
-                                "Tidak dapat memanggil refresh dari konteks ini.")
+            notify_banner(self, "pricing-refresh-unavailable", "Tidak tersedia", "Tidak dapat memanggil refresh dari konteks ini.", kind="warning")
 
     def _reset_pricing_to_default(self):
         """Reset semua harga editable ke nilai default di ai_providers asal."""
@@ -534,7 +540,7 @@ class UnifiedHelpDialog(QDialog):
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self._populate_pricing_table()
-            QMessageBox.information(self, "Reset", "Harga sudah dikembalikan ke default.\nTekan Simpan untuk menerapkan.")
+            notify_toast(self, "Reset", "Harga sudah dikembalikan ke default. Tekan Simpan untuk menerapkan.", kind="info")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Tab 3 — Analytics
@@ -733,9 +739,9 @@ class UnifiedHelpDialog(QDialog):
                 w.writerow(["Estimasi IDR", f"Rp {self.total_cost * self.usd_to_idr_rate:,.0f}"])
                 w.writerow(["Input Tokens", self.total_input_tokens])
                 w.writerow(["Output Tokens", self.total_output_tokens])
-            QMessageBox.information(self, "Export Berhasil", f"Tersimpan ke:\n{path}")
+            notify_toast(self, "Export berhasil", f"Tersimpan ke: {path}", kind="success", timeout_ms=5000)
         except Exception as e:
-            QMessageBox.critical(self, "Export Gagal", str(e))
+            notify_banner(self, "usage-export-failed", "Export gagal", str(e), kind="error")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Reset usage
@@ -755,5 +761,5 @@ class UnifiedHelpDialog(QDialog):
         parent = self.parent()
         if parent and hasattr(parent, 'save_usage_data'):
             parent.save_usage_data()
-        QMessageBox.information(self, "Reset", "Usage data berhasil direset.")
+        notify_toast(self, "Reset", "Usage data berhasil direset.", kind="success")
         self.accept()

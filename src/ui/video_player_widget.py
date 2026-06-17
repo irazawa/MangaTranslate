@@ -15,6 +15,8 @@ from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap, QImage
 
+from src.ui.notifications import notify_banner, notify_toast
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -795,7 +797,7 @@ class VideoPlayerWidget(QWidget):
         import cv2
         self._cv_cap = cv2.VideoCapture(video_url)
         if not self._cv_cap.isOpened():
-            QMessageBox.critical(self, "OpenCV Error", "Gagal membuka video stream menggunakan OpenCV.")
+            notify_banner(self, "opencv-stream-error", "OpenCV error", "Gagal membuka video stream menggunakan OpenCV.", kind="error")
             return
 
         self._cv_fps = self._cv_cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -855,7 +857,7 @@ class VideoPlayerWidget(QWidget):
     def _load_youtube_video(self):
         url = self.yt_input.text().strip()
         if not url:
-            QMessageBox.warning(self, "Invalid URL", "Masukkan link YouTube terlebih dahulu!")
+            notify_toast(self, "Invalid URL", "Masukkan link YouTube terlebih dahulu.", kind="warning")
             return
 
         self.placeholder_label.setText("Menghubungi YouTube via yt-dlp...\nHarap tunggu sebentar.")
@@ -902,7 +904,7 @@ class VideoPlayerWidget(QWidget):
     def _on_youtube_error(self, err_msg: str):
         self.placeholder_label.setText("Gagal memuat YouTube.\n" + err_msg)
         self.screen_stack.setCurrentIndex(0)
-        QMessageBox.critical(self, "YouTube Load Error", f"Terjadi kesalahan saat mengekstrak link YouTube:\n\n{err_msg}")
+        notify_banner(self, "youtube-load-error", "YouTube load error", f"Terjadi kesalahan saat mengekstrak link YouTube: {err_msg}", kind="error")
         self._youtube_extractor = None
         self._update_ffmpeg_buttons_state()
 
@@ -923,7 +925,7 @@ class VideoPlayerWidget(QWidget):
         if not path:
             path = self._current_video_path
         if not path or not os.path.exists(path):
-            QMessageBox.warning(self, "Invalid File", "File video tidak ditemukan! Periksa path kembali.")
+            notify_banner(self, "video-invalid-file", "Invalid file", "File video tidak ditemukan. Periksa path kembali.", kind="warning")
             return
 
         self._current_video_path = path
@@ -1055,7 +1057,7 @@ class VideoPlayerWidget(QWidget):
         import cv2
         self._cv_cap = cv2.VideoCapture(source)
         if not self._cv_cap.isOpened():
-            QMessageBox.critical(self, "OpenCV Error", "Gagal membuka video menggunakan mesin OpenCV.")
+            notify_banner(self, "opencv-playback-error", "OpenCV error", "Gagal membuka video menggunakan mesin OpenCV.", kind="error")
             return
 
         self._cv_fps = self._cv_cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -1249,9 +1251,9 @@ class VideoPlayerWidget(QWidget):
                 save_settings(SETTINGS)
                 self._check_ffmpeg_availability()
                 self._update_ffmpeg_buttons_state()
-                QMessageBox.information(self, "FFmpeg Configured", f"FFmpeg path telah berhasil disimpan:\n{path}")
+                notify_toast(self, "FFmpeg configured", f"FFmpeg path telah berhasil disimpan: {path}", kind="success", timeout_ms=5000)
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Gagal menyimpan path FFmpeg: {e}")
+                notify_banner(self, "ffmpeg-config-error", "Error", f"Gagal menyimpan path FFmpeg: {e}", kind="error")
 
     def _ffmpeg_extract_audio(self):
         if not self._current_video_path:
@@ -1310,19 +1312,13 @@ class VideoPlayerWidget(QWidget):
         if success:
             self.ff_status.setText(f"Selesai! File disimpan di: {os.path.basename(result)}")
             self.ff_status.setStyleSheet("color: #4ade80; font-size: 11px; border: none; background: transparent;")
-            QMessageBox.information(
-                self, "FFmpeg Job Selesai",
-                f"Proses FFmpeg berhasil diselesaikan!\n\nFile hasil:\n{result}"
-            )
+            notify_toast(self, "FFmpeg job selesai", f"Proses FFmpeg berhasil diselesaikan. File hasil: {result}", kind="success", timeout_ms=5000)
             # Scan again to show newly generated file in media list!
             self.scan_local_library()
         else:
             self.ff_status.setText("Proses gagal. Lihat detail log error.")
             self.ff_status.setStyleSheet("color: #f87171; font-size: 11px; border: none; background: transparent;")
-            QMessageBox.critical(
-                self, "FFmpeg Error",
-                f"Proses FFmpeg mengalami kesalahan:\n\n{result}"
-            )
+            notify_banner(self, "ffmpeg-job-error", "FFmpeg error", f"Proses FFmpeg mengalami kesalahan: {result}", kind="error")
         
         self._ffmpeg_worker = None
 

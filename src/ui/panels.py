@@ -27,6 +27,7 @@ from PyQt5.QtCore import (
 )
 
 from src.core.config import *
+from src.ui.notifications import notify_banner, notify_toast
 
 class APIManagerPanel(QWidget):
     """Panel widget to manage translation and AI OCR API settings."""
@@ -441,7 +442,7 @@ class APIManagerPanel(QWidget):
         table: QTableWidget = widgets['models_table']
         row = table.currentRow()
         if row < 0:
-            QMessageBox.information(self, "Remove Model", "Select a model to remove.")
+            notify_toast(self, "Remove model", "Select a model to remove.", kind="info")
             return
         confirm = QMessageBox.question(self, "Remove Model", "Remove selected model?",
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -463,7 +464,7 @@ class APIManagerPanel(QWidget):
         table: QTableWidget = widgets['models_table']
         row = table.currentRow()
         if row < 0:
-            QMessageBox.information(self, "Set Active", "Select a model to activate.")
+            notify_toast(self, "Set active", "Select a model to activate.", kind="info")
             return
         models = self.temp_settings.setdefault('ocr', {}).setdefault(provider, {}).setdefault('models', [])
         if row >= len(models):
@@ -692,7 +693,7 @@ class OpenRouterSettingsPanel(QWidget):
         if dialog.exec_() == QDialog.Accepted:
             values = dialog.get_values()
             if not values['name'] or not values['id']:
-                QMessageBox.warning(self, "Invalid Model", "Model name and ID are required.")
+                notify_banner(self, "openrouter-invalid-model", "Invalid model", "Model name and ID are required.", kind="warning")
                 return
             self.models.append({
                 'name': values['name'],
@@ -705,7 +706,7 @@ class OpenRouterSettingsPanel(QWidget):
     def _edit_model(self):
         row = self.models_table.currentRow()
         if not (0 <= row < len(self.models)):
-            QMessageBox.information(self, "Edit Model", "Select a model to edit.")
+            notify_toast(self, "Edit model", "Select a model to edit.", kind="info")
             return
         model = self.models[row]
         from src.ui.dialogs import ModelEditDialog
@@ -713,7 +714,7 @@ class OpenRouterSettingsPanel(QWidget):
         if dialog.exec_() == QDialog.Accepted:
             values = dialog.get_values()
             if not values['name'] or not values['id']:
-                QMessageBox.warning(self, "Invalid Model", "Model name and ID are required.")
+                notify_banner(self, "openrouter-invalid-model", "Invalid model", "Model name and ID are required.", kind="warning")
                 return
             model.update({
                 'name': values['name'],
@@ -725,7 +726,7 @@ class OpenRouterSettingsPanel(QWidget):
     def _remove_model(self):
         row = self.models_table.currentRow()
         if not (0 <= row < len(self.models)):
-            QMessageBox.information(self, "Remove Model", "Select a model to remove.")
+            notify_toast(self, "Remove model", "Select a model to remove.", kind="info")
             return
         confirm = QMessageBox.question(self, "Remove Model", f"Remove model '{self.models[row].get('name', '')}'?",
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
