@@ -30,6 +30,29 @@ from src.ui.startup_splash import StartupSplash
 from src.ui.texts import StartupText
 
 
+def show_main_window(window, app):
+    screen_fn = getattr(window, "screen", None)
+    screen = screen_fn() if callable(screen_fn) else None
+    if screen is None:
+        screen = app.primaryScreen()
+
+    if screen is None:
+        window.resize(1280, 760)
+        window.show()
+        return
+
+    available = screen.availableGeometry()
+    max_width = max(640, available.width() - 24)
+    max_height = max(480, available.height() - 24)
+    width = min(max(1000, int(available.width() * 0.92)), max_width)
+    height = min(max(650, int(available.height() * 0.90)), max_height)
+    x = available.left() + max(0, (available.width() - width) // 2)
+    y = available.top() + max(0, (available.height() - height) // 2)
+
+    window.setGeometry(x, y, width, height)
+    window.show()
+
+
 def configure_windows_app_id():
     if os.name != 'nt':
         return
@@ -79,7 +102,7 @@ def main():
         window = MangaOCRApp(startup_status_callback=splash.set_status)
         if os.path.exists(icon_path):
             window.setWindowIcon(QIcon(icon_path))
-        window.showMaximized()
+        show_main_window(window, app)
         splash.finish(window)
         app.setQuitOnLastWindowClosed(True)  # Kembalikan perilaku standar agar aplikasi keluar normal saat window utama ditutup
         return app.exec_()

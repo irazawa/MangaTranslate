@@ -102,6 +102,7 @@ def default_settings() -> dict:
             "text_color_threshold": 128,
             "auto_text_color": True,   # <— BARU: bisa dimatikan dari Settings
             # When true, debug/temp files created by AI OCR and MOFRL (under ./temp/) will be removed after a run
+            "constrain_text": True,
             "remove_ai_temp_files": False,
         },
         "typeset": {

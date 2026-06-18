@@ -1008,21 +1008,35 @@ class MangaOCRApp(QMainWindow):
 
         # Center Panel (Image Viewer)
         center_panel_widget = QWidget()
+        self.center_panel_widget = center_panel_widget
         center_layout = QVBoxLayout(center_panel_widget)
         center_layout.setContentsMargins(0,10,0,0)
         center_layout.setSpacing(5)
+        self.image_canvas_widget = QWidget()
+        self.image_canvas_widget.setMinimumSize(0, 0)
+        self.image_canvas_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.image_label = SelectableImageLabel(self)
+        self.image_label.setParent(self.image_canvas_widget)
+        self.image_label.move(0, 0)
         self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(0, 0)
+        self.image_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.image_label.areaDoubleClicked.connect(self.start_inline_edit)
         self.image_scroll = QScrollArea()
-        self.image_scroll.setWidget(self.image_label)
-        self.image_scroll.setWidgetResizable(True)
+        self.image_scroll.setWidgetResizable(False)
+        self.image_scroll.setFrameShape(QFrame.NoFrame)
+        self.image_scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
+        self.image_scroll.setMinimumSize(0, 0)
+        self.image_scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.image_scroll.setWidget(self.image_canvas_widget)
 
         # --- Welcome / Start Screen (Fitur #19) ---
         self.welcome_widget = self._build_welcome_widget()
 
         # QStackedWidget: index 0 = welcome screen, index 1 = canvas
         self.center_stack = QStackedWidget()
+        self.center_stack.setMinimumSize(0, 0)
+        self.center_stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.center_stack.addWidget(self.welcome_widget)
         self.center_stack.addWidget(self.image_scroll)
         self.center_stack.setCurrentIndex(0)  # Mulai di welcome screen
@@ -1089,15 +1103,24 @@ class MangaOCRApp(QMainWindow):
         right_panel_content = QWidget()
         right_panel_content.setObjectName("right-panel")
         right_panel_content.setLayout(right_panel_layout)
+        right_panel_content.setMinimumHeight(0)
 
-        self.right_panel_scroll = right_panel_content
+        self.right_panel_scroll = QScrollArea()
+        self.right_panel_scroll.setObjectName("right-panel-scroll")
+        self.right_panel_scroll.setWidgetResizable(True)
+        self.right_panel_scroll.setFrameShape(QFrame.NoFrame)
+        self.right_panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.right_panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.right_panel_scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
         self.right_panel_scroll.setMinimumWidth(380)
+        self.right_panel_scroll.setMinimumHeight(0)
         self.right_panel_scroll.setMaximumWidth(600)
-        self.right_panel_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.right_panel_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
+        self.right_panel_scroll.setWidget(right_panel_content)
         self.splitter.addWidget(self.right_panel_scroll)
 
         # Make splitter adaptive across screen sizes
-        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setChildrenCollapsible(True)
         self.splitter.setHandleWidth(6)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(0, 0)
@@ -1105,6 +1128,7 @@ class MangaOCRApp(QMainWindow):
 
         # Load saved splitter sizes if present
         self.splitter.setSizes(self._normalized_workspace_splitter_sizes(SETTINGS.get('splitter_sizes')))
+        self._update_center_panel_constraints()
 
         main_layout.addWidget(self.splitter)
         self._apply_right_panel_styles()
@@ -1129,11 +1153,11 @@ class MangaOCRApp(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
-        scroll.setMinimumWidth(0)
-        scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        scroll.setMinimumSize(0, 0)
+        scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         widget = scroll.widget()
         if widget is not None:
-            widget.setMinimumWidth(0)
+            widget.setMinimumSize(0, 0)
             widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         return scroll
 
@@ -1148,6 +1172,91 @@ class MangaOCRApp(QMainWindow):
             combo.view().setTextElideMode(Qt.ElideRight)
         except Exception:
             pass
+
+    def _available_window_geometry(self):
+        screen = None
+        try:
+            screen = self.screen()
+        except Exception:
+            screen = None
+        if screen is None:
+            try:
+                screen = QApplication.screenAt(self.frameGeometry().center())
+            except Exception:
+                screen = None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else None
+
+    def _update_center_panel_constraints(self, left_visible=None, right_visible=None):
+        center = getattr(self, 'center_panel_widget', None)
+        if center is None:
+            return
+        available = self._available_window_geometry()
+        if available is not None:
+            total_width = min(max(1, self.width()), available.width())
+        else:
+            total_width = max(1, self.width())
+
+        if left_visible is None:
+            left = getattr(self, 'left_panel_widget', None)
+            left_visible = bool(left and left.isVisible())
+        if right_visible is None:
+            right = getattr(self, 'right_panel_scroll', None)
+            right_visible = bool(right and right.isVisible())
+
+        left_width = 260 if left_visible else 0
+        right_width = 380 if right_visible else 0
+        handle_width = getattr(getattr(self, 'splitter', None), 'handleWidth', lambda: 6)()
+        reserved = left_width + right_width + handle_width * 2 + 48
+        center.setMaximumWidth(max(120, total_width - reserved))
+
+    def _rebalance_workspace_splitter(self):
+        splitter = getattr(self, 'splitter', None)
+        if splitter is None:
+            return
+        left = getattr(self, 'left_panel_widget', None)
+        right = getattr(self, 'right_panel_scroll', None)
+        left_visible = bool(left and left.isVisible())
+        right_visible = bool(right and right.isVisible())
+        left_width = 260 if left_visible else 0
+        right_width = 380 if right_visible else 0
+        center_width = getattr(self, 'center_panel_widget', None)
+        center_width = center_width.maximumWidth() if center_width is not None else 480
+        splitter.setSizes([left_width, max(120, center_width), right_width])
+
+    def _clamp_main_window_to_screen(self):
+        available = self._available_window_geometry()
+        if available is None or self.isMaximized() or self.isFullScreen():
+            return
+        frame = self.frameGeometry()
+        too_large = frame.width() > available.width() or frame.height() > available.height()
+        offscreen = (
+            frame.left() < available.left()
+            or frame.top() < available.top()
+            or frame.right() > available.right()
+            or frame.bottom() > available.bottom()
+        )
+        if not too_large and not offscreen:
+            return
+        width = min(self.width(), max(640, available.width() - 24))
+        height = min(self.height(), max(480, available.height() - 24))
+        x = min(max(frame.left(), available.left()), available.right() - width + 1)
+        y = min(max(frame.top(), available.top()), available.bottom() - height + 1)
+        self.setGeometry(x, y, width, height)
+
+    def _run_window_geometry_guard(self):
+        self._update_center_panel_constraints()
+        self._rebalance_workspace_splitter()
+        self._clamp_main_window_to_screen()
+
+    def _schedule_window_geometry_guard(self):
+        QTimer.singleShot(0, self._run_window_geometry_guard)
+        QTimer.singleShot(60, self._run_window_geometry_guard)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_center_panel_constraints()
 
     def setup_right_panel(self):
         """Modern icon-sidebar + stacked-widget layout untuk Tools & Workspace panel."""
@@ -1235,8 +1344,8 @@ class MangaOCRApp(QMainWindow):
         # QStackedWidget as content area
         self.right_stack = QStackedWidget()
         self.right_stack.setObjectName("rp-stack")
-        self.right_stack.setMinimumWidth(0)
-        self.right_stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        self.right_stack.setMinimumSize(0, 0)
+        self.right_stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
         # Compatibility alias so code referencing self.tabs still works for tab switching
         # We create a minimal shim object
@@ -1302,6 +1411,11 @@ class MangaOCRApp(QMainWindow):
                     scroll.setWidget(widget)
                     page = self._configure_workspace_scroll_area(scroll)
 
+            try:
+                page.setMinimumSize(0, 0)
+                page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            except Exception:
+                pass
             self.right_stack.addWidget(page)
             _make_sidebar_btn(marker, short_label, tip, page_idx)
             page_idx += 1
@@ -2027,6 +2141,11 @@ class MangaOCRApp(QMainWindow):
         self.use_background_box_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('use_background_box', True)))
         self.use_background_box_checkbox.setToolTip("When enabled, OCR/translated text will be placed inside a background box. If disabled, text is drawn directly over the image (transparent background).")
         selection_layout.addWidget(self.use_background_box_checkbox, 3, 0, 1, 2)
+
+        self.constrain_text_checkbox = QCheckBox("Keep Text Inside Area")
+        self.constrain_text_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('constrain_text', True)))
+        self.constrain_text_checkbox.setToolTip("When enabled, text still wraps to the selected area when the background box is hidden. Turn off for one-line free text.")
+        selection_layout.addWidget(self.constrain_text_checkbox, 4, 0, 1, 2)
         # Small control: apply mode (selected area vs global)
         apply_mode_layout = QHBoxLayout()
         self.apply_mode_selected_radio = QRadioButton("Apply to Selected Area")
@@ -2048,7 +2167,7 @@ class MangaOCRApp(QMainWindow):
                 self.apply_mode_status_label.setText("Mode: Selected Area")
         _update_apply_mode_label()
         apply_mode_layout.addWidget(self.apply_mode_status_label)
-        selection_layout.addLayout(apply_mode_layout, 4, 0, 1, 2)
+        selection_layout.addLayout(apply_mode_layout, 5, 0, 1, 2)
 
         # Apply to All Areas button
         self.apply_all_button = QPushButton("Apply to All Areas")
@@ -2074,7 +2193,9 @@ class MangaOCRApp(QMainWindow):
                 use_box_val = bool(self.use_background_box_checkbox.isChecked())
                 use_inpaint_val = bool(self.inpaint_checkbox.isChecked())
                 self._set_global_cleanup_default('use_background_box', use_box_val)
+                constrain_text_val = bool(self.constrain_text_checkbox.isChecked())
                 self._set_global_cleanup_default('use_inpaint', use_inpaint_val)
+                self._set_global_cleanup_default('constrain_text', constrain_text_val)
                 self.show_toast("Apply to all", "Global defaults updated. Existing areas keep their individual overrides.", kind="success")
                 self._sync_cleanup_controls_from_selection()
                 dlg.accept()
@@ -2083,7 +2204,9 @@ class MangaOCRApp(QMainWindow):
                 use_box_val = bool(self.use_background_box_checkbox.isChecked())
                 use_inpaint_val = bool(self.inpaint_checkbox.isChecked())
                 self._set_global_cleanup_default('use_background_box', use_box_val)
+                constrain_text_val = bool(self.constrain_text_checkbox.isChecked())
                 self._set_global_cleanup_default('use_inpaint', use_inpaint_val)
+                self._set_global_cleanup_default('constrain_text', constrain_text_val)
                 default_box = self._default_cleanup_value('use_background_box')
                 default_inpaint = self._default_cleanup_value('use_inpaint')
                 for record in (self.all_typeset_data or {}).values():
@@ -2117,7 +2240,7 @@ class MangaOCRApp(QMainWindow):
             dlg.exec_()
 
         self.apply_all_button.clicked.connect(_on_apply_all_clicked)
-        selection_layout.addWidget(self.apply_all_button, 5, 0, 1, 2)
+        selection_layout.addWidget(self.apply_all_button, 6, 0, 1, 2)
 
         # Whenever apply-mode is toggled, save to SETTINGS
         def _on_apply_mode_changed():
@@ -2132,6 +2255,10 @@ class MangaOCRApp(QMainWindow):
         def on_tab_checkbox_toggled(state):
             self._apply_cleanup_change('use_background_box', bool(state))
         self.use_background_box_checkbox.toggled.connect(on_tab_checkbox_toggled)
+
+        def on_constrain_text_toggled(state):
+            self._set_global_cleanup_default('constrain_text', bool(state))
+        self.constrain_text_checkbox.toggled.connect(on_constrain_text_toggled)
         layout.addWidget(selection_group)
         
         # [DIUBAH] Inpainting Group dengan model baru
@@ -7003,7 +7130,7 @@ class MangaOCRApp(QMainWindow):
             'manga_use_easy_detection': bool(getattr(self, 'manga_use_easy_detection_checkbox', None) and self.manga_use_easy_detection_checkbox.isChecked()),
             'tesseract_use_easy_detection': bool(getattr(self, 'tesseract_use_easy_detection_checkbox', None) and self.tesseract_use_easy_detection_checkbox.isChecked()),
             'use_auto_text_color': bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True)),
-            'constrain_text': bool(SETTINGS.get('cleanup', {}).get('constrain_text', False)),
+            'constrain_text': bool(SETTINGS.get('cleanup', {}).get('constrain_text', True)),
         }
 
     def _default_cleanup_value(self, key: str):
@@ -7012,6 +7139,8 @@ class MangaOCRApp(QMainWindow):
             return bool(cleanup.get('use_background_box', True))
         if key == 'use_inpaint':
             return bool(cleanup.get('use_inpaint', True))
+        if key == 'constrain_text':
+            return bool(cleanup.get('constrain_text', True))
         if key == 'apply_mode':
             return cleanup.get('apply_mode', 'selected')
         return cleanup.get(key)
@@ -7030,11 +7159,25 @@ class MangaOCRApp(QMainWindow):
                     self.use_box_action.blockSignals(False)
                 except Exception:
                     pass
+        if key == 'constrain_text' and getattr(self, 'constrain_text_checkbox', None):
+            try:
+                self.constrain_text_checkbox.blockSignals(True)
+                self.constrain_text_checkbox.setChecked(bool(value))
+            finally:
+                try:
+                    self.constrain_text_checkbox.blockSignals(False)
+                except Exception:
+                    pass
         if key == 'apply_mode' and getattr(self, 'apply_mode_status_label', None):
             mode_text = 'Mode: Global' if cleanup.get('apply_mode') == 'global' else 'Mode: Selected Area'
             self.apply_mode_status_label.setText(mode_text)
-        if key in ('use_background_box', 'use_inpaint', 'apply_mode'):
+        if key in ('use_background_box', 'use_inpaint', 'apply_mode', 'constrain_text'):
             self._sync_cleanup_controls_from_selection()
+        if key == 'constrain_text':
+            try:
+                self.redraw_all_typeset_areas()
+            except Exception:
+                pass
 
     def set_selected_area(self, area, *, notify=True):
         if area is not None and area not in self.typeset_areas:
@@ -7118,6 +7261,7 @@ class MangaOCRApp(QMainWindow):
 
     def _sync_cleanup_controls_from_selection(self):
         checkbox = getattr(self, 'use_background_box_checkbox', None)
+        constrain_box = getattr(self, 'constrain_text_checkbox', None)
         inpaint_box = getattr(self, 'inpaint_checkbox', None)
         area = self._active_cleanup_area()
 
@@ -7134,6 +7278,9 @@ class MangaOCRApp(QMainWindow):
         if inpaint_box is not None:
             with QSignalBlocker(inpaint_box):
                 inpaint_box.setChecked(bool(use_inpaint_value))
+        if constrain_box is not None:
+            with QSignalBlocker(constrain_box):
+                constrain_box.setChecked(bool(self._default_cleanup_value('constrain_text')))
 
 
     def update_gpu_status_label(self):
@@ -7643,6 +7790,7 @@ class MangaOCRApp(QMainWindow):
             self._refresh_undo_timeline()
             self._refresh_detection_overlay()
             self.refresh_history_views()
+            self._schedule_window_geometry_guard()
         except Exception as e:
             self.show_banner("image-load-error", "Error loading image", f"Could not load image: {file_path}\nError: {e}", kind="error")
             self.clear_view()
@@ -7736,6 +7884,7 @@ class MangaOCRApp(QMainWindow):
         self._refresh_detection_overlay()
         self.refresh_history_views()
         self.update_nav_buttons()
+        self._schedule_window_geometry_guard()
 
     def get_current_data_key(self, path=None, page=-1):
         path_to_use = path if path is not None else self.current_image_path
@@ -7800,6 +7949,9 @@ class MangaOCRApp(QMainWindow):
             local_pixmap = self.typeset_pixmap
             if not local_pixmap:
                 self.image_label.setPixmap(QPixmap())
+                self.image_label.resize(0, 0)
+                if getattr(self, 'image_canvas_widget', None) is not None:
+                    self.image_canvas_widget.resize(0, 0)
                 return
             # Work on a copy to avoid holding the mutex during scaling
             pix_copy = local_pixmap.copy()
@@ -7812,7 +7964,9 @@ class MangaOCRApp(QMainWindow):
         scaled_pixmap = pix_copy.scaled(scaled_size, Qt.KeepAspectRatio, transform_mode)
         self.image_label.setPixmap(scaled_pixmap)
         if self.image_label.size() != scaled_pixmap.size():
-            self.image_label.adjustSize()
+            self.image_label.resize(scaled_pixmap.size())
+        if getattr(self, 'image_canvas_widget', None) is not None and self.image_canvas_widget.size() != scaled_pixmap.size():
+            self.image_canvas_widget.resize(scaled_pixmap.size())
 
     def zoom_in(self):
         self.zoom_factor = min(self.zoom_factor + 0.2, 8.0); self.update_display()
@@ -9519,7 +9673,7 @@ class MangaOCRApp(QMainWindow):
             painter.rotate(rotation)
             painter.translate(-text_center.x(), -text_center.y())
         if not use_box:
-            constrain_text = bool(SETTINGS.get('cleanup', {}).get('constrain_text', False))
+            constrain_text = bool(settings.get('constrain_text', SETTINGS.get('cleanup', {}).get('constrain_text', True)))
             if constrain_text:
                 self.draw_area_text(painter, area)
             else:
@@ -9558,7 +9712,7 @@ class MangaOCRApp(QMainWindow):
                 if use_box:
                     self.draw_area_text(painter, area)
                 else:
-                    constrain_text = bool(SETTINGS.get('cleanup', {}).get('constrain_text', False))
+                    constrain_text = bool(SETTINGS.get('cleanup', {}).get('constrain_text', True))
                     if constrain_text:
                         self.draw_area_text(painter, area)
                     else:
@@ -11614,6 +11768,7 @@ class MangaOCRApp(QMainWindow):
             return
         self._refresh_welcome_screen()
         stack.setCurrentIndex(0)
+        self._update_center_panel_constraints(left_visible=False, right_visible=False)
 
         # Sembunyikan nav bar bawah (zoom, prev/next, dsb.)
         nav = getattr(self, 'nav_zoom_widget', None)
@@ -11638,6 +11793,7 @@ class MangaOCRApp(QMainWindow):
         if not stack:
             return
         stack.setCurrentIndex(1)
+        self._update_center_panel_constraints(left_visible=True, right_visible=True)
 
         # Tampilkan kembali nav bar
         nav = getattr(self, 'nav_zoom_widget', None)
@@ -11665,6 +11821,7 @@ class MangaOCRApp(QMainWindow):
             if toggle_btn:
                 toggle_btn.setChecked(was_visible)
                 toggle_btn.setText(NavText.HIDE_TOOLS if was_visible else NavText.SHOW_TOOLS)
+        self._schedule_window_geometry_guard()
 
     def _build_welcome_widget(self):
         """Bangun widget welcome screen yang indah dengan quick actions dan recent projects."""
@@ -15087,21 +15244,25 @@ class MangaOCRApp(QMainWindow):
         if not hasattr(self, 'left_panel_widget') or self.left_panel_widget is None:
             return
         is_visible = self.left_panel_widget.isVisible()
+        self._update_center_panel_constraints(left_visible=not is_visible)
         self.left_panel_widget.setVisible(not is_visible)
         if hasattr(self, 'toggle_left_btn') and self.toggle_left_btn is not None:
             blocker = QSignalBlocker(self.toggle_left_btn)
             self.toggle_left_btn.setChecked(not is_visible)
             self.toggle_left_btn.setText(NavText.SHOW_FOLDER if is_visible else NavText.HIDE_FOLDER)
+        self._schedule_window_geometry_guard()
             
     def toggle_right_panel(self):
         if not hasattr(self, 'right_panel_scroll') or self.right_panel_scroll is None:
             return
         is_visible = self.right_panel_scroll.isVisible()
+        self._update_center_panel_constraints(right_visible=not is_visible)
         self.right_panel_scroll.setVisible(not is_visible)
         if hasattr(self, 'toggle_right_btn') and self.toggle_right_btn is not None:
             blocker = QSignalBlocker(self.toggle_right_btn)
             self.toggle_right_btn.setChecked(not is_visible)
             self.toggle_right_btn.setText(NavText.SHOW_TOOLS if is_visible else NavText.HIDE_TOOLS)
+        self._schedule_window_geometry_guard()
 
     def toggle_focus_mode(self):
         left_exists = hasattr(self, 'left_panel_widget') and self.left_panel_widget is not None
@@ -15113,10 +15274,12 @@ class MangaOCRApp(QMainWindow):
         any_visible = (left_exists and self.left_panel_widget.isVisible()) or (right_exists and self.right_panel_scroll.isVisible())
         
         if any_visible:
+            self._update_center_panel_constraints(left_visible=False, right_visible=False)
             if left_exists: self.left_panel_widget.setVisible(False)
             if right_exists: self.right_panel_scroll.setVisible(False)
             self.statusBar().showMessage(NavText.FOCUS_MODE_STATUS, 3000)
         else:
+            self._update_center_panel_constraints(left_visible=True, right_visible=True)
             if left_exists: self.left_panel_widget.setVisible(True)
             if right_exists: self.right_panel_scroll.setVisible(True)
             self.statusBar().showMessage("Sidebar panels restored.", 2000)
@@ -15129,6 +15292,7 @@ class MangaOCRApp(QMainWindow):
             blocker = QSignalBlocker(self.toggle_right_btn)
             self.toggle_right_btn.setChecked(self.right_panel_scroll.isVisible())
             self.toggle_right_btn.setText(NavText.SHOW_TOOLS if not self.right_panel_scroll.isVisible() else NavText.HIDE_TOOLS)
+        self._schedule_window_geometry_guard()
 
     def _on_compare_mode_toggled(self, checked: bool):
         """Aktifkan/nonaktifkan Quick Compare mode (tampilkan gambar asli tanpa typeset)."""
