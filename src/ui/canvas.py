@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.4
+# Manga OCR & Typeset Tool v14.8.6
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -23,7 +23,7 @@ from PyQt5.QtGui import (
     QBrush, QTransform
 )
 from PyQt5.QtCore import (
-    Qt, QRect, QPoint, pyqtSignal, QTimer, QRectF, QPointF
+    Qt, QRect, QPoint, pyqtSignal, QTimer, QRectF, QPointF, QSize
 )
 
 from src.core.config import *
@@ -795,6 +795,12 @@ class SelectableImageLabel(QLabel):
 
         self.panning = False
         self.pan_last_mouse_pos = QPoint()
+
+    def sizeHint(self):
+        return QSize(0, 0)
+
+    def minimumSizeHint(self):
+        return QSize(0, 0)
 
     def restore_active_cursor(self):
         try:

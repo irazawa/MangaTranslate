@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.4
+# Manga OCR & Typeset Tool v14.8.6
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -694,7 +694,7 @@ class SettingsCenterDialog(QDialog):
 
         self.constrain_text_checkbox = QCheckBox()
         self.constrain_text_checkbox.setToolTip("Text will wrap to box width even when the background is hidden.")
-        self.constrain_text_checkbox.setChecked(bool(cleanup_cfg.get('constrain_text', False)))
+        self.constrain_text_checkbox.setChecked(bool(cleanup_cfg.get('constrain_text', True)))
         card_vbox.addWidget(self._make_option_row(
             "Constrain text",
             "Wrap text to box width even when the background box is off.",
@@ -1501,6 +1501,7 @@ class SettingsCenterDialog(QDialog):
         prev_auto_color = bool(cleanup_cfg.get('auto_text_color', True))
         prev_threshold = int(cleanup_cfg.get('text_color_threshold', 128))
         prev_use_box = bool(cleanup_cfg.get('use_background_box', True))
+        prev_constrain_text = bool(cleanup_cfg.get('constrain_text', True))
 
         cleanup_cfg['auto_text_color'] = bool(self.auto_text_color_checkbox.isChecked())
         cleanup_cfg['text_color_threshold'] = int(self.threshold_spin.value())
@@ -1511,7 +1512,13 @@ class SettingsCenterDialog(QDialog):
             except Exception:
                 cleanup_cfg['use_background_box'] = use_box_value
         cleanup_cfg['use_background_box'] = use_box_value
-        cleanup_cfg['constrain_text'] = bool(self.constrain_text_checkbox.isChecked())
+        constrain_text_value = bool(self.constrain_text_checkbox.isChecked())
+        if hasattr(self.main_window, '_set_global_cleanup_default'):
+            try:
+                self.main_window._set_global_cleanup_default('constrain_text', constrain_text_value, persist=False)
+            except Exception:
+                cleanup_cfg['constrain_text'] = constrain_text_value
+        cleanup_cfg['constrain_text'] = constrain_text_value
         # Persist new AI temp cleanup option
         try:
             cleanup_cfg['remove_ai_temp_files'] = bool(self.remove_ai_temp_checkbox.isChecked())
@@ -1580,14 +1587,23 @@ class SettingsCenterDialog(QDialog):
             except Exception:
                 pass
 
-        if (cleanup_cfg.get('auto_text_color') != prev_auto_color) or (cleanup_cfg.get('text_color_threshold') != prev_threshold):
+        if (
+            (cleanup_cfg.get('auto_text_color') != prev_auto_color)
+            or (cleanup_cfg.get('text_color_threshold') != prev_threshold)
+            or (cleanup_cfg.get('constrain_text') != prev_constrain_text)
+        ):
             try:
                 self.main_window.redraw_all_typeset_areas()
             except Exception:
                 pass
 
         status_parts = []
-        if (cleanup_cfg.get('auto_text_color') != prev_auto_color) or (cleanup_cfg.get('text_color_threshold') != prev_threshold) or (cleanup_cfg.get('use_background_box') != prev_use_box):
+        if (
+            (cleanup_cfg.get('auto_text_color') != prev_auto_color)
+            or (cleanup_cfg.get('text_color_threshold') != prev_threshold)
+            or (cleanup_cfg.get('use_background_box') != prev_use_box)
+            or (cleanup_cfg.get('constrain_text') != prev_constrain_text)
+        ):
             status_parts.append("Cleanup defaults updated")
         if openrouter_settings != self._initial_translate:
             status_parts.append("Translation settings updated")
