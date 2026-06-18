@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.6
+# Manga OCR & Typeset Tool v14.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -1958,6 +1958,7 @@ class AdvancedTextEditDialog(QDialog):
         self.area = area
         self.font_manager = font_manager
         self.result = None
+        self._manual_text_color_changed = False
         self.setWindowTitle("Advanced Text Editor")
         self.setModal(True)
         # Restore previous size if available, else use default responsive size
@@ -2359,6 +2360,8 @@ class AdvancedTextEditDialog(QDialog):
             if hasattr(self.area, 'clear_override'):
                 self.area.clear_override('use_inpaint')
                 self.area.clear_override('use_background_box')
+                self.area.clear_override('constrain_text')
+                self.area.clear_override('use_auto_text_color')
             parent = self.parent()
             if parent and hasattr(parent, 'redraw_all_typeset_areas'):
                 try:
@@ -3013,6 +3016,7 @@ class AdvancedTextEditDialog(QDialog):
                 fmt.setForeground(QBrush(color))
                 self._merge_char_format(fmt)
                 self._update_color_button(color)
+                self._manual_text_color_changed = True
                 self._last_text_cursor = QTextCursor(self.text_edit.textCursor())
         except Exception:
             traceback.print_exc()
@@ -3232,6 +3236,7 @@ class AdvancedTextEditDialog(QDialog):
                 'pattern_type': self.pattern_type_combo.currentData(),
                 'pattern_scale': self.pattern_scale_spin.value(),
                 'smart_fit_enabled': self.smart_fit_checkbox.isChecked(),
+                'manual_text_color_changed': bool(self._manual_text_color_changed),
             }
             self.accept()
             self.accept()
@@ -4627,4 +4632,3 @@ class SessionAnalyticsDialog(QDialog):
 
         notify_toast(self, "Reset selesai", "Usage data berhasil direset.", kind="success")
         self.accept()
-

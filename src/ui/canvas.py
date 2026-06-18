@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.6
+# Manga OCR & Typeset Tool v14.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -1599,6 +1599,8 @@ class SelectableImageLabel(QLabel):
                         if hasattr(self.hovered_area, 'clear_override'):
                             self.hovered_area.clear_override('use_inpaint')
                             self.hovered_area.clear_override('use_background_box')
+                            self.hovered_area.clear_override('constrain_text')
+                            self.hovered_area.clear_override('use_auto_text_color')
                         try:
                             self.main_window.redraw_all_typeset_areas()
                         except Exception:

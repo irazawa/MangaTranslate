@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.6
+# Manga OCR & Typeset Tool v14.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -1248,6 +1248,7 @@ class MangaOCRApp(QMainWindow):
     def _run_window_geometry_guard(self):
         self._update_center_panel_constraints()
         self._rebalance_workspace_splitter()
+        self._sync_image_canvas_geometry()
         self._clamp_main_window_to_screen()
 
     def _schedule_window_geometry_guard(self):
@@ -1257,6 +1258,37 @@ class MangaOCRApp(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_center_panel_constraints()
+        self._sync_image_canvas_geometry()
+
+    def _sync_image_canvas_geometry(self):
+        canvas = getattr(self, 'image_canvas_widget', None)
+        label = getattr(self, 'image_label', None)
+        scroll = getattr(self, 'image_scroll', None)
+        if canvas is None or label is None or scroll is None:
+            return
+
+        viewport = scroll.viewport()
+        viewport_size = viewport.size() if viewport is not None else QSize(0, 0)
+        pixmap = label.pixmap()
+        image_size = label.size()
+
+        if pixmap is None or pixmap.isNull() or image_size.isEmpty():
+            if not viewport_size.isEmpty() and canvas.size() != viewport_size:
+                canvas.resize(viewport_size)
+            label.move(0, 0)
+            return
+
+        canvas_size = QSize(
+            max(image_size.width(), viewport_size.width()),
+            max(image_size.height(), viewport_size.height()),
+        )
+        if canvas.size() != canvas_size:
+            canvas.resize(canvas_size)
+
+        label.move(
+            max(0, (canvas_size.width() - image_size.width()) // 2),
+            max(0, (canvas_size.height() - image_size.height()) // 2),
+        )
 
     def setup_right_panel(self):
         """Modern icon-sidebar + stacked-widget layout untuk Tools & Workspace panel."""
@@ -2209,6 +2241,7 @@ class MangaOCRApp(QMainWindow):
                 self._set_global_cleanup_default('constrain_text', constrain_text_val)
                 default_box = self._default_cleanup_value('use_background_box')
                 default_inpaint = self._default_cleanup_value('use_inpaint')
+                default_constrain = self._default_cleanup_value('constrain_text')
                 for record in (self.all_typeset_data or {}).values():
                     areas = record.get('areas', []) if isinstance(record, dict) else []
                     for area in areas:
@@ -2220,6 +2253,10 @@ class MangaOCRApp(QMainWindow):
                             area.clear_override('use_inpaint')
                         else:
                             area.set_override('use_inpaint', use_inpaint_val)
+                        if constrain_text_val == default_constrain:
+                            area.clear_override('constrain_text')
+                        else:
+                            area.set_override('constrain_text', constrain_text_val)
                 try:
                     self.redraw_all_typeset_areas()
                 except Exception:
@@ -2257,7 +2294,7 @@ class MangaOCRApp(QMainWindow):
         self.use_background_box_checkbox.toggled.connect(on_tab_checkbox_toggled)
 
         def on_constrain_text_toggled(state):
-            self._set_global_cleanup_default('constrain_text', bool(state))
+            self._apply_cleanup_change('constrain_text', bool(state))
         self.constrain_text_checkbox.toggled.connect(on_constrain_text_toggled)
         layout.addWidget(selection_group)
         
@@ -2539,6 +2576,38 @@ class MangaOCRApp(QMainWindow):
         self.delete_typeset_area(area)
         self._refresh_layers_list()
 
+    def _apply_manual_text_color_to_area(self, area, color):
+        color_obj = QColor(color) if not isinstance(color, QColor) else QColor(color)
+        if area is None or not color_obj.isValid():
+            return
+        color_name = color_obj.name()
+        area.color_info = color_name
+        try:
+            for segment in area.get_segments() or []:
+                if isinstance(segment, dict):
+                    segment['color'] = color_name
+        except Exception:
+            pass
+        try:
+            area.set_override('use_auto_text_color', False)
+        except Exception:
+            pass
+
+    def _segments_have_multiple_text_colors(self, segments) -> bool:
+        colors = set()
+        try:
+            for segment in segments or []:
+                if not isinstance(segment, dict):
+                    continue
+                if not (segment.get('text') or '').strip():
+                    continue
+                color = QColor(segment.get('color', ''))
+                if color.isValid():
+                    colors.add(color.name())
+        except Exception:
+            return False
+        return len(colors) > 1
+
     def _add_new_manual_layer(self):
         self.ocr_lang_combo.setCurrentText("Manual Text (Rect)")
         from src.ui.canvas import TypesetArea
@@ -2575,7 +2644,13 @@ class MangaOCRApp(QMainWindow):
         font = self._build_current_font()
         area.font_info = area.font_to_dict(font)
         if hasattr(self, 'typeset_color'):
-            area.color_info = self.typeset_color.name()
+            new_color = QColor(self.typeset_color)
+            old_color = QColor(getattr(area, 'color_info', '#000000'))
+            if new_color.isValid():
+                if not old_color.isValid() or old_color.name() != new_color.name():
+                    self._apply_manual_text_color_to_area(area, new_color)
+                else:
+                    area.color_info = new_color.name()
         if hasattr(self, 'typeset_line_spacing_value'):
             area.line_spacing = self.typeset_line_spacing_value
         if hasattr(self, 'typeset_char_spacing_value'):
@@ -6673,8 +6748,10 @@ class MangaOCRApp(QMainWindow):
         cleanup_defaults = SETTINGS.get('cleanup', {})
         use_inpaint_value = bool(manual_inpaint) if manual_inpaint is not None else bool(settings.get('use_inpaint', cleanup_defaults.get('use_inpaint', True)))
         use_background_box_value = bool(settings.get('use_background_box', cleanup_defaults.get('use_background_box', True)))
+        constrain_text_value = bool(settings.get('constrain_text', cleanup_defaults.get('constrain_text', True)))
         area.set_override('use_inpaint', use_inpaint_value)
         area.set_override('use_background_box', use_background_box_value)
+        area.set_override('constrain_text', constrain_text_value)
         notes = area.review_notes if isinstance(area.review_notes, dict) else {}
         area.review_notes = notes
         if is_manual:
@@ -7076,9 +7153,11 @@ class MangaOCRApp(QMainWindow):
         if apply_mode_global:
             use_inpaint_value = self._default_cleanup_value('use_inpaint')
             use_background_box_value = self._default_cleanup_value('use_background_box')
+            constrain_text_value = self._default_cleanup_value('constrain_text')
         else:
             use_inpaint_value = bool(self.inpaint_checkbox.isChecked()) if getattr(self, 'inpaint_checkbox', None) else self._default_cleanup_value('use_inpaint')
             use_background_box_value = bool(self.use_background_box_checkbox.isChecked()) if getattr(self, 'use_background_box_checkbox', None) else self._default_cleanup_value('use_background_box')
+            constrain_text_value = bool(self.constrain_text_checkbox.isChecked()) if getattr(self, 'constrain_text_checkbox', None) else self._default_cleanup_value('constrain_text')
 
         return {
             'ocr_engine': ocr_engine,
@@ -7130,7 +7209,7 @@ class MangaOCRApp(QMainWindow):
             'manga_use_easy_detection': bool(getattr(self, 'manga_use_easy_detection_checkbox', None) and self.manga_use_easy_detection_checkbox.isChecked()),
             'tesseract_use_easy_detection': bool(getattr(self, 'tesseract_use_easy_detection_checkbox', None) and self.tesseract_use_easy_detection_checkbox.isChecked()),
             'use_auto_text_color': bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True)),
-            'constrain_text': bool(SETTINGS.get('cleanup', {}).get('constrain_text', True)),
+            'constrain_text': constrain_text_value,
         }
 
     def _default_cleanup_value(self, key: str):
@@ -7241,7 +7320,9 @@ class MangaOCRApp(QMainWindow):
             return 'no-area'
 
         default_value = self._default_cleanup_value(key)
-        if value == default_value:
+        if key == 'constrain_text':
+            area.set_override(key, value)
+        elif value == default_value:
             area.clear_override(key)
         else:
             area.set_override(key, value)
@@ -7268,9 +7349,11 @@ class MangaOCRApp(QMainWindow):
         if area is not None:
             use_box_value = area.get_override('use_background_box', self._default_cleanup_value('use_background_box'))
             use_inpaint_value = area.get_override('use_inpaint', self._default_cleanup_value('use_inpaint'))
+            constrain_text_value = area.get_override('constrain_text', self._default_cleanup_value('constrain_text'))
         else:
             use_box_value = self._default_cleanup_value('use_background_box')
             use_inpaint_value = self._default_cleanup_value('use_inpaint')
+            constrain_text_value = self._default_cleanup_value('constrain_text')
 
         if checkbox is not None:
             with QSignalBlocker(checkbox):
@@ -7280,7 +7363,7 @@ class MangaOCRApp(QMainWindow):
                 inpaint_box.setChecked(bool(use_inpaint_value))
         if constrain_box is not None:
             with QSignalBlocker(constrain_box):
-                constrain_box.setChecked(bool(self._default_cleanup_value('constrain_text')))
+                constrain_box.setChecked(bool(constrain_text_value))
 
 
     def update_gpu_status_label(self):
@@ -7950,8 +8033,7 @@ class MangaOCRApp(QMainWindow):
             if not local_pixmap:
                 self.image_label.setPixmap(QPixmap())
                 self.image_label.resize(0, 0)
-                if getattr(self, 'image_canvas_widget', None) is not None:
-                    self.image_canvas_widget.resize(0, 0)
+                self._sync_image_canvas_geometry()
                 return
             # Work on a copy to avoid holding the mutex during scaling
             pix_copy = local_pixmap.copy()
@@ -7965,8 +8047,7 @@ class MangaOCRApp(QMainWindow):
         self.image_label.setPixmap(scaled_pixmap)
         if self.image_label.size() != scaled_pixmap.size():
             self.image_label.resize(scaled_pixmap.size())
-        if getattr(self, 'image_canvas_widget', None) is not None and self.image_canvas_widget.size() != scaled_pixmap.size():
-            self.image_canvas_widget.resize(scaled_pixmap.size())
+        self._sync_image_canvas_geometry()
 
     def zoom_in(self):
         self.zoom_factor = min(self.zoom_factor + 0.2, 8.0); self.update_display()
@@ -8900,6 +8981,8 @@ class MangaOCRApp(QMainWindow):
         if color.isValid():
             self.typeset_color = color
             self._update_color_button()
+            if self.selected_typeset_area:
+                self._apply_manual_text_color_to_area(self.selected_typeset_area, color)
             self._apply_active_typeset_to_selected()
             self._update_typeset_defaults_from_panel()
             self._update_typeset_preview()
@@ -9299,6 +9382,15 @@ class MangaOCRApp(QMainWindow):
         except Exception:
             return QColor(0, 0, 0)
 
+    def _area_uses_auto_text_color(self, area) -> bool:
+        default_value = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+        try:
+            if area is not None and hasattr(area, 'get_override'):
+                return bool(area.get_override('use_auto_text_color', default_value))
+        except Exception:
+            pass
+        return default_value
+
     def _find_speech_bubble_mask_contour(self, full_cv_image, text_rect):
         padding = 25
         search_qt_rect = text_rect.adjusted(-padding, -padding, padding, padding)
@@ -9456,8 +9548,8 @@ class MangaOCRApp(QMainWindow):
             settings = self.get_current_settings()
         notes = area.review_notes if isinstance(getattr(area, "review_notes", {}), dict) else {}
 
-        default_inpaint = settings.get('use_inpaint', True)
-        default_background_box = settings.get('use_background_box', True)
+        default_inpaint = self._default_cleanup_value('use_inpaint')
+        default_background_box = self._default_cleanup_value('use_background_box')
 
         manual_inpaint_override = notes.get("manual_inpaint")
         if manual_inpaint_override is not None:
@@ -9504,7 +9596,7 @@ class MangaOCRApp(QMainWindow):
         skip_heavy_cleanup = bool(self.is_transform_preview and not for_saving)
         if skip_heavy_cleanup:
             use_inpaint = False
-            self._draw_preview_area(painter, area, use_box)
+            self._draw_preview_area(painter, area, use_box, settings=settings)
             return
 
         cleanup_rect = area.get_cleanup_rect()
@@ -9649,7 +9741,7 @@ class MangaOCRApp(QMainWindow):
             painter.restore()
 
         # Tentukan warna teks otomatis
-        use_auto = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+        use_auto = self._area_uses_auto_text_color(area)
 
         # Tetapkan/bersihkan auto text color sesuai setting
         if use_auto:
@@ -9673,7 +9765,8 @@ class MangaOCRApp(QMainWindow):
             painter.rotate(rotation)
             painter.translate(-text_center.x(), -text_center.y())
         if not use_box:
-            constrain_text = bool(settings.get('constrain_text', SETTINGS.get('cleanup', {}).get('constrain_text', True)))
+            default_constrain = self._default_cleanup_value('constrain_text')
+            constrain_text = bool(area.get_override('constrain_text', default_constrain))
             if constrain_text:
                 self.draw_area_text(painter, area)
             else:
@@ -9682,12 +9775,17 @@ class MangaOCRApp(QMainWindow):
             self.draw_area_text(painter, area)
         painter.restore()
 
-    def _draw_preview_area(self, painter, area, use_box):
+    def _draw_preview_area(self, painter, area, use_box, settings=None):
         rotation = area.get_rotation() if hasattr(area, 'get_rotation') else float(getattr(area, 'rotation', 0.0))
         text_rect = area.get_text_rect()
         cleanup_rect = area.get_cleanup_rect()
         text_center = text_rect.center()
         cleanup_center = cleanup_rect.center()
+        if not self._area_uses_auto_text_color(area) and hasattr(area, '_auto_text_color'):
+            try:
+                delattr(area, '_auto_text_color')
+            except Exception:
+                pass
 
         painter.save()
         try:
@@ -9712,7 +9810,8 @@ class MangaOCRApp(QMainWindow):
                 if use_box:
                     self.draw_area_text(painter, area)
                 else:
-                    constrain_text = bool(SETTINGS.get('cleanup', {}).get('constrain_text', True))
+                    default_constrain = self._default_cleanup_value('constrain_text')
+                    constrain_text = bool(area.get_override('constrain_text', default_constrain))
                     if constrain_text:
                         self.draw_area_text(painter, area)
                     else:
@@ -9876,7 +9975,7 @@ class MangaOCRApp(QMainWindow):
                         pen.setCapStyle(Qt.RoundCap)
                         painter.strokePath(path, pen)
                 elif getattr(area, 'has_text_outline', None) and area.has_text_outline():
-                    use_auto_color = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+                    use_auto_color = self._area_uses_auto_text_color(area)
                     area_outline_color = area.get_text_outline_color()
                     if use_auto_color and (area_outline_color.name() == '#000000' or not area_outline_color.isValid()):
                         outline_color = self._outline_for_text_color(qcolor)
@@ -9985,7 +10084,7 @@ class MangaOCRApp(QMainWindow):
             text_value = segment.get('text', '') or ''
             seg_font = area.segment_to_qfont(segment)
             seg_color = area.segment_to_color(segment)
-            use_auto = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+            use_auto = self._area_uses_auto_text_color(area)
             if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor):
                 seg_color = area._auto_text_color
 
@@ -10146,7 +10245,7 @@ class MangaOCRApp(QMainWindow):
             fmt.setFont(seg_font)
             # Allow area to inject an override color (auto-detection) via attribute
             seg_color = area.segment_to_color(segment)
-            use_auto = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+            use_auto = self._area_uses_auto_text_color(area)
             if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor):
                 seg_color = area._auto_text_color
 
@@ -10197,7 +10296,7 @@ class MangaOCRApp(QMainWindow):
             except Exception:
                 doc_color = None
                 
-            use_auto_color = bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True))
+            use_auto_color = self._area_uses_auto_text_color(area)
             if use_auto_color and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor):
                 doc_color = area._auto_text_color
                 
@@ -11145,6 +11244,7 @@ class MangaOCRApp(QMainWindow):
         serialized['cleanup'] = {
             'use_background_box': self._default_cleanup_value('use_background_box'),
             'use_inpaint': self._default_cleanup_value('use_inpaint'),
+            'constrain_text': self._default_cleanup_value('constrain_text'),
             'apply_mode': self._default_cleanup_value('apply_mode'),
         }
         return serialized
@@ -11379,6 +11479,8 @@ class MangaOCRApp(QMainWindow):
                     self._set_global_cleanup_default('use_background_box', bool(cleanup_block['use_background_box']))
                 if 'use_inpaint' in cleanup_block:
                     self._set_global_cleanup_default('use_inpaint', bool(cleanup_block['use_inpaint']))
+                if 'constrain_text' in cleanup_block:
+                    self._set_global_cleanup_default('constrain_text', bool(cleanup_block['constrain_text']))
             self._sync_cleanup_controls_from_selection()
 
         serialized_typeset = payload.get('typeset_data') or payload.get('all_data') or {}
@@ -12286,7 +12388,8 @@ class MangaOCRApp(QMainWindow):
                 if not result:
                     return
 
-                area.set_segments(result.get('segments', []))
+                result_segments = result.get('segments', [])
+                area.set_segments(result_segments)
                 area.text = result.get('plain_text', area.text)
                 area.orientation = result.get('orientation', area.get_orientation())
                 area.effect = result.get('effect', area.get_effect())
@@ -12324,6 +12427,11 @@ class MangaOCRApp(QMainWindow):
                 if first_segment:
                     area.font_info = first_segment.get('font', area.font_info)
                     area.color_info = first_segment.get('color', area.color_info)
+                if result.get('manual_text_color_changed') or self._segments_have_multiple_text_colors(result_segments):
+                    try:
+                        area.set_override('use_auto_text_color', False)
+                    except Exception:
+                        pass
 
                 area.ensure_defaults()
 
