@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.5
+# Manga OCR & Typeset Tool v14.8.6
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -5095,9 +5095,9 @@ class MangaOCRApp(QMainWindow):
         self.populate_ocr_languages()
         self.populate_ai_models() # [BARU]
 
-        # Manga-OCR (selalu diinisialisasi jika ada)
+        # Manga-OCR may already be initialized by the default OCR selection above.
         from src.core.config import check_manga_ocr
-        if check_manga_ocr():
+        if check_manga_ocr() and self.manga_ocr_reader is None:
             try:
                 self._set_startup_status(StartupText.STATUS_LOADING_MANGA_OCR)
                 from manga_ocr import MangaOcr as MO
