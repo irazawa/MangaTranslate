@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.7
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -20,7 +20,8 @@ from PyQt5.QtWidgets import (
     QColorDialog, QLineEdit, QDialog, QDialogButtonBox, QCheckBox, QSpinBox,
     QTabWidget, QGroupBox, QGridLayout, QFrame, QSplitter, QToolButton, QFormLayout, QFontComboBox,
     QDoubleSpinBox,
-    QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget, QProgressDialog
+    QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget, QProgressDialog,
+    QAbstractItemView
 )
 from PyQt5.QtGui import (
     QColor, QFont, QTextCharFormat, QTextCursor, QBrush, QTextBlockFormat, QPixmap, QImage
@@ -39,6 +40,8 @@ from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
 from src.ui.notifications import notify_banner, notify_toast
+from src.ui.texts import SettingsText
+from src.ui.theme import settings_center_stylesheet
 from src.utils.helpers import *
 from src.core.fonts import *
 
@@ -193,36 +196,27 @@ class OpenRouterSettingsDialog(QDialog):
 class SettingsCenterDialog(QDialog):
     """Unified settings dialog — modern sidebar navigation layout."""
 
-    # Nav item definitions: (label, icon-emoji)
-    _NAV_ITEMS = [
-        ("General",     "⚙"),
-        ("Cleanup",     "🧹"),
-        ("Translation", "🌐"),
-        ("Shortcuts",   "⌨"),
-        ("API Keys",    "🔑"),
-        ("OCR Plugins", "🔌"),
-        ("Media Tools", ">"),
-        ("Glossary",    "📖"),
-    ]
+    _NAV_ITEMS = SettingsText.NAV_ITEMS
 
     def __init__(self, main_window):
         super().__init__(main_window)
         self.main_window = main_window
-        self.setWindowTitle("Settings")
+        self.setWindowTitle(SettingsText.TITLE)
         self.setModal(True)
         self.setObjectName("SettingsCenterDialog")
+        self.setMinimumSize(900, 620)
         # Fit dialog to the available screen — cap at 85 % height, 75 % width
         try:
             screen = QApplication.primaryScreen().availableGeometry()
-            max_h = int(screen.height() * 0.85)
-            max_w = int(screen.width() * 0.75)
-            dlg_w = min(940, max_w)
-            dlg_h = min(660, max_h)
+            max_h = int(screen.height() * 0.88)
+            max_w = int(screen.width() * 0.82)
+            dlg_w = min(1120, max_w)
+            dlg_h = min(740, max_h)
             self.resize(dlg_w, dlg_h)
             self.setMaximumHeight(max_h)
         except Exception:
-            self.resize(860, 580)
-            self.setMaximumHeight(700)
+            self.resize(1040, 700)
+            self.setMaximumHeight(760)
 
         self._initial_autosave_enabled, self._initial_autosave_interval = self._current_autosave_state()
         self._initial_cleanup = copy.deepcopy(SETTINGS.get('cleanup', {}))
@@ -253,29 +247,46 @@ class SettingsCenterDialog(QDialog):
         # Left nav panel
         nav_panel = QWidget()
         nav_panel.setObjectName("settings-nav-panel")
-        nav_panel.setFixedWidth(200)
+        nav_panel.setFixedWidth(248)
         nav_vbox = QVBoxLayout(nav_panel)
         nav_vbox.setContentsMargins(0, 0, 0, 0)
         nav_vbox.setSpacing(0)
 
-        header_lbl = QLabel("  ⚙  Settings")
-        header_lbl.setObjectName("settings-nav-header")
-        header_lbl.setFixedHeight(58)
-        nav_vbox.addWidget(header_lbl)
+        brand = QWidget()
+        brand.setObjectName("settings-nav-brand")
+        brand_layout = QVBoxLayout(brand)
+        brand_layout.setContentsMargins(20, 18, 18, 16)
+        brand_layout.setSpacing(4)
+        brand_title = QLabel(SettingsText.HEADER_TITLE)
+        brand_title.setObjectName("settings-brand-title")
+        brand_subtitle = QLabel(SettingsText.HEADER_SUBTITLE)
+        brand_subtitle.setObjectName("settings-brand-subtitle")
+        brand_subtitle.setWordWrap(True)
+        brand_layout.addWidget(brand_title)
+        brand_layout.addWidget(brand_subtitle)
+        nav_vbox.insertWidget(0, brand)
 
         self._nav_list = QListWidget()
         self._nav_list.setObjectName("settings-nav-list")
         self._nav_list.setFocusPolicy(Qt.NoFocus)
         self._nav_list.setSpacing(2)
-        for label, icon in self._NAV_ITEMS:
-            item = QListWidgetItem(f"    {icon}   {label}")
-            item.setSizeHint(QSize(180, 46))
+        self._nav_list.setWordWrap(True)
+        self._nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._nav_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        for index, meta in enumerate(self._NAV_ITEMS):
+            label = meta.get("label", "")
+            desc = meta.get("description", "")
+            item = QListWidgetItem(f"{index + 1:02d}  {label}\n     {desc}")
+            item.setData(Qt.UserRole, meta.get("key", label.lower()))
+            item.setToolTip(f"{label} - {desc}")
+            item.setSizeHint(QSize(220, 58))
             self._nav_list.addItem(item)
         nav_vbox.addWidget(self._nav_list, 1)
 
-        footer_lbl = QLabel("  Manga Tool v14")
+        footer_lbl = QLabel(SettingsText.FOOTER_HINT)
         footer_lbl.setObjectName("settings-nav-footer")
-        footer_lbl.setFixedHeight(34)
+        footer_lbl.setFixedHeight(44)
+        footer_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         nav_vbox.addWidget(footer_lbl)
 
         splitter.addWidget(nav_panel)
@@ -314,17 +325,23 @@ class SettingsCenterDialog(QDialog):
         btn_bar_hbox.setSpacing(10)
         btn_bar_hbox.addStretch(1)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(SettingsText.BUTTON_CANCEL)
         self._cancel_btn.setObjectName("settings-cancel-btn")
         self._cancel_btn.setFixedWidth(100)
         self._cancel_btn.clicked.connect(self.reject)
 
-        self._save_btn = QPushButton("Save Changes")
+        self._apply_btn = QPushButton(SettingsText.BUTTON_APPLY)
+        self._apply_btn.setObjectName("settings-apply-btn")
+        self._apply_btn.setFixedWidth(100)
+        self._apply_btn.clicked.connect(self._on_apply)
+
+        self._save_btn = QPushButton(SettingsText.BUTTON_SAVE)
         self._save_btn.setObjectName("settings-save-btn")
         self._save_btn.setFixedWidth(130)
         self._save_btn.clicked.connect(self._on_save)
 
         btn_bar_hbox.addWidget(self._cancel_btn)
+        btn_bar_hbox.addWidget(self._apply_btn)
         btn_bar_hbox.addWidget(self._save_btn)
         right_vbox.addWidget(btn_bar)
 
@@ -345,6 +362,28 @@ class SettingsCenterDialog(QDialog):
         if 0 <= index < self._pages.count():
             self._pages.setCurrentIndex(index)
 
+    def _nav_index_for_key(self, key: str):
+        normalized = str(key or "").strip().lower()
+        aliases = {
+            "apis": "api",
+            "keys": "api",
+            "shortcut": "shortcuts",
+            "ocr": "ocr_plugins",
+            "plugins": "ocr_plugins",
+            "media": "media_tools",
+        }
+        normalized = aliases.get(normalized, normalized)
+        for index, meta in enumerate(self._NAV_ITEMS):
+            if meta.get("key") == normalized:
+                return index
+        return None
+
+    def _page_meta(self, key: str):
+        index = self._nav_index_for_key(key)
+        if index is None:
+            return {}
+        return self._NAV_ITEMS[index]
+
     def _make_page_scroll(self):
         """Helper: returns (scroll_area, inner_layout) for a settings page."""
         page = QWidget()
@@ -356,8 +395,8 @@ class SettingsCenterDialog(QDialog):
         inner = QWidget()
         inner.setObjectName("settings-page-inner")
         inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(28, 24, 28, 24)
-        inner_layout.setSpacing(20)
+        inner_layout.setContentsMargins(32, 26, 32, 28)
+        inner_layout.setSpacing(22)
         scroll.setWidget(inner)
         page_layout.addWidget(scroll)
         return page, inner_layout
@@ -367,8 +406,8 @@ class SettingsCenterDialog(QDialog):
         w = QWidget()
         w.setObjectName("settings-page-header")
         vl = QVBoxLayout(w)
-        vl.setContentsMargins(0, 0, 0, 4)
-        vl.setSpacing(2)
+        vl.setContentsMargins(0, 0, 0, 12)
+        vl.setSpacing(5)
         t = QLabel(title)
         t.setObjectName("settings-page-title")
         vl.addWidget(t)
@@ -388,12 +427,14 @@ class SettingsCenterDialog(QDialog):
         row = QWidget()
         row.setObjectName("settings-option-row")
         hl = QHBoxLayout(row)
+        row.setMinimumHeight(62)
         hl.setContentsMargins(16, 12, 16, 12)
         hl.setSpacing(16)
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
         lbl = QLabel(label)
         lbl.setObjectName("settings-option-label")
+        lbl.setWordWrap(True)
         text_col.addWidget(lbl)
         if desc:
             dlbl = QLabel(desc)
@@ -404,10 +445,30 @@ class SettingsCenterDialog(QDialog):
         hl.addWidget(widget)
         return row
 
-    def _create_general_tab(self):
+    def _make_panel_page(self, key: str, panel):
+        meta = self._page_meta(key)
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            "General", "Application-wide preferences."))
+            meta.get("title", key.title()),
+            meta.get("subtitle", ""),
+        ))
+        host = QFrame()
+        host.setObjectName("settings-panel-host")
+        host_layout = QVBoxLayout(host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(0)
+        host_layout.addWidget(panel)
+        layout.addWidget(host)
+        layout.addStretch(1)
+        return page
+
+    def _create_general_tab(self):
+        meta = self._page_meta("general")
+        page, layout = self._make_page_scroll()
+        layout.addWidget(self._make_page_header(
+            meta.get("title", "General"),
+            meta.get("subtitle", ""),
+        ))
 
         # ── Autosave card ────────────────────────────────────────────────
         as_card = QGroupBox("💾  Autosave")
@@ -656,9 +717,12 @@ class SettingsCenterDialog(QDialog):
         return page
 
     def _create_cleanup_tab(self):
+        meta = self._page_meta("cleanup")
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            "Cleanup", "Defaults applied to new text areas during cleanup."))
+            meta.get("title", "Cleanup"),
+            meta.get("subtitle", ""),
+        ))
 
         card = QGroupBox("🧹  Text Defaults")
         card.setObjectName("settings-card")
@@ -713,61 +777,16 @@ class SettingsCenterDialog(QDialog):
         return page
 
     def _create_translation_tab(self):
-        page = QWidget()
-        vbox = QVBoxLayout(page)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(0)
-        # Header
-        hdr = QWidget()
-        hdr.setObjectName("settings-page-header-bar")
-        hdr_l = QVBoxLayout(hdr)
-        hdr_l.setContentsMargins(28, 14, 28, 6)
-        title = QLabel("Translation")
-        title.setObjectName("settings-page-title")
-        sub = QLabel("Configure OpenRouter translation API and models.")
-        sub.setObjectName("settings-page-subtitle")
-        sub.setWordWrap(True)
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setObjectName("settings-sep")
-        hdr_l.addWidget(title)
-        hdr_l.addWidget(sub)
-        hdr_l.addWidget(sep)
-        vbox.addWidget(hdr)
-        # Wrap panel in scroll area so it never exceeds dialog height
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        self.openrouter_panel = OpenRouterSettingsPanel(SETTINGS, scroll)
-        scroll.setWidget(self.openrouter_panel)
-        vbox.addWidget(scroll, 1)
-        return page
+        self.openrouter_panel = OpenRouterSettingsPanel(SETTINGS, self)
+        return self._make_panel_page("translation", self.openrouter_panel)
 
     def _create_shortcuts_tab(self):
-        page = QWidget()
-        vbox = QVBoxLayout(page)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(0)
-        # Header
-        hdr = QWidget()
-        hdr.setObjectName("settings-page-header-bar")
-        hdr_l = QVBoxLayout(hdr)
-        hdr_l.setContentsMargins(28, 18, 28, 8)
-        title = QLabel("Shortcuts")
-        title.setObjectName("settings-page-title")
-        sub = QLabel("Assign keyboard or mouse shortcuts. Leave blank to disable. "
-                     "Click a field then press a key/mouse button to capture.")
-        sub.setObjectName("settings-page-subtitle")
-        sub.setWordWrap(True)
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setObjectName("settings-sep")
-        hdr_l.addWidget(title); hdr_l.addWidget(sub); hdr_l.addWidget(sep)
-        vbox.addWidget(hdr)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(28, 16, 28, 24)
-        container_layout.setSpacing(18)
+        meta = self._page_meta("shortcuts")
+        page, container_layout = self._make_page_scroll()
+        container_layout.addWidget(self._make_page_header(
+            meta.get("title", "Shortcuts"),
+            meta.get("subtitle", ""),
+        ))
 
         category_order = []
         grouped = {}
@@ -827,371 +846,14 @@ class SettingsCenterDialog(QDialog):
             container_layout.addWidget(group_box)
 
         container_layout.addStretch(1)
-        scroll.setWidget(container)
-        vbox.addWidget(scroll, 1)
         return page
 
     def _create_api_tab(self):
-        page = QWidget()
-        vbox = QVBoxLayout(page)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(0)
-        # Header
-        hdr = QWidget()
-        hdr.setObjectName("settings-page-header-bar")
-        hdr_l = QVBoxLayout(hdr)
-        hdr_l.setContentsMargins(28, 14, 28, 6)
-        title = QLabel("API Keys")
-        title.setObjectName("settings-page-title")
-        sub = QLabel("Manage translation and OCR API keys, providers, and Tesseract path.")
-        sub.setObjectName("settings-page-subtitle")
-        sub.setWordWrap(True)
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setObjectName("settings-sep")
-        hdr_l.addWidget(title); hdr_l.addWidget(sub); hdr_l.addWidget(sep)
-        vbox.addWidget(hdr)
-        # Wrap panel in scroll area so it never exceeds dialog height
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        self.api_panel = APIManagerPanel(SETTINGS, scroll)
-        scroll.setWidget(self.api_panel)
-        vbox.addWidget(scroll, 1)
-        return page
+        self.api_panel = APIManagerPanel(SETTINGS, self)
+        return self._make_panel_page("api", self.api_panel)
 
     def _apply_settings_styles(self):
-        """Premium dark settings skin — Obsidian Dark palette."""
-        self.setStyleSheet("""
-            /* ── Dialog root ─────────────────────────────────────────── */
-            QDialog#SettingsCenterDialog {
-                background: #090a0f;
-                color: #cbd5e1;
-                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
-                font-size: 10pt;
-            }
-
-            /* ── Left sidebar ────────────────────────────────────────── */
-            #settings-nav-panel {
-                background: #0e111a;
-                border-right: 1px solid #1e293b;
-            }
-            #settings-nav-header {
-                background: #0e111a;
-                color: #38bdf8;
-                font-size: 13pt;
-                font-weight: 700;
-                border-bottom: 1px solid #1e293b;
-                padding-left: 12px;
-                letter-spacing: 0.5px;
-            }
-            #settings-nav-footer {
-                background: #0e111a;
-                color: #64748b;
-                font-size: 8.5pt;
-                border-top: 1px solid #1e293b;
-                padding-left: 12px;
-            }
-            #settings-nav-list {
-                background: #0e111a;
-                border: none;
-                outline: none;
-                color: #94a3b8;
-                font-size: 10pt;
-                padding-top: 8px;
-            }
-            #settings-nav-list::item {
-                border-radius: 8px;
-                margin: 4px 10px;
-                padding: 4px 0;
-            }
-            #settings-nav-list::item:selected {
-                background: #1e293b;
-                color: #38bdf8;
-                font-weight: 600;
-                border-left: 3px solid #38bdf8;
-            }
-            #settings-nav-list::item:hover:!selected {
-                background: #0f131c;
-                color: #f8fafc;
-            }
-
-            /* ── Right panel / pages ─────────────────────────────────── */
-            #settings-right-panel, #settings-pages, #settings-page-inner {
-                background: #090a0f;
-            }
-            #settings-page-header-bar {
-                background: #090a0f;
-            }
-            #settings-page-title {
-                font-size: 15pt;
-                font-weight: 700;
-                color: #f8fafc;
-            }
-            #settings-page-subtitle {
-                font-size: 9.5pt;
-                color: #64748b;
-            }
-            #settings-sep {
-                color: #1e293b;
-                background: #1e293b;
-                max-height: 1px;
-                border: none;
-                margin-top: 6px;
-            }
-
-            /* ── Cards (GroupBox) ───────────────────────────────────── */
-            QGroupBox {
-                background: #0e111a;
-                border: 1px solid #1e293b;
-                border-radius: 12px;
-                margin-top: 12px;
-                padding-top: 12px;
-            }
-            QGroupBox::title {
-                color: #38bdf8;
-                font-weight: 700;
-                font-size: 9.5pt;
-                padding: 0 10px;
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-            }
-
-            /* ── Option rows ────────────────────────────────────────── */
-            #settings-option-row {
-                background: transparent;
-                border-bottom: 1px solid #1e293b;
-            }
-            #settings-option-row:last-child {
-                border-bottom: none;
-            }
-            #settings-option-label {
-                font-size: 10pt;
-                font-weight: 600;
-                color: #cbd5e1;
-            }
-            #settings-option-desc {
-                font-size: 8.5pt;
-                color: #64748b;
-            }
-
-            /* ── Inputs ─────────────────────────────────────────────── */
-            QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QKeySequenceEdit {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                border-radius: 8px;
-                padding: 6px 10px;
-                color: #cbd5e1;
-                selection-background-color: #38bdf8;
-                selection-color: #090a0f;
-            }
-            QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-                border-color: #38bdf8;
-            }
-            QComboBox::drop-down {
-                width: 20px;
-                border-left: 1px solid #1e293b;
-            }
-            QComboBox QAbstractItemView {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                selection-background-color: #1e293b;
-                selection-color: #38bdf8;
-                color: #cbd5e1;
-            }
-
-            /* ── Checkboxes ─────────────────────────────────────────── */
-            QCheckBox {
-                spacing: 8px;
-                color: #cbd5e1;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border: 2px solid #1e293b;
-                border-radius: 4px;
-                background: #0f131c;
-            }
-            QCheckBox::indicator:checked {
-                background: #38bdf8;
-                border-color: #38bdf8;
-                image: none;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #38bdf8;
-            }
-
-            /* ── Buttons ────────────────────────────────────────────── */
-            QPushButton, QToolButton {
-                background: #1e293b;
-                color: #cbd5e1;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 6px 14px;
-                font-weight: 600;
-            }
-            QPushButton:hover:!disabled, QToolButton:hover:!disabled {
-                background: #38bdf8;
-                border-color: #38bdf8;
-                color: #090a0f;
-            }
-            QPushButton:pressed:!disabled, QToolButton:pressed:!disabled {
-                background: #0284c7;
-                color: #ffffff;
-            }
-            QPushButton:disabled, QToolButton:disabled {
-                background: #0e111a;
-                color: #64748b;
-                border-color: #1e293b;
-            }
-
-            /* Primary Save button */
-            #settings-save-btn {
-                background: #38bdf8;
-                color: #090a0f;
-                border: 1px solid #38bdf8;
-                border-radius: 8px;
-                font-weight: 700;
-                font-size: 10pt;
-            }
-            #settings-save-btn:hover {
-                background: #7dd3fc;
-                border-color: #7dd3fc;
-            }
-            #settings-save-btn:pressed {
-                background: #0284c7;
-                color: #ffffff;
-            }
-
-            /* Ghost Cancel button */
-            #settings-cancel-btn {
-                background: transparent;
-                color: #64748b;
-                border: 1px solid #1e293b;
-            }
-            #settings-cancel-btn:hover {
-                background: #1e293b;
-                color: #cbd5e1;
-            }
-
-            /* ── Bottom button bar ──────────────────────────────────── */
-            #settings-btn-bar {
-                background: #0e111a;
-                border-top: 1px solid #1e293b;
-            }
-
-            /* ── Misc ───────────────────────────────────────────────── */
-            QScrollArea, QScrollBar {
-                background: transparent;
-                border: none;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #090a0f;
-                width: 10px;
-                margin: 0px 0 0px 0;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
-                background: #1e293b;
-                min-height: 20px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #38bdf8;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0;
-            }
-            QLabel {
-                color: #cbd5e1;
-            }
-            QRadioButton {
-                color: #cbd5e1;
-                spacing: 8px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #1e293b;
-                background: #0e111a;
-                border-radius: 8px;
-            }
-            QTabBar::tab {
-                background: #090a0f;
-                color: #64748b;
-                border: 1px solid #1e293b;
-                border-radius: 6px;
-                padding: 6px 14px;
-                margin: 2px;
-            }
-            QTabBar::tab:selected {
-                background: #1e293b;
-                color: #38bdf8;
-                font-weight: 700;
-                border-color: #38bdf8;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #0f131c;
-                color: #cbd5e1;
-            }
-            QTableWidget {
-                background-color: #0e111a;
-                alternate-background-color: #0f131c;
-                border: 1px solid #1e293b;
-                gridline-color: #1e293b;
-                color: #cbd5e1;
-                border-radius: 8px;
-            }
-            QTableWidget::item {
-                background-color: transparent;
-                color: #cbd5e1;
-                border: none;
-                padding: 6px;
-            }
-            QTableWidget::item:selected {
-                background-color: #1e293b;
-                color: #38bdf8;
-            }
-            QTableWidget::item:hover {
-                background-color: #1e293b;
-                color: #f8fafc;
-            }
-            QHeaderView::section {
-                background: #0f131c;
-                color: #64748b;
-                border: none;
-                border-bottom: 1px solid #1e293b;
-                padding: 6px;
-                font-weight: 600;
-            }
-            QListWidget {
-                background: #0e111a;
-                border: 1px solid #1e293b;
-                color: #cbd5e1;
-                border-radius: 8px;
-            }
-            QListWidget::item {
-                background-color: transparent;
-                color: #cbd5e1;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QListWidget::item:selected {
-                background: #1e293b;
-                color: #38bdf8;
-            }
-            QListWidget::item:hover:!selected {
-                background: #0f131c;
-                color: #f8fafc;
-            }
-            QGroupBox#settings-card {
-                background: #0e111a;
-                border: 1px solid #1e293b;
-                border-radius: 12px;
-            }
-            QSplitter::handle {
-                background: #1e293b;
-            }
-        """)
-
+        self.setStyleSheet(settings_center_stylesheet())
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1199,11 +861,7 @@ class SettingsCenterDialog(QDialog):
     def set_active_tab(self, key: str):
         if not key:
             return
-        idx_map = {
-            'general': 0, 'cleanup': 1, 'translation': 2,
-            'shortcuts': 3, 'shortcut': 3, 'api': 4, 'apis': 4, 'keys': 4,
-        }
-        idx = idx_map.get(str(key).lower())
+        idx = self._nav_index_for_key(key)
         if idx is not None:
             self._nav_list.setCurrentRow(idx)
 
@@ -1250,11 +908,11 @@ class SettingsCenterDialog(QDialog):
     # Save handler
     # ------------------------------------------------------------------
     def _create_media_tools_tab(self):
+        meta = self._page_meta("media_tools")
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            "Media Tools",
-            "Optional tools for YouTube playback/download workflows and FFmpeg power tools. "
-            "Install only when you need these features."
+            meta.get("title", "Media Tools"),
+            meta.get("subtitle", ""),
         ))
 
         card = QGroupBox("YouTube & FFmpeg Dependencies")
@@ -1359,12 +1017,11 @@ class SettingsCenterDialog(QDialog):
         self._media_dependencies_worker = worker
 
     def _create_glossary_tab(self):
-        """Tab Glossary: pasangan term sumber → target untuk injeksi ke prompt AI."""
+        meta = self._page_meta("glossary")
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            "Glossary",
-            "Daftar istilah khusus yang akan selalu diterjemahkan secara konsisten oleh AI. "
-            "Contoh: nama karakter, nama tempat, atau istilah unik dalam manga."
+            meta.get("title", "Glossary"),
+            meta.get("subtitle", "")
         ))
 
         card = QGroupBox("📖  Term Pairs (Source → Target)")
@@ -1457,7 +1114,13 @@ class SettingsCenterDialog(QDialog):
                 result[source] = target
         return result
 
+    def _on_apply(self):
+        self._commit_settings(close_dialog=False)
+
     def _on_save(self):
+        self._commit_settings(close_dialog=True)
+
+    def _commit_settings(self, close_dialog=True):
         # Save OCR plugins config
         ocr_plugins_cfg = SETTINGS.setdefault('ocr_plugins', {})
         for name, checkbox in self.plugin_checkboxes.items():
@@ -1468,8 +1131,8 @@ class SettingsCenterDialog(QDialog):
             warnings = "\n".join(self.api_panel.validation_messages())
             details = f"\n\n{warnings}" if warnings else ""
             notify_banner(self, "settings-api-validation", "API settings", f"Please fix the highlighted API settings issues before saving.{details}", kind="warning")
-            self.tabs.setCurrentWidget(self.api_tab)
-            return
+            self.set_active_tab("api")
+            return False
 
         openrouter_settings = self.openrouter_panel.export_settings()
 
@@ -1616,16 +1279,34 @@ class SettingsCenterDialog(QDialog):
 
         if status_parts and hasattr(self.main_window, 'statusBar'):
             try:
-                self.main_window.statusBar().showMessage(" · ".join(status_parts), 4000)
+                self.main_window.statusBar().showMessage(" | ".join(status_parts), 4000)
             except Exception:
                 pass
 
-        self.accept()
+        self._initial_autosave_enabled = autosave_enabled
+        self._initial_autosave_interval = autosave_interval_ms
+        self._initial_cleanup = copy.deepcopy(cleanup_cfg)
+        self._initial_api = {
+            'apis': copy.deepcopy(SETTINGS.get('apis', {})),
+            'ocr': copy.deepcopy(SETTINGS.get('ocr', {})),
+            'tesseract': copy.deepcopy(SETTINGS.get('tesseract', {})),
+        }
+        self._initial_translate = copy.deepcopy(SETTINGS.get('translate', {}).get('openrouter', {}))
+        self._initial_shortcuts = copy.deepcopy(shortcut_settings)
+
+        if close_dialog:
+            self.accept()
+        else:
+            notify_toast(self, "Settings applied", "Changes saved without closing Settings.", kind="success")
+        return True
 
     def _create_ocr_plugins_tab(self):
+        meta = self._page_meta("ocr_plugins")
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            "OCR Plugins Manager", "Enable/disable OCR engines, install Tesseract, and manage language models."))
+            meta.get("title", "OCR Plugins Manager"),
+            meta.get("subtitle", ""),
+        ))
 
         # ── 1. Modular OCR Plugins ────────────────────────────────────────
         card = QGroupBox("🔌  OCR Engines")

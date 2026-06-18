@@ -29,6 +29,75 @@ class DialogText:
     HELP_USAGE_HEADER = "📖  Help & Usage"
 
 
+class SettingsText:
+    TITLE = "Settings"
+    HEADER_TITLE = "Settings"
+    HEADER_SUBTITLE = "Workspace, OCR, API, export, and tool preferences."
+    FOOTER_HINT = f"MangaTranslate v{APP_VERSION}"
+    BUTTON_CANCEL = "Cancel"
+    BUTTON_APPLY = "Apply"
+    BUTTON_SAVE = "Save Changes"
+
+    NAV_ITEMS = [
+        {
+            "key": "general",
+            "label": "General",
+            "description": "Export, autosave, presets",
+            "title": "General",
+            "subtitle": "Set project safety, output defaults, and the presets used by new work.",
+        },
+        {
+            "key": "cleanup",
+            "label": "Cleanup",
+            "description": "Text cleanup defaults",
+            "title": "Cleanup",
+            "subtitle": "Choose how new text areas behave when the app cleans and redraws bubbles.",
+        },
+        {
+            "key": "translation",
+            "label": "Translation",
+            "description": "OpenRouter models",
+            "title": "Translation",
+            "subtitle": "Configure OpenRouter translation endpoints and model lists.",
+        },
+        {
+            "key": "shortcuts",
+            "label": "Shortcuts",
+            "description": "Keyboard and mouse",
+            "title": "Shortcuts",
+            "subtitle": "Assign keyboard or mouse shortcuts. Leave a field blank to disable an action.",
+        },
+        {
+            "key": "api",
+            "label": "API Keys",
+            "description": "Providers and tokens",
+            "title": "API Keys",
+            "subtitle": "Manage translation and OCR provider keys, active keys, and the Tesseract path.",
+        },
+        {
+            "key": "ocr_plugins",
+            "label": "OCR Plugins",
+            "description": "Engines and languages",
+            "title": "OCR Plugins Manager",
+            "subtitle": "Enable OCR engines, install Tesseract, and manage local language models.",
+        },
+        {
+            "key": "media_tools",
+            "label": "Media Tools",
+            "description": "Optional installs",
+            "title": "Media Tools",
+            "subtitle": "Install optional YouTube, FFmpeg, and Deno tooling only when you need it.",
+        },
+        {
+            "key": "glossary",
+            "label": "Glossary",
+            "description": "Term consistency",
+            "title": "Glossary",
+            "subtitle": "Keep names, places, and special manga terms translated consistently.",
+        },
+    ]
+
+
 class StartupText:
     VERSION_LABEL = f"v{APP_VERSION}"
     SUBTITLE = "Menyiapkan OCR, translator, dan workspace typeset."
