@@ -1,10 +1,10 @@
-# MangaTranslate ðŸŽ¨ðŸ¤–
+# MangaTranslate 🎨🤖
 
 MangaTranslate adalah aplikasi desktop premium berskala enterprise untuk menerjemahkan dan melakukan typesetting manga secara interaktif menggunakan Python 3 dan PyQt5. Aplikasi ini dirancang khusus untuk memodernisasi workflow scanlation secara profesional dengan menggabungkan deteksi bubble otomatis berbasis Deep Learning, multi-engine OCR, penerjemah kecerdasan buatan (AI) terintegrasi, workspace berbasis layer ala Photoshop, sistem undo/redo visual berbasis timeline, serta media center terintegrasi.
 
 ---
 
-## ðŸ› ï¸ Arsitektur & Alur Kerja Sistem (System Workflows)
+## 🛠️ Arsitektur & Alur Kerja Sistem (System Workflows)
 
 MangaTranslate dirancang dengan pendekatan arsitektur modular yang memisahkan antara GUI thread (PyQt5), Thread Worker untuk proses komputasi berat offline/online (OCR, inpainting, terjemahan API), dan subsistem inpainting eksternal.
 
@@ -42,13 +42,13 @@ Untuk memastikan penghapusan teks manga (clean-up) berjalan secara mulus dan pre
 Untuk meningkatkan pengalaman pengguna baru, aplikasi mengimplementasikan layar pembuka interaktif:
 * **Welcome Screen Otomatis**: Ditampilkan secara otomatis saat aplikasi dijalankan jika tidak ada folder/proyek yang sedang aktif. Layar ini didesain menggunakan gaya visual gelap (dark theme) premium.
 * **Smart UI Hiding**: Saat Welcome Screen aktif, semua sidebar panel, panel kontrol status navigasi bawah, dan tombol kontrol canvas disembunyikan agar tampilan menjadi fokus dan minimalis.
-* **Recent Projects Card Grid**: Menampilkan daftar proyek yang terakhir diakses dalam bentuk grid kartu interaktif. Pengguna dapat langsung membuka proyek dengan mengklik kartu tersebut, atau menghapus entri dari riwayat dengan mengklik tombol `âœ•` di pojok kanan kartu.
+* **Recent Projects Card Grid**: Menampilkan daftar proyek yang terakhir diakses dalam bentuk grid kartu interaktif. Pengguna dapat langsung membuka proyek dengan mengklik kartu tersebut, atau menghapus entri dari riwayat dengan mengklik tombol `✕` di pojok kanan kartu.
 * **Quick Actions**: Tombol akses cepat untuk langsung membuka folder manga, memuat file proyek `.manga_proj`, atau membuka dokumen PDF.
 * **Keyboard Shortcut Guide**: Daftar panduan pintasan tombol keyboard utama yang ditampilkan di welcome screen.
 
 ---
 
-## ðŸ”„ Pipeline OCR & Terjemahan (OCR & Translation Pipelines)
+## 🔄 Pipeline OCR & Terjemahan (OCR & Translation Pipelines)
 
 MangaTranslate menawarkan dua pipeline pemrosesan teks utama yang ditangani oleh [QueueProcessorWorker](file:///e:/Project/MangaTranslate/src/core/workers.py) dalam background thread agar antarmuka PyQt5 tetap responsif.
 
@@ -87,7 +87,7 @@ Terintegrasi langsung ke berbagai provider AI papan atas dunia:
 
 ---
 
-## ðŸ¤– Pendeteksian Berbasis Deep Learning (Speech Bubble & Text Detection)
+## 🤖 Pendeteksian Berbasis Deep Learning (Speech Bubble & Text Detection)
 
 Aplikasi ini mengemas fungsionalitas otomatisasi tingkat lanjut menggunakan [AutoDetectorWorker](file:///e:/Project/MangaTranslate/src/core/workers.py) untuk memindai manga dalam jumlah besar secara cepat:
 
@@ -102,7 +102,7 @@ Aplikasi ini mengemas fungsionalitas otomatisasi tingkat lanjut menggunakan [Aut
 
 ---
 
-## ðŸŽ¨ Typesetting Interaktif & Manajemen Layer (Photoshop-style Canvas)
+## 🎨 Typesetting Interaktif & Manajemen Layer (Photoshop-style Canvas)
 
 Kanvas penyuntingan di dalam [canvas.py](file:///e:/Project/MangaTranslate/src/ui/canvas.py) mengimplementasikan workspace bergaya editor grafis profesional:
 
@@ -128,23 +128,23 @@ Setiap kotak dialog manga yang terjemahannya dibuat akan dikelola sebagai layer 
 
 ---
 
-## â†©ï¸ Undo/Redo Visual Timeline (Baru di v14.9.0)
+## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.8)
 
 MangaTranslate kini menghadirkan sistem **Undo/Redo berbasis snapshot** yang dilengkapi tampilan timeline visual interaktif di panel kanan, memberikan kendali penuh atas sejarah penyuntingan Anda:
 
-* **Visual Timeline "ðŸ• History"**: Widget `QListWidget` di bagian bawah panel kanan menampilkan seluruh riwayat aksi dengan color-coding:
-  * **â–¶** (biru terang) â€” State aktif saat ini
-  * **Â·** (abu) â€” Aksi masa lalu yang sudah di-undo
-  * **â—** (dim) â€” Aksi yang bisa di-redo
+* **Visual Timeline "🕐 History"**: Widget `QListWidget` di bagian bawah panel kanan menampilkan seluruh riwayat aksi dengan color-coding:
+  * **▶** (biru terang) — State aktif saat ini
+  * **·** (abu) — Aksi masa lalu yang sudah di-undo
+  * **◁** (dim) — Aksi yang bisa di-redo
 * **Jump ke State Mana Pun**: Klik langsung item mana saja di timeline untuk melompat ke snapshot tersebut tanpa harus menekan Ctrl+Z berulang kali.
 * **Snapshot Otomatis**: Snapshot dibuat secara otomatis setiap kali terjadi perubahan penting: menambah layer baru, menghapus area, menerjemahkan teks, menerapkan teks dari recent list, atau menghapus semua layer.
 * **Batas History**: Maksimum **50 snapshot** disimpan. Snapshot lama otomatis terpotong dari depan.
-* **Tombol Clear**: Tombol `âœ•` di header timeline untuk mereset seluruh history kapan saja.
+* **Tombol Clear**: Tombol `✕` di header timeline untuk mereset seluruh history kapan saja.
 * **Keyboard Shortcuts**: `Ctrl+Z` untuk undo dan `Ctrl+Y` untuk redo tetap berfungsi seperti biasa.
 
 ---
 
-## ðŸš€ Alur Kerja Batch & Penghematan Biaya (Batch Processing & Caching)
+## 🚀 Alur Kerja Batch & Penghematan Biaya (Batch Processing & Caching)
 
 Untuk mengurangi biaya penggunaan API key cloud dan mempercepat translasi multi-page, sistem menerapkan taktik optimasi berikut:
 
@@ -165,31 +165,31 @@ Saat menerjemahkan satu halaman manga yang berisi banyak gelembung percakapan:
 
 ---
 
-## ðŸ’° Help & Usage Terpadu (Unified Help Dialog â€” Baru di v14.9.0)
+## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.8)
 
-Dialog "ðŸ“– Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi satu window bertab yang elegan ([UnifiedHelpDialog](file:///e:/Project/MangaTranslate/src/ui/unified_help_dialog.py)):
+Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi satu window bertab yang elegan ([UnifiedHelpDialog](file:///e:/Project/MangaTranslate/src/ui/unified_help_dialog.py)):
 
-### Tab 1 â€” ðŸ“‹ Overview
+### Tab 1 — 📋 Overview
 * **About App**: Informasi versi, deskripsi singkat, dan copyright.
-* **ðŸ’° Session Cost**: Estimasi biaya sesi dalam USD (hijau) dan IDR (kuning), total input/output tokens, dan jumlah snippet yang diterjemahkan.
-* **ðŸ“ Project Statistics**: Jumlah halaman, halaman yang sudah selesai (dengan persentase), total area typeset, area berteks, total kata, dan distribusi model AI yang digunakan.
+* **💰 Session Cost**: Estimasi biaya sesi dalam USD (hijau) dan IDR (kuning), total input/output tokens, dan jumlah snippet yang diterjemahkan.
+* **📁 Project Statistics**: Jumlah halaman, halaman yang sudah selesai (dengan persentase), total area typeset, area berteks, total kata, dan distribusi model AI yang digunakan.
 
-### Tab 2 â€” ðŸ’° Pricing Editor
+### Tab 2 — 💰 Pricing Editor
 * Tabel lengkap semua model AI yang tersedia (Gemini, OpenAI, OpenRouter) beserta harga per 1M token (input & output), sementara kalkulasi internal tetap memakai harga per token.
-* **Harga dapat diedit langsung** melalui `QDoubleSpinBox` di setiap sel â€” tidak perlu membuka file konfigurasi apapun.
-* Tombol **ðŸ’¾ Simpan Perubahan** untuk menerapkan harga baru ke sesi yang berjalan.
-* Tombol **ðŸ”„ Refresh dari OpenRouter** untuk mengambil harga model OpenRouter terbaru secara langsung.
-* Tombol **â†© Reset ke Default** untuk mengembalikan harga ke nilai awal sesi.
+* **Harga dapat diedit langsung** melalui `QDoubleSpinBox` di setiap sel — tidak perlu membuka file konfigurasi apapun.
+* Tombol **💾 Simpan Perubahan** untuk menerapkan harga baru ke sesi yang berjalan.
+* Tombol **🔄 Refresh dari OpenRouter** untuk mengambil harga model OpenRouter terbaru secara langsung.
+* Tombol **↩ Reset ke Default** untuk mengembalikan harga ke nilai awal sesi.
 
-### Tab 3 â€” ðŸ“ˆ Analytics
+### Tab 3 — 📈 Analytics
 * Tabel penggunaan API per model: daily request count, RPD limit, RPD %, RPM saat ini.
-* Progress bar rate limit per model dengan color-coding: ðŸŸ¢ < 60%, ðŸŸ¡ 60-89%, ðŸ”´ â‰¥ 90%.
-* Tombol **â¬‡ Export CSV** untuk menyimpan laporan analitik lengkap ke file `.csv`.
-* Tombol **ðŸ—‘ Reset Usage** untuk mereset counter penggunaan harian.
+* Progress bar rate limit per model dengan color-coding: 🟢 < 60%, 🟡 60-89%, 🔴 ≥ 90%.
+* Tombol **⬇ Export CSV** untuk menyimpan laporan analitik lengkap ke file `.csv`.
+* Tombol **🗑 Reset Usage** untuk mereset counter penggunaan harian.
 
 ---
 
-## ðŸ” Modul Review & Penjaminan Kualitas (Proofreader & Quality Check)
+## 🔍 Modul Review & Penjaminan Kualitas (Proofreader & Quality Check)
 
 Untuk proyek manga profesional, MangaTranslate memisahkan proses terjemahan mentah dari tahap finalisasi menggunakan dua tab workflow khusus:
 
@@ -206,24 +206,24 @@ Untuk proyek manga profesional, MangaTranslate memisahkan proses terjemahan ment
 
 ---
 
-## ðŸŽ¬ Pusat Media & Asisten AI (Built-in Media Center & AI Chatbot)
+## 🎬 Pusat Media & Asisten AI (Built-in Media Center & AI Chatbot)
 
 MangaTranslate menghadirkan panel hiburan dan bantuan interaktif di dalam satu wadah tab yang elegan ([AIChatWidget](file:///e:/Project/MangaTranslate/src/ui/chat_widget.py)) pada sidebar kanan:
 
-### 1. AI Chatbot Assistant (ðŸ¤– AI Chatbot)
+### 1. AI Chatbot Assistant (🤖 AI Chatbot)
 * **Interaksi Instan**: Chatbot bertenaga AI (Gemini/OpenAI) yang siap menjawab pertanyaan seputar penggunaan aplikasi, konsep pemrosesan citra, pemrograman, atau hal umum lainnya.
 * **Streaming Response**: Jawaban AI ditulis secara mengetik langsung (streaming) dengan visual indikator mengetik yang mulus.
 * **Context Awareness**: Sistem otomatis menyisipkan informasi parameter aplikasi yang sedang aktif ke dalam system prompt agar chatbot dapat memberikan bantuan yang relevan.
 * **Sesi Riwayat**: Mendukung penyimpanan riwayat percakapan otomatis secara lokal, penamaan sesi otomatis dari pesan pertama.
 
-### 2. Pusat Media (ðŸŽ¬ Video Player)
+### 2. Pusat Media (🎬 Video Player)
 Membuka pemutar media internal ([VideoPlayerWidget](file:///e:/Project/MangaTranslate/src/ui/video_player_widget.py)) agar Anda dapat menyunting manga sembari mendengarkan musik atau menonton referensi video:
 * **Pemutar Musik & Video Lokal**: Memindai folder `./src/data/video/` dan `./src/data/music/` secara otomatis untuk memuat file audio/video.
 * **YouTube Playlist Streamer**: Cukup tempel tautan video/playlist YouTube ke dalam input. Aplikasi menggunakan library `yt-dlp` di background thread untuk mengekstrak alamat streaming langsung dari YouTube.
 
 ---
 
-## ðŸ“ Portabilitas Proyek & Keamanan Konfigurasi (Serialization & Security)
+## 📁 Portabilitas Proyek & Keamanan Konfigurasi (Serialization & Security)
 
 ### 1. Skema Proyek Portabel (Schema Version 4)
 Penyimpanan proyek (`.manga_proj`) dilakukan di latar belakang menggunakan kelas [ProjectSaveWorker](file:///e:/Project/MangaTranslate/src/core/workers.py) untuk menjaga kinerja UI. Skema v4 mengoptimalkan portabilitas:
@@ -236,7 +236,7 @@ Penyimpanan proyek (`.manga_proj`) dilakukan di latar belakang menggunakan kelas
 
 ---
 
-## âŒ¨ï¸ Referensi Tombol Pintas & Kontrol (Shortcuts Reference)
+## ⌨️ Referensi Tombol Pintas & Kontrol (Shortcuts Reference)
 
 Aplikasi dilengkapi tombol pintas global untuk memaksimalkan kecepatan typesetting:
 
@@ -257,19 +257,19 @@ Aplikasi dilengkapi tombol pintas global untuk memaksimalkan kecepatan typesetti
 
 ### Tombol Pintas Mode Seleksi
 Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
-* **`7`** : Bubble Finder (Rect) â€” Temukan gelembung dialog berbentuk kotak.
-* **`8`** : Bubble Finder (Oval) â€” Temukan gelembung dialog berbentuk lingkaran/oval.
-* **`3`** : Direct OCR (Rect) â€” Jalankan OCR langsung pada seleksi kotak.
-* **`4`** : Direct OCR (Oval) â€” Jalankan OCR langsung pada seleksi oval.
-* **`5`** : Manual Text (Rect) â€” Buat layer teks baru berbentuk kotak secara manual.
-* **`6`** : Manual Text (Pen) â€” Gambar poligon bebas untuk wadah teks baru secara manual.
-* **`2`** : Pen Tool â€” Menggambar garis bebas pada gambar.
-* **`1`** : Transform (Hand) â€” Memilih, memutar, atau mengubah ukuran kotak teks yang ada.
-* **`9`** : Click-to-Translate â€” Klik pada gambar untuk mendeteksi teks dan menerjemahkannya otomatis.
+* **`7`** : Bubble Finder (Rect) — Temukan gelembung dialog berbentuk kotak.
+* **`8`** : Bubble Finder (Oval) — Temukan gelembung dialog berbentuk lingkaran/oval.
+* **`3`** : Direct OCR (Rect) — Jalankan OCR langsung pada seleksi kotak.
+* **`4`** : Direct OCR (Oval) — Jalankan OCR langsung pada seleksi oval.
+* **`5`** : Manual Text (Rect) — Buat layer teks baru berbentuk kotak secara manual.
+* **`6`** : Manual Text (Pen) — Gambar poligon bebas untuk wadah teks baru secara manual.
+* **`2`** : Pen Tool — Menggambar garis bebas pada gambar.
+* **`1`** : Transform (Hand) — Memilih, memutar, atau mengubah ukuran kotak teks yang ada.
+* **`9`** : Click-to-Translate — Klik pada gambar untuk mendeteksi teks dan menerjemahkannya otomatis.
 
 ---
 
-## ðŸš€ Panduan Instalasi & Penggunaan Mandiri
+## 🚀 Panduan Instalasi & Penggunaan Mandiri
 
 ### Persyaratan Sistem
 * Windows 10 atau Windows 11 (64-bit).
@@ -291,4 +291,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate â€” Premium Manga Translation & Typesetting Workbench v14.9.0*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.8*
