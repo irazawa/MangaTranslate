@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -114,10 +114,10 @@ class ProjectSaveWorker(QObject):
             # Build payload from already-serialized snapshot (snapshot['typeset_data'] contains primitive dicts)
             payload = {
                 'schema_version': 4,
-                # Relative paths (primary â€” used for portability)
+                # Relative paths (primary — used for portability)
                 'project_dir_rel': rel_project_dir,
                 'current_image_path_rel': rel_image_path,
-                # Absolute paths (fallback â€” backward compatibility)
+                # Absolute paths (fallback — backward compatibility)
                 'project_dir': abs_project_dir,
                 'current_image_path': abs_image_path,
                 'current_pdf_page': int(self.snapshot.get('current_pdf_page', -1)) if isinstance(self.snapshot.get('current_pdf_page'), int) else int(self.snapshot.get('current_pdf_page', -1)),
@@ -312,7 +312,7 @@ class QueueProcessorWorker(QObject):
                         translated_text = self.apply_safe_mode(translated_text)
                     return original_text, translated_text
         except Exception:
-            pass  # cache miss or error â€” proceed normally
+            pass  # cache miss or error — proceed normally
 
         original_text, translated_text = (
             self.run_enhanced_pipeline(cropped_cv_img, settings)

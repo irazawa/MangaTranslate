@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -12,7 +12,7 @@ import copy
 # (tidak ada impor pihak ketiga yang dibutuhkan)
 
 # ==============================
-# ðŸŒŸ PyQt5 (dibagi per kategori)
+# 🌟 PyQt5 (dibagi per kategori)
 # ==============================
 from PyQt5.QtWidgets import (
     QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
@@ -207,7 +207,7 @@ class OpenRouterSettingsDialog(QDialog):
         return self.panel.get_settings()
 
 class SettingsCenterDialog(QDialog):
-    """Unified settings dialog â€” modern sidebar navigation layout."""
+    """Unified settings dialog — modern sidebar navigation layout."""
 
     _NAV_ITEMS = SettingsText.NAV_ITEMS
 
@@ -218,7 +218,7 @@ class SettingsCenterDialog(QDialog):
         self.setModal(True)
         self.setObjectName("SettingsCenterDialog")
         self.setMinimumSize(900, 620)
-        # Fit dialog to the available screen â€” cap at 85 % height, 75 % width
+        # Fit dialog to the available screen — cap at 85 % height, 75 % width
         try:
             screen = QApplication.primaryScreen().availableGeometry()
             max_h = int(screen.height() * 0.88)
@@ -255,7 +255,7 @@ class SettingsCenterDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # â”€â”€ Splitter: left sidebar nav + right content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Splitter: left sidebar nav + right content ─────────────────
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.setObjectName("settings-splitter")
         splitter.setHandleWidth(1)
@@ -368,7 +368,7 @@ class SettingsCenterDialog(QDialog):
 
         root.addWidget(splitter, 1)
 
-        # Wire nav selection â†’ page switch
+        # Wire nav selection → page switch
         self._nav_list.currentRowChanged.connect(self._on_nav_changed)
         self._nav_list.setCurrentRow(0)
 
@@ -489,8 +489,8 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        # â”€â”€ Autosave card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        as_card = QGroupBox("ðŸ’¾  Autosave")
+        # ── Autosave card ────────────────────────────────────────────────
+        as_card = QGroupBox("💾  Autosave")
         as_card.setObjectName("settings-card")
         as_vbox = QVBoxLayout(as_card)
         as_vbox.setSpacing(4)
@@ -514,8 +514,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(as_card)
 
-        # â”€â”€ Output card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        out_card = QGroupBox("ðŸ–¼  Output")
+        # ── Output card ──────────────────────────────────────────────────
+        out_card = QGroupBox("🖼  Output")
         out_card.setObjectName("settings-card")
         out_vbox = QVBoxLayout(out_card)
         out_vbox.setSpacing(4)
@@ -542,8 +542,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(out_card)
 
-        # â”€â”€ Defaults & Preset card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        def_card = QGroupBox("ðŸ“‹  Default Presets")
+        # ── Defaults & Preset card ──────────────────────────────────────────
+        def_card = QGroupBox("📋  Default Presets")
         def_card.setObjectName("settings-card")
         def_vbox = QVBoxLayout(def_card)
         def_vbox.setSpacing(4)
@@ -661,8 +661,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(def_card)
 
-        # â”€â”€ Emergency Close card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        ec_card = QGroupBox("ðŸš¨  Emergency Close")
+        # ── Emergency Close card ──────────────────────────────────────────
+        ec_card = QGroupBox("🚨  Emergency Close")
         ec_card.setObjectName("settings-card")
         ec_vbox = QVBoxLayout(ec_card)
         ec_vbox.setSpacing(4)
@@ -743,7 +743,7 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        card = QGroupBox("ðŸ§¹  Text Defaults")
+        card = QGroupBox("🧹  Text Defaults")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(4)
@@ -765,7 +765,7 @@ class SettingsCenterDialog(QDialog):
         self.threshold_spin.setValue(int(cleanup_cfg.get('text_color_threshold', 128)))
         card_vbox.addWidget(self._make_option_row(
             "Color threshold",
-            "Luminance threshold for auto text color inversion (0â€“255).",
+            "Luminance threshold for auto text color inversion (0–255).",
             self.threshold_spin))
 
         self.use_background_box_checkbox = QCheckBox()
@@ -1123,13 +1123,13 @@ class SettingsCenterDialog(QDialog):
                 row_layout.addWidget(editor, 1)
 
                 clear_btn = QToolButton()
-                clear_btn.setText("âœ•")
+                clear_btn.setText("✕")
                 clear_btn.setToolTip("Clear shortcut")
                 clear_btn.clicked.connect(editor.clear_sequence)
                 row_layout.addWidget(clear_btn)
 
                 default_btn = QToolButton()
-                default_btn.setText("â†º")
+                default_btn.setText("↺")
                 default_btn.setToolTip("Restore default")
 
                 def _reset_editor(checked=False, target_editor=editor, target_key=key):
@@ -1341,7 +1341,7 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", "")
         ))
 
-        card = QGroupBox("ðŸ“–  Term Pairs (Source â†’ Target)")
+        card = QGroupBox("📖  Term Pairs (Source → Target)")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(8)
@@ -1365,7 +1365,7 @@ class SettingsCenterDialog(QDialog):
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ Add Term")
         add_btn.clicked.connect(self._on_glossary_add)
-        remove_btn = QPushButton("âˆ’ Remove Selected")
+        remove_btn = QPushButton("− Remove Selected")
         remove_btn.clicked.connect(self._on_glossary_remove)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(remove_btn)
@@ -1375,7 +1375,7 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
 
         # Info box
-        info_card = QGroupBox("â„¹  How it works")
+        info_card = QGroupBox("ℹ  How it works")
         info_card.setObjectName("settings-card")
         info_vbox = QVBoxLayout(info_card)
         info_label = QLabel(
@@ -1383,9 +1383,9 @@ class SettingsCenterDialog(QDialog):
             "saat menerjemahkan. AI akan selalu menggunakan 'Target Term' untuk setiap "
             "kemunculan 'Source Term' dalam teks.\n\n"
             "Contoh:\n"
-            "  Source: ç…‰ç„æå¯¿éƒŽ  â†’  Target: Rengoku Kyojuro\n"
-            "  Source: ç„¡æƒ¨  â†’  Target: Muzan\n"
-            "  Source: å…¨é›†ä¸­  â†’  Target: Total Concentration"
+            "  Source: 煉獄杏寿郎  →  Target: Rengoku Kyojuro\n"
+            "  Source: 無惨  →  Target: Muzan\n"
+            "  Source: 全集中  →  Target: Total Concentration"
         )
         info_label.setWordWrap(True)
         info_label.setObjectName("settings-option-desc")
@@ -1638,8 +1638,8 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        # â”€â”€ 1. Modular OCR Plugins â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        card = QGroupBox("ðŸ”Œ  OCR Engines")
+        # ── 1. Modular OCR Plugins ────────────────────────────────────────
+        card = QGroupBox("🔌  OCR Engines")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(4)
@@ -1686,8 +1686,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(card)
 
-        # â”€â”€ 2. Tesseract Auto-Installer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        tess_card = QGroupBox("ðŸ“¦  Tesseract Auto-Installer")
+        # ── 2. Tesseract Auto-Installer ────────────────────────────────────
+        tess_card = QGroupBox("📦  Tesseract Auto-Installer")
         tess_card.setObjectName("settings-card")
         tess_vbox = QVBoxLayout(tess_card)
         tess_vbox.setSpacing(10)
@@ -1700,10 +1700,10 @@ class SettingsCenterDialog(QDialog):
         from src.core.config import IS_TESSERACT_AVAILABLE, TESSERACT_PATH
         self.tess_status_label = QLabel()
         if IS_TESSERACT_AVAILABLE:
-            self.tess_status_label.setText("ðŸŸ¢ Installed & Ready")
+            self.tess_status_label.setText("🟢 Installed & Ready")
             self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
         else:
-            self.tess_status_label.setText("ðŸ”´ Not Found")
+            self.tess_status_label.setText("🔴 Not Found")
             self.tess_status_label.setStyleSheet("color: #f87171; font-weight: bold;")
         status_layout.addWidget(self.tess_status_label)
         status_layout.addStretch()
@@ -1716,15 +1716,15 @@ class SettingsCenterDialog(QDialog):
         tess_vbox.addWidget(self.tess_path_label)
 
         # Installer button
-        self.install_tess_btn = QPushButton("ðŸš€ Auto-Install Tesseract")
+        self.install_tess_btn = QPushButton("🚀 Auto-Install Tesseract")
         self.install_tess_btn.setObjectName("settings-action-btn")
         self.install_tess_btn.clicked.connect(self._run_tesseract_installer)
         tess_vbox.addWidget(self.install_tess_btn)
 
         layout.addWidget(tess_card)
 
-        # â”€â”€ 3. Tesseract Language Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        lang_card = QGroupBox("ðŸŒ  Tesseract Language Models")
+        # ── 3. Tesseract Language Models ──────────────────────────────────
+        lang_card = QGroupBox("🌐  Tesseract Language Models")
         lang_card.setObjectName("settings-card")
         lang_vbox = QVBoxLayout(lang_card)
         lang_vbox.setSpacing(8)
@@ -1787,12 +1787,12 @@ class SettingsCenterDialog(QDialog):
                 file_exists = os.path.exists(os.path.join(system_path, f"{lang_code}.traineddata"))
             
             if file_exists:
-                uninstall_btn = QPushButton("ðŸ—‘ Uninstall")
+                uninstall_btn = QPushButton("🗑 Uninstall")
                 uninstall_btn.setStyleSheet("background: #dc2626; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
                 uninstall_btn.clicked.connect(lambda checked=False, c=lang_code: self._uninstall_lang_model(c))
                 self.lang_table.setCellWidget(idx, 2, uninstall_btn)
             else:
-                download_btn = QPushButton("ðŸ“¥ Download")
+                download_btn = QPushButton("📥 Download")
                 download_btn.setStyleSheet("background: #1f6fb5; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
                 download_btn.clicked.connect(lambda checked=False, c=lang_code: self._download_lang_model(c))
                 self.lang_table.setCellWidget(idx, 2, download_btn)
@@ -1867,10 +1867,10 @@ class SettingsCenterDialog(QDialog):
         def on_finished(success, path_or_err):
             progress_dlg.close()
             self.install_tess_btn.setEnabled(True)
-            self.install_tess_btn.setText("ðŸš€ Auto-Install Tesseract")
+            self.install_tess_btn.setText("🚀 Auto-Install Tesseract")
             if success:
                 notify_toast(self, "Success", f"Tesseract successfully installed. Path: {path_or_err}", kind="success", timeout_ms=5000)
-                self.tess_status_label.setText("ðŸŸ¢ Installed & Ready")
+                self.tess_status_label.setText("🟢 Installed & Ready")
                 self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
                 self.tess_path_label.setText(f"Path: {path_or_err}")
                 
@@ -1936,18 +1936,18 @@ class AdvancedTextEditDialog(QDialog):
         ("Justify", Qt.AlignJustify),
     ]
     EMOJI_PRESETS = [
-        ("Heart", "â¤"),
-        ("Heart1", "â™¥ï¸Ž"),
-        ("Heart2", "â™¡"),
-        ("Heart3", "â¤"),
-        ("Heart3", "ã…¤â™¡ã…¤"),
-        ("Sparkle", "âœ¨"),
-        ("Star", "â˜…"),
-        ("Music", "â™ª"),
-        ("Shock", "â‰"),
-        ("Sweat", "ðŸ’¦"),
-        ("Smile", "ðŸ˜Š"),
-        ("Angry", "ðŸ˜ "),
+        ("Heart", "❤"),
+        ("Heart1", "♥︎"),
+        ("Heart2", "♡"),
+        ("Heart3", "❤"),
+        ("Heart3", "ㅤ♡ㅤ"),
+        ("Sparkle", "✨"),
+        ("Star", "★"),
+        ("Music", "♪"),
+        ("Shock", "⁉"),
+        ("Sweat", "💦"),
+        ("Smile", "😊"),
+        ("Angry", "😠"),
         ("Glow", "glow"),
     ]
 
@@ -2045,7 +2045,7 @@ class AdvancedTextEditDialog(QDialog):
         self.ai_translate_btn.clicked.connect(self._on_ai_translate_clicked)
         toolbar_layout.addWidget(self.ai_translate_btn)
 
-        self.recent_translations_btn = QPushButton("ðŸ“‹ Recent")
+        self.recent_translations_btn = QPushButton("📋 Recent")
         self.recent_translations_btn.setToolTip("Apply a recently generated translation to this text area")
         self.recent_translations_btn.clicked.connect(self._show_recent_menu)
         toolbar_layout.addWidget(self.recent_translations_btn)
@@ -2197,8 +2197,8 @@ class AdvancedTextEditDialog(QDialog):
         self.gradient_angle_spin = QDoubleSpinBox()
         self.gradient_angle_spin.setRange(0.0, 360.0)
         self.gradient_angle_spin.setSingleStep(15.0)
-        self.gradient_angle_spin.setSuffix(" Â°")
-        self.gradient_angle_spin.setSuffix(" Â°")
+        self.gradient_angle_spin.setSuffix(" °")
+        self.gradient_angle_spin.setSuffix(" °")
         
         self.gradient_direction_combo = QComboBox()
         for label, _ in self.GRADIENT_DIRECTIONS:
@@ -2498,7 +2498,7 @@ class AdvancedTextEditDialog(QDialog):
         for idx, layer in enumerate(self.outline_layers_store):
             w = layer.get('width', 2.0)
             c = layer.get('color', '#000000')
-            item = QListWidgetItem(f"Layer {idx + 1}: Width {w}px â€” Color {c}")
+            item = QListWidgetItem(f"Layer {idx + 1}: Width {w}px — Color {c}")
             item.setBackground(QColor(c))
             item.setForeground(QColor('#000000' if self._is_light(c) else '#ffffff'))
             self.layers_list.addItem(item)
@@ -3714,9 +3714,9 @@ class BatchSaveDialog(QDialog):
                 selected.append(item.data(Qt.UserRole))
         return selected
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# ðŸ“¦ Tesseract & Manga-OCR Background System Integration Helpers & Workers
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ──────────────────────────────────────────────────────────────────
+# 📦 Tesseract & Manga-OCR Background System Integration Helpers & Workers
+# ──────────────────────────────────────────────────────────────────
 
 def get_tessdata_path():
     tess_path = SETTINGS.get('tesseract', {}).get('path', '')
@@ -4052,7 +4052,7 @@ class ImageCurvesDialog(QDialog):
         self.curves_widget = CurvesGraphWidget(self)
         left_layout.addWidget(self.curves_widget)
 
-        instructions = QLabel("â€¢ Drag points to adjust\nâ€¢ Click curve to add points\nâ€¢ Right-click to remove points")
+        instructions = QLabel("• Drag points to adjust\n• Click curve to add points\n• Right-click to remove points")
         instructions.setStyleSheet("color: #64748b; font-size: 8.5pt;")
         left_layout.addWidget(instructions)
         content_layout.addLayout(left_layout)
@@ -4164,7 +4164,7 @@ class ImageCurvesDialog(QDialog):
 
 
 # ============================================================
-# Feature #16 â€” Session Analytics & Export Dialog
+# Feature #16 — Session Analytics & Export Dialog
 # ============================================================
 class SessionAnalyticsDialog(QDialog):
     """
@@ -4192,7 +4192,7 @@ class SessionAnalyticsDialog(QDialog):
         self.total_input_tokens  = total_input_tokens
         self.total_output_tokens = total_output_tokens
 
-        self.setWindowTitle("ðŸ“ˆ Session Analytics & Export")
+        self.setWindowTitle("📈 Session Analytics & Export")
         self.setModal(True)
         self.resize(700, 580)
         self._apply_style()
@@ -4268,25 +4268,25 @@ class SessionAnalyticsDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Header ──────────────────────────────────────────────────────
         header = QWidget()
         header.setStyleSheet("background-color: #0e111a; border-bottom: 1px solid #1e293b;")
         hdr_layout = QHBoxLayout(header)
         hdr_layout.setContentsMargins(20, 14, 20, 14)
 
-        title_lbl = QLabel("ðŸ“ˆ  Session Analytics")
+        title_lbl = QLabel("📈  Session Analytics")
         title_lbl.setStyleSheet("font-size: 14pt; font-weight: bold; color: #38bdf8;")
         hdr_layout.addWidget(title_lbl)
         hdr_layout.addStretch(1)
 
         # Tombol export & reset di header
-        export_btn = QPushButton("â¬‡  Export CSV")
+        export_btn = QPushButton("⬇  Export CSV")
         export_btn.setObjectName("export_btn")
         export_btn.setFixedHeight(32)
         export_btn.clicked.connect(self._export_csv)
         hdr_layout.addWidget(export_btn)
 
-        reset_btn = QPushButton("ðŸ—‘  Reset")
+        reset_btn = QPushButton("🗑  Reset")
         reset_btn.setObjectName("reset_btn")
         reset_btn.setFixedHeight(32)
         reset_btn.clicked.connect(self._reset_usage)
@@ -4294,7 +4294,7 @@ class SessionAnalyticsDialog(QDialog):
 
         outer.addWidget(header)
 
-        # â”€â”€ Scroll area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Scroll area ─────────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -4310,7 +4310,7 @@ class SessionAnalyticsDialog(QDialog):
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
-        # â”€â”€ Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Footer ──────────────────────────────────────────────────────
         footer = QWidget()
         footer.setStyleSheet("background-color: #0e111a; border-top: 1px solid #1e293b;")
         ftr_layout = QHBoxLayout(footer)
@@ -4347,8 +4347,8 @@ class SessionAnalyticsDialog(QDialog):
 
         provider_usage = self.usage_data.get('provider_usage', {})
 
-        # â”€â”€ 1. Ringkasan biaya â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        self._section_label("ðŸ’° Cost Summary")
+        # ── 1. Ringkasan biaya ──────────────────────────────────────────
+        self._section_label("💰 Cost Summary")
         cost_card = self._make_card()
         cc_layout = QGridLayout(cost_card)
         cc_layout.setContentsMargins(16, 12, 16, 12)
@@ -4372,8 +4372,8 @@ class SessionAnalyticsDialog(QDialog):
 
         self._vbox.addWidget(cost_card)
 
-        # â”€â”€ 2. Usage per provider & model â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        self._section_label("ðŸ“Š API Usage per Model")
+        # ── 2. Usage per provider & model ────────────────────────────────
+        self._section_label("📊 API Usage per Model")
 
         # Kumpulkan total daily_count global untuk menentukan skala bar
         all_counts = []
@@ -4391,7 +4391,7 @@ class SessionAnalyticsDialog(QDialog):
 
             # Header provider
             prov_lbl = QLabel(
-                f"<b style='color:{color}; font-size:10pt;'>â–¶ {provider}</b>"
+                f"<b style='color:{color}; font-size:10pt;'>▶ {provider}</b>"
             )
             prov_lbl.setTextFormat(Qt.RichText)
             self._vbox.addWidget(prov_lbl)
@@ -4410,7 +4410,7 @@ class SessionAnalyticsDialog(QDialog):
                 # Display name
                 display = (model_info.get('display') or model_name)
                 if len(display) > 45:
-                    display = display[:42] + "â€¦"
+                    display = display[:42] + "…"
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
@@ -4446,8 +4446,8 @@ class SessionAnalyticsDialog(QDialog):
 
                 self._vbox.addWidget(row_widget)
 
-        # â”€â”€ 3. Rate Limit Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        self._section_label("â± Rate Limit Status (saat ini)")
+        # ── 3. Rate Limit Status ─────────────────────────────────────────
+        self._section_label("⏱ Rate Limit Status (saat ini)")
 
         has_any = False
         for provider in sorted(provider_usage.keys()):
@@ -4468,14 +4468,14 @@ class SessionAnalyticsDialog(QDialog):
                 has_any = True
                 display = model_info.get('display') or model_name
                 if len(display) > 45:
-                    display = display[:42] + "â€¦"
+                    display = display[:42] + "…"
 
-                status_icon = "ðŸŸ¢"
+                status_icon = "🟢"
                 rpm_pct = int(min(rpm / rpm_limit * 100, 100)) if rpm_limit > 0 else 0
                 if rpm_pct >= 100:
-                    status_icon = "ðŸ”´"
+                    status_icon = "🔴"
                 elif rpm_pct >= 60:
-                    status_icon = "ðŸŸ¡"
+                    status_icon = "🟡"
 
                 row_w = QWidget()
                 rl = QHBoxLayout(row_w)

@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -10,7 +10,7 @@ import re
 import hashlib
 import configparser
 import base64
-from datetime import date
+from datetime import date, timedelta
 from openai import OpenAI
 
 # ==============================
@@ -682,6 +682,8 @@ class MangaOCRApp(QMainWindow):
                 pass
         self.usage_file_path = os.path.join(root_cache_dir, "manga_ocr_usage_v16.json")
         self.usage_data = {}
+        self.app_session_started_at = time.time()
+        self.settings_workspace_widget = None
         self.api_limit_timer = QTimer(self)
         self.api_limit_timer.setInterval(1000)
         self.api_limit_timer.timeout.connect(self.periodic_limit_check)
@@ -718,6 +720,8 @@ class MangaOCRApp(QMainWindow):
         self.is_easyocr_available = False
 
         self.total_cost = 0.0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         self.usd_to_idr_rate = 16200.0
 
         # Counter for how many snippets have been translated during this session
@@ -784,6 +788,7 @@ class MangaOCRApp(QMainWindow):
             },
             'OpenRouter': {}
         }
+        self._apply_ai_model_overrides_from_settings()
 
         
         self.OCR_LANGS = {} # Akan diisi saat inisialisasi
@@ -952,15 +957,10 @@ class MangaOCRApp(QMainWindow):
         find_replace_action.triggered.connect(self.open_find_replace_dialog)
         edit_menu.addAction(find_replace_action)
 
-        settings_menu = menu_bar.addMenu('&Settings')
         self.use_box_action = None
-        settings_center_action = QAction('Settings...', self)
-        settings_center_action.triggered.connect(self.open_settings_dialog)
-        settings_menu.addAction(settings_center_action)
-        help_menu = menu_bar.addMenu('&Help / Usage')
-        about_action = QAction(ActionText.HELP_USAGE_MENU, self)
-        about_action.triggered.connect(self.show_unified_help_dialog)
-        help_menu.addAction(about_action)
+        settings_center_action = QAction('Settings', self)
+        settings_center_action.triggered.connect(lambda: self.open_settings_dialog('profile'))
+        menu_bar.addAction(settings_center_action)
 
         # Legacy individual dialogs (tersembunyi, bisa dipakai dari kode)
         project_stats_action = QAction('Project Statistics...', self)
@@ -969,15 +969,86 @@ class MangaOCRApp(QMainWindow):
         session_analytics_action.triggered.connect(self.show_session_analytics_dialog)
 
 
-    def open_settings_dialog(self, focus_tab: str = 'general'):
-        dialog = SettingsCenterDialog(self)
-        dialog.set_active_tab(focus_tab)
-        dialog.exec_()
+    def open_settings_dialog(self, focus_tab: str = 'profile'):
+        self.show_settings_workspace(focus_tab)
 
     def open_openrouter_settings_dialog(self):
-        dialog = SettingsCenterDialog(self)
-        dialog.set_active_tab('translation')
-        dialog.exec_()
+        self.show_settings_workspace('translation')
+
+    def _ensure_settings_workspace(self):
+        workspace = getattr(self, 'settings_workspace_widget', None)
+        stack = getattr(self, 'center_stack', None)
+        if workspace is not None and stack is not None and stack.indexOf(workspace) >= 0:
+            return workspace
+        if stack is None:
+            return None
+        from src.ui.settings_workspace import SettingsWorkspace
+        workspace = SettingsWorkspace(self)
+        workspace.back_requested.connect(self.hide_settings_workspace)
+        self.settings_workspace_widget = workspace
+        stack.addWidget(workspace)
+        return workspace
+
+    def show_settings_workspace(self, focus_tab: str = 'profile'):
+        stack = getattr(self, 'center_stack', None)
+        if stack is None:
+            return
+        workspace = self._ensure_settings_workspace()
+        if workspace is None:
+            return
+        try:
+            workspace.refresh()
+            workspace.set_active_section(focus_tab)
+        except Exception:
+            traceback.print_exc()
+
+        left = getattr(self, 'left_panel_widget', None)
+        right = getattr(self, 'right_panel_scroll', None)
+        nav = getattr(self, 'nav_zoom_widget', None)
+        if left is not None:
+            self._settings_left_was_visible = left.isVisible()
+            left.setVisible(False)
+        if right is not None:
+            self._settings_right_was_visible = right.isVisible()
+            right.setVisible(False)
+        if nav is not None:
+            self._settings_nav_was_visible = nav.isVisible()
+            nav.setVisible(False)
+        stack.setCurrentWidget(workspace)
+        self._update_center_panel_constraints(left_visible=False, right_visible=False)
+
+    def hide_settings_workspace(self):
+        stack = getattr(self, 'center_stack', None)
+        if stack is None:
+            return
+        has_project = bool(getattr(self, 'project_dir', None) or getattr(self, 'current_image_path', None))
+        if not has_project:
+            self.show_welcome_screen()
+            return
+
+        stack.setCurrentIndex(1)
+        nav = getattr(self, 'nav_zoom_widget', None)
+        if nav is not None:
+            nav.setVisible(bool(getattr(self, '_settings_nav_was_visible', True)))
+
+        left = getattr(self, 'left_panel_widget', None)
+        left_visible = bool(getattr(self, '_settings_left_was_visible', True))
+        if left is not None:
+            left.setVisible(left_visible)
+            toggle_btn = getattr(self, 'toggle_left_btn', None)
+            if toggle_btn is not None:
+                toggle_btn.setChecked(left_visible)
+                toggle_btn.setText(NavText.HIDE_FOLDER if left_visible else NavText.SHOW_FOLDER)
+
+        right = getattr(self, 'right_panel_scroll', None)
+        right_visible = bool(getattr(self, '_settings_right_was_visible', True))
+        if right is not None:
+            right.setVisible(right_visible)
+            toggle_btn = getattr(self, 'toggle_right_btn', None)
+            if toggle_btn is not None:
+                toggle_btn.setChecked(right_visible)
+                toggle_btn.setText(NavText.HIDE_TOOLS if right_visible else NavText.SHOW_TOOLS)
+        self._schedule_window_geometry_guard()
 
     def init_ui(self):
         main_widget = QWidget()
@@ -1303,7 +1374,7 @@ class MangaOCRApp(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # â”€â”€ Header bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Header bar ──────────────────────────────────────────────────────────
         header_bar = QWidget()
         header_bar.setObjectName("rp-header-bar")
         header_bar.setFixedHeight(46)
@@ -1311,7 +1382,7 @@ class MangaOCRApp(QMainWindow):
         header_h.setContentsMargins(14, 0, 14, 0)
         header_h.setSpacing(8)
 
-        header_icon = QLabel("âš¡")
+        header_icon = QLabel("⚡")
         header_icon.setStyleSheet("font-size:16px; background:transparent; color:#38bdf8;")
         header_h.addWidget(header_icon)
 
@@ -1321,13 +1392,13 @@ class MangaOCRApp(QMainWindow):
         header_h.addStretch()
         main_layout.addWidget(header_bar)
 
-        # â”€â”€ Separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Separator ────────────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setObjectName("rp-sep")
         main_layout.addWidget(sep)
 
-        # â”€â”€ Body: icon sidebar (left) + stacked content (right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Body: icon sidebar (left) + stacked content (right) ─────────────────
         body_widget = QWidget()
         body_widget.setMinimumWidth(0)
         body_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
@@ -1335,7 +1406,7 @@ class MangaOCRApp(QMainWindow):
         body_h.setContentsMargins(0, 0, 0, 0)
         body_h.setSpacing(0)
 
-        # â”€â”€ Icon sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Icon sidebar ─────────────────────────────────────────────────────────
         sidebar = QWidget()
         sidebar.setObjectName("rp-sidebar")
         sidebar.setFixedWidth(70)
@@ -1353,17 +1424,17 @@ class MangaOCRApp(QMainWindow):
 
         # Tab definitions: (label_short, emoji, tooltip, widget_builder)
         tab_defs = [
-            ("OCR",      "ðŸ”", "Translate & OCR settings",     self._create_translate_tab),
-            ("Typeset",  "âœï¸", "Typography & text styling",    self._create_typeset_tab),
-            ("Layers",   "ðŸ—‚ï¸", "Canvas layer manager",         self._create_layers_tab),
-            ("Cleanup",  "ðŸ§¹", "Inpainting & detection tools",  self._create_cleanup_tab),
-            ("History",  "ðŸ“‹", "Translation history log",       self._create_history_tab),
-            ("Scenes",   "ðŸŽ¬", "Scene / dialogue manager",      self._create_scene_tab),
-            ("AI Cfg",   "ðŸ¤–", "AI models & hardware config",   self._create_ai_hardware_tab),
+            ("OCR",      "🔍", "Translate & OCR settings",     self._create_translate_tab),
+            ("Typeset",  "✏️", "Typography & text styling",    self._create_typeset_tab),
+            ("Layers",   "🗂️", "Canvas layer manager",         self._create_layers_tab),
+            ("Cleanup",  "🧹", "Inpainting & detection tools",  self._create_cleanup_tab),
+            ("History",  "📋", "Translation history log",       self._create_history_tab),
+            ("Scenes",   "🎬", "Scene / dialogue manager",      self._create_scene_tab),
+            ("AI Cfg",   "🤖", "AI models & hardware config",   self._create_ai_hardware_tab),
         ]
         if self._chat_widget is not None:
             # Insert chat after OCR
-            tab_defs.insert(1, ("Chat", "ðŸ’¬", "AI Chat & Video", None))
+            tab_defs.insert(1, ("Chat", "💬", "AI Chat & Video", None))
 
         compact_markers = {
             "OCR": "OCR",
@@ -1431,7 +1502,7 @@ class MangaOCRApp(QMainWindow):
         page_idx = 0
         for short_label, marker, tip, builder in tab_defs:
             if builder is None:
-                # Chat widget â€” already built
+                # Chat widget — already built
                 widget = self._chat_widget
                 page = widget
                 if page is not None:
@@ -1462,18 +1533,18 @@ class MangaOCRApp(QMainWindow):
         sidebar_v.addStretch()
         body_h.addWidget(sidebar)
 
-        # â”€â”€ Vertical separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Vertical separator ───────────────────────────────────────────────────
         vsep = QFrame()
         vsep.setFrameShape(QFrame.VLine)
         vsep.setObjectName("rp-vsep")
         body_h.addWidget(vsep)
 
-        # â”€â”€ Content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Content area ─────────────────────────────────────────────────────────
         body_h.addWidget(self.right_stack, 1)
 
         main_layout.addWidget(body_widget, 1)
 
-        # â”€â”€ Bottom status & actions bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Bottom status & actions bar ──────────────────────────────────────────
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
         sep2.setObjectName("rp-sep")
@@ -1485,17 +1556,17 @@ class MangaOCRApp(QMainWindow):
         bottom_v.setContentsMargins(10, 8, 10, 8)
         bottom_v.setSpacing(6)
 
-        # â”€â”€ Batch action row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Batch action row ────────────────────────────────────────────────────
         batch_row = QHBoxLayout()
         batch_row.setSpacing(6)
-        self.process_batch_button = QPushButton("âš¡ Batch Now")
+        self.process_batch_button = QPushButton("⚡ Batch Now")
         self.process_batch_button.setObjectName("rp-action-btn")
         self.process_batch_button.setText("Batch Now")
         self.process_batch_button.setToolTip("Process batch queue now")
         self.process_batch_button.clicked.connect(self.start_batch_processing)
         batch_row.addWidget(self.process_batch_button)
 
-        self.batch_process_button = QPushButton("ðŸ” Detect All")
+        self.batch_process_button = QPushButton("🔍 Detect All")
         self.batch_process_button.setObjectName("rp-action-btn")
         self.batch_process_button.setText("Detect All")
         self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder")
@@ -1504,16 +1575,16 @@ class MangaOCRApp(QMainWindow):
         bottom_v.addLayout(batch_row)
         self.on_batch_mode_changed(False)
 
-        # â”€â”€ Confirm/Cancel detection (hidden by default) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Confirm/Cancel detection (hidden by default) ──────────────────────
         detect_row = QHBoxLayout()
         detect_row.setSpacing(6)
-        self.confirm_items_button = QPushButton("âœ” Confirm (0)")
+        self.confirm_items_button = QPushButton("✔ Confirm (0)")
         self.confirm_items_button.setObjectName("rp-confirm-btn")
         self.confirm_items_button.setText("Confirm (0)")
         self.confirm_items_button.clicked.connect(self.process_confirmed_detections)
         self.confirm_items_button.setVisible(False)
         detect_row.addWidget(self.confirm_items_button)
-        self.cancel_detection_button = QPushButton("âœ• Cancel")
+        self.cancel_detection_button = QPushButton("✕ Cancel")
         self.cancel_detection_button.setObjectName("rp-danger-btn")
         self.cancel_detection_button.setText("Cancel")
         self.cancel_detection_button.clicked.connect(self.cancel_interactive_batch)
@@ -1521,46 +1592,46 @@ class MangaOCRApp(QMainWindow):
         detect_row.addWidget(self.cancel_detection_button)
         bottom_v.addLayout(detect_row)
 
-        # â”€â”€ Edit action row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Edit action row ─────────────────────────────────────────────────────
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
-        self.undo_button = QPushButton("â†© Undo")
+        self.undo_button = QPushButton("↩ Undo")
         self.undo_button.setObjectName("rp-action-btn")
         self.undo_button.setText("Undo")
         self.undo_button.clicked.connect(self.undo_last_action)
         self.undo_button.setEnabled(False)
         edit_row.addWidget(self.undo_button)
 
-        self.redo_button = QPushButton("â†ª Redo")
+        self.redo_button = QPushButton("↪ Redo")
         self.redo_button.setObjectName("rp-action-btn")
         self.redo_button.setText("Redo")
         self.redo_button.clicked.connect(self.redo_last_action)
         self.redo_button.setEnabled(False)
         edit_row.addWidget(self.redo_button)
 
-        self.reset_button = QPushButton("ðŸ”„ Reset")
+        self.reset_button = QPushButton("🔄 Reset")
         self.reset_button.setObjectName("rp-action-btn")
         self.reset_button.setText("Reset")
         self.reset_button.clicked.connect(self.reset_view_to_original)
         edit_row.addWidget(self.reset_button)
 
-        self.save_button = QPushButton("ðŸ’¾ Save")
+        self.save_button = QPushButton("💾 Save")
         self.save_button.setObjectName("rp-save-btn")
         self.save_button.setText("Save")
         self.save_button.clicked.connect(self.save_image)
         edit_row.addWidget(self.save_button)
         bottom_v.addLayout(edit_row)
 
-        # â”€â”€ Undo History Timeline (Feature #1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Undo History Timeline (Feature #1) ──────────────────────────────────
         timeline_header = QHBoxLayout()
         timeline_header.setContentsMargins(2, 4, 2, 0)
         timeline_header.setSpacing(4)
-        timeline_title_lbl = QLabel("ðŸ• History")
+        timeline_title_lbl = QLabel("🕐 History")
         timeline_title_lbl.setObjectName("rp-tiny-label")
         timeline_title_lbl.setText("History")
         timeline_header.addWidget(timeline_title_lbl)
         timeline_header.addStretch(1)
-        self._timeline_clear_btn = QPushButton("âœ•")
+        self._timeline_clear_btn = QPushButton("✕")
         self._timeline_clear_btn.setObjectName("rp-action-btn")
         self._timeline_clear_btn.setText("x")
         self._timeline_clear_btn.setFixedSize(18, 18)
@@ -1578,7 +1649,7 @@ class MangaOCRApp(QMainWindow):
         self.undo_timeline_list.itemClicked.connect(self._on_timeline_item_clicked)
         bottom_v.addWidget(self.undo_timeline_list)
 
-        # â”€â”€ Status metrics (compact 2-row grid) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Status metrics (compact 2-row grid) ─────────────────────────────────
         metrics_widget = QWidget()
         metrics_widget.setObjectName("rp-metrics")
         metrics_grid = QGridLayout(metrics_widget)
@@ -1617,7 +1688,7 @@ class MangaOCRApp(QMainWindow):
         self.translated_label = QLabel("0"); self.translated_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.translated_label, 1, 5)
 
-        # Row 2 â€” provider + model  (spans full width)
+        # Row 2 — provider + model  (spans full width)
         metrics_grid.addWidget(_mlabel("Provider"), 2, 0)
         self.provider_label = QLabel("-"); self.provider_label.setObjectName("rp-metric-val")
         self.provider_label.setMinimumWidth(0)
@@ -1632,7 +1703,7 @@ class MangaOCRApp(QMainWindow):
 
         bottom_v.addWidget(metrics_widget)
 
-        # â”€â”€ Token rates (very small, collapsed to single row) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Token rates (very small, collapsed to single row) ─────────────────
         token_row = QHBoxLayout()
         token_row.setSpacing(12)
         self.input_tokens_label = QLabel("In: 0 tok")
@@ -1650,8 +1721,8 @@ class MangaOCRApp(QMainWindow):
         token_row.addStretch()
         bottom_v.addLayout(token_row)
 
-        # â”€â”€ Cooldown label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        self.countdown_label = QLabel("â³ Cooldown: 60s")
+        # ── Cooldown label ───────────────────────────────────────────────────────
+        self.countdown_label = QLabel("⏳ Cooldown: 60s")
         self.countdown_label.setObjectName("rp-countdown")
         self.countdown_label.setText("Cooldown: 60s")
         self.countdown_label.setVisible(False)
@@ -1659,7 +1730,7 @@ class MangaOCRApp(QMainWindow):
 
         main_layout.addWidget(bottom_bar)
 
-        # â”€â”€ Activate first tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Activate first tab ───────────────────────────────────────────────────
         if self._sidebar_buttons:
             self._on_sidebar_nav(0)
 
@@ -1681,13 +1752,13 @@ class MangaOCRApp(QMainWindow):
             return
 
         panel_qss = """
-            /* â”€â”€ Root panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Root panel ─────────────────────────────────────────────────── */
             #right-panel {
                 background-color: #0b0e17;
                 border-left: 1px solid #1a2235;
             }
 
-            /* â”€â”€ Header bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Header bar ─────────────────────────────────────────────────── */
             #rp-header-bar {
                 background-color: #0d111b;
                 border-bottom: 1px solid #1a2235;
@@ -1701,7 +1772,7 @@ class MangaOCRApp(QMainWindow):
                 padding: 0px;
             }
 
-            /* â”€â”€ Separators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Separators ─────────────────────────────────────────────────── */
             #rp-sep {
                 background-color: #1a2235;
                 border: none;
@@ -1713,7 +1784,7 @@ class MangaOCRApp(QMainWindow):
                 max-width: 1px;
             }
 
-            /* â”€â”€ Icon sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Icon sidebar ───────────────────────────────────────────────── */
             #rp-sidebar {
                 background-color: #0d111b;
             }
@@ -1736,7 +1807,7 @@ class MangaOCRApp(QMainWindow):
                 border: 1px solid #1e3a5f;
             }
 
-            /* â”€â”€ Stacked content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Stacked content area ───────────────────────────────────────── */
             #rp-stack {
                 background-color: #0b0e17;
             }
@@ -1749,7 +1820,7 @@ class MangaOCRApp(QMainWindow):
                 border: none;
             }
 
-            /* â”€â”€ Group boxes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Group boxes ────────────────────────────────────────────────── */
             #rp-stack QGroupBox {
                 background: rgba(255,255,255,0.015);
                 border: 1px solid #1e293b;
@@ -1767,7 +1838,7 @@ class MangaOCRApp(QMainWindow):
                 letter-spacing: 0.3px;
             }
 
-            /* â”€â”€ Section label titles (used instead of QGroupBox in new tabs) */
+            /* ── Section label titles (used instead of QGroupBox in new tabs) */
             QLabel#rp-section-title {
                 color: #38bdf8;
                 font-size: 9.5pt;
@@ -1776,7 +1847,7 @@ class MangaOCRApp(QMainWindow):
                 background: transparent;
             }
 
-            /* â”€â”€ Input controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Input controls ─────────────────────────────────────────────── */
             #rp-stack QComboBox,
             #rp-stack QLineEdit,
             #rp-stack QSpinBox,
@@ -1803,7 +1874,7 @@ class MangaOCRApp(QMainWindow):
                 height: 10px;
             }
 
-            /* â”€â”€ Checkboxes & radios â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Checkboxes & radios ─────────────────────────────────────────── */
             #rp-stack QCheckBox,
             #rp-stack QRadioButton {
                 color: #94a3b8;
@@ -1830,7 +1901,7 @@ class MangaOCRApp(QMainWindow):
                 border-color: #38bdf8;
             }
 
-            /* â”€â”€ Standard button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Standard button ─────────────────────────────────────────────── */
             #rp-stack QPushButton {
                 background-color: #141c2e;
                 color: #94a3b8;
@@ -1855,7 +1926,7 @@ class MangaOCRApp(QMainWindow):
                 border-color: #131c2e;
             }
 
-            /* â”€â”€ Sliders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Sliders ─────────────────────────────────────────────────────── */
             #rp-stack QSlider::groove:horizontal {
                 border: none;
                 height: 4px;
@@ -1875,13 +1946,13 @@ class MangaOCRApp(QMainWindow):
                 border-radius: 2px;
             }
 
-            /* â”€â”€ Bottom bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Bottom bar ──────────────────────────────────────────────────── */
             #rp-bottom-bar {
                 background-color: #0d111b;
                 border-top: 1px solid #1a2235;
             }
 
-            /* â”€â”€ Bottom action buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Bottom action buttons ───────────────────────────────────────── */
             QPushButton#rp-action-btn {
                 background-color: #141c2e;
                 color: #94a3b8;
@@ -1947,7 +2018,7 @@ class MangaOCRApp(QMainWindow):
                 color: #fecaca;
             }
 
-            /* â”€â”€ Metrics grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Metrics grid ────────────────────────────────────────────────── */
             #rp-metrics {
                 background: rgba(255,255,255,0.02);
                 border: 1px solid #1a2235;
@@ -1974,7 +2045,7 @@ class MangaOCRApp(QMainWindow):
                 padding: 0;
             }
 
-            /* â”€â”€ Token row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Token row ───────────────────────────────────────────────────── */
             QLabel#rp-tiny-label {
                 color: #374151;
                 font-size: 8pt;
@@ -1982,7 +2053,7 @@ class MangaOCRApp(QMainWindow):
                 padding: 0;
             }
 
-            /* â”€â”€ Countdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+            /* ── Countdown ───────────────────────────────────────────────────── */
             QLabel#rp-countdown {
                 color: #fbbf24;
                 font-size: 9pt;
@@ -2149,7 +2220,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(14)
 
-        # â”€â”€ OCR & Language â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── OCR & Language ──────────────────────────────────────────────────
         ocr_group = QGroupBox("OCR & Language")
         ocr_form = QFormLayout(ocr_group)
         ocr_form.setContentsMargins(12, 16, 12, 12)
@@ -2200,7 +2271,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(ocr_group)
 
-        # â”€â”€ Per-Language Orientation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Per-Language Orientation ─────────────────────────────────────────
         lang_ori_group = QGroupBox("Per-Language Orientation")
         lang_ori_form = QFormLayout(lang_ori_group)
         lang_ori_form.setContentsMargins(12, 16, 12, 12)
@@ -2222,7 +2293,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(lang_ori_group)
 
-        # â”€â”€ Detection Source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Detection Source ─────────────────────────────────────────────────
         detection_group = QGroupBox("OCR Detection Source")
         det_layout = QVBoxLayout(detection_group)
         det_layout.setContentsMargins(12, 16, 12, 12)
@@ -2619,7 +2690,7 @@ class MangaOCRApp(QMainWindow):
             layout.addWidget(label, 1)
             
             # 4. Reorder Buttons
-            up_btn = QPushButton("â–²")
+            up_btn = QPushButton("▲")
             up_btn.setFixedSize(20, 20)
             up_btn.setStyleSheet(
                 self._small_layer_button_qss()
@@ -2628,7 +2699,7 @@ class MangaOCRApp(QMainWindow):
             up_btn.clicked.connect(partial(self._move_layer_up, area))
             layout.addWidget(up_btn)
             
-            down_btn = QPushButton("â–¼")
+            down_btn = QPushButton("▼")
             down_btn.setFixedSize(20, 20)
             down_btn.setStyleSheet(
                 self._small_layer_button_qss()
@@ -2923,7 +2994,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(14)
 
-        # â”€â”€ Defaults card â”€â”€
+        # ── Defaults card ──
         defaults_group = QGroupBox("Defaults")
         defaults_layout = QVBoxLayout(defaults_group)
         defaults_layout.setContentsMargins(12, 14, 12, 12)
@@ -2947,7 +3018,7 @@ class MangaOCRApp(QMainWindow):
         defaults_layout.addLayout(actions_layout)
         layout.addWidget(defaults_group)
 
-        # â”€â”€ Typography card â”€â”€
+        # ── Typography card ──
         font_group = QGroupBox("Typography")
         font_layout = QGridLayout(font_group)
         font_layout.setContentsMargins(12, 14, 12, 12)
@@ -3012,7 +3083,7 @@ class MangaOCRApp(QMainWindow):
         
         layout.addWidget(font_group)
 
-        # â”€â”€ Appearance card â”€â”€
+        # ── Appearance card ──
         appearance_group = QGroupBox("Appearance")
         appearance_layout = QGridLayout(appearance_group)
         appearance_layout.setContentsMargins(12, 14, 12, 12)
@@ -3081,7 +3152,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(appearance_group)
 
-        # â”€â”€ Gradient card â”€â”€
+        # ── Gradient card ──
         gradient_group = QGroupBox("Gradient Coloring")
         gradient_group.setCheckable(True)
         self.gradient_group = gradient_group
@@ -3096,7 +3167,7 @@ class MangaOCRApp(QMainWindow):
         self.grad_angle_spin = QDoubleSpinBox()
         self.grad_angle_spin.setRange(0.0, 360.0)
         self.grad_angle_spin.setSingleStep(15.0)
-        self.grad_angle_spin.setSuffix(" Â°")
+        self.grad_angle_spin.setSuffix(" °")
         self.grad_angle_spin.setMaximumWidth(100)
         self.grad_angle_spin.valueChanged.connect(self._on_typeset_gradient_changed)
         angle_row.addWidget(self.grad_angle_spin)
@@ -3121,7 +3192,7 @@ class MangaOCRApp(QMainWindow):
         
         layout.addWidget(gradient_group)
 
-        # â”€â”€ Spacing & Size card â”€â”€
+        # ── Spacing & Size card ──
         spacing_group = QGroupBox("Spacing & Size")
         spacing_layout = QGridLayout(spacing_group)
         spacing_layout.setContentsMargins(12, 14, 12, 12)
@@ -3176,7 +3247,7 @@ class MangaOCRApp(QMainWindow):
         spacing_layout.addLayout(char_row, 2, 1)
         layout.addWidget(spacing_group)
 
-        # â”€â”€ Layout card â”€â”€
+        # ── Layout card ──
         layout_group = QGroupBox("Layout")
         layout_grid = QGridLayout(layout_group)
         layout_grid.setContentsMargins(12, 14, 12, 12)
@@ -3218,7 +3289,7 @@ class MangaOCRApp(QMainWindow):
         layout_grid.addLayout(orientation_row, 1, 1)
         layout.addWidget(layout_group)
 
-        # â”€â”€ Warp & Curve card â”€â”€
+        # ── Warp & Curve card ──
         warp_group = QGroupBox("Text Warp & Curve")
         warp_layout = QGridLayout(warp_group)
         warp_layout.setContentsMargins(12, 14, 12, 12)
@@ -3265,7 +3336,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(warp_group)
 
-        # â”€â”€ Preview card â”€â”€
+        # ── Preview card ──
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_layout.setContentsMargins(12, 10, 12, 12)
@@ -3278,7 +3349,7 @@ class MangaOCRApp(QMainWindow):
         preview_layout.addWidget(self.typeset_preview_label)
         layout.addWidget(preview_group)
 
-        # â”€â”€ Recent Translations card â”€â”€
+        # ── Recent Translations card ──
         recent_group = QGroupBox("Recent Translations")
         recent_layout = QVBoxLayout(recent_group)
         recent_layout.setContentsMargins(12, 10, 12, 12)
@@ -4738,7 +4809,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(14)
 
-        # â”€â”€ AI Model & Translation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── AI Model & Translation ────────────────────────────────────────────
         ai_group = QGroupBox("AI Models & Translation")
         ai_form = QFormLayout(ai_group)
         ai_form.setContentsMargins(12, 16, 12, 12)
@@ -4759,7 +4830,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(ai_group)
 
-        # â”€â”€ Custom Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Custom Styles ─────────────────────────────────────────────────────
         custom_style_group = QGroupBox("Custom Styles")
         cs_layout = QVBoxLayout(custom_style_group)
         cs_layout.setContentsMargins(12, 14, 12, 12)
@@ -4779,13 +4850,13 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(custom_style_group)
 
-        # â”€â”€ Processing Modes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Processing Modes ─────────────────────────────────────────────────
         mode_group = QGroupBox("Processing Modes")
         mode_v = QVBoxLayout(mode_group)
         mode_v.setContentsMargins(12, 14, 12, 12)
         mode_v.setSpacing(8)
 
-        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only Â· More API)")
+        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only · More API)")
         self.enhanced_pipeline_checkbox.stateChanged.connect(self.on_pipeline_mode_changed)
         mode_v.addWidget(self.enhanced_pipeline_checkbox)
 
@@ -4806,7 +4877,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(mode_group)
 
-        # â”€â”€ Hardware & Performance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Hardware & Performance ────────────────────────────────────────────
         hardware_group = QGroupBox("Hardware & Performance")
         hw_form = QFormLayout(hardware_group)
         hw_form.setContentsMargins(12, 16, 12, 12)
@@ -4824,7 +4895,7 @@ class MangaOCRApp(QMainWindow):
         self.use_gpu_checkbox.stateChanged.connect(self.update_gpu_status_label)
         gpu_row.addWidget(self.use_gpu_checkbox)
         gpu_row.addStretch()
-        self.gpu_status_label = QLabel("â— GPU OK" if self.is_gpu_available else "â— No GPU")
+        self.gpu_status_label = QLabel("● GPU OK" if self.is_gpu_available else "● No GPU")
         self.gpu_status_label.setObjectName("gpu-status")
         self.gpu_status_label.setStyleSheet(
             "color: #4ade80; font-weight:700; font-size:9pt;" if self.is_gpu_available
@@ -4911,6 +4982,12 @@ class MangaOCRApp(QMainWindow):
             self._refresh_workspace_surface_theme()
         except Exception:
             pass
+        settings_workspace = getattr(self, 'settings_workspace_widget', None)
+        if settings_workspace is not None and hasattr(settings_workspace, 'refresh_theme'):
+            try:
+                settings_workspace.refresh_theme()
+            except Exception:
+                pass
         chat_widget = getattr(self, '_chat_widget', None)
         if chat_widget is not None and hasattr(chat_widget, 'refresh_theme'):
             try:
@@ -5603,6 +5680,84 @@ class MangaOCRApp(QMainWindow):
                 'id': model_id,
                 'name': name
             }
+        self._apply_ai_model_overrides_from_settings(provider_filter='OpenRouter')
+
+    def _apply_ai_model_overrides_from_settings(self, provider_filter=None):
+        overrides = SETTINGS.get('ai_model_overrides', {})
+        if not isinstance(overrides, dict):
+            return
+        for provider, models in overrides.items():
+            if provider_filter and provider != provider_filter:
+                continue
+            if not isinstance(models, dict):
+                continue
+            provider_dict = self.AI_PROVIDERS.setdefault(provider, {})
+            for model_id, override in models.items():
+                if not isinstance(override, dict):
+                    continue
+                target = provider_dict.setdefault(model_id, {'display': model_id})
+                pricing = override.get('pricing')
+                if isinstance(pricing, dict):
+                    target.setdefault('pricing', {})
+                    for field in ('input', 'output'):
+                        if field in pricing:
+                            try:
+                                target['pricing'][field] = float(pricing[field])
+                            except (TypeError, ValueError):
+                                pass
+                limits = override.get('limits')
+                if isinstance(limits, dict):
+                    target.setdefault('limits', {})
+                    for field in ('rpm', 'rpd'):
+                        if field in limits:
+                            try:
+                                value = int(limits[field])
+                            except (TypeError, ValueError):
+                                continue
+                            if value > 0:
+                                target['limits'][field] = value
+
+                if provider == 'OpenRouter' and hasattr(self, 'openrouter_pricing_db') and model_id in self.openrouter_pricing_db:
+                    db_target = self.openrouter_pricing_db[model_id]
+                    if isinstance(pricing, dict):
+                        db_target.setdefault('pricing', {}).update(target.get('pricing', {}))
+                    if isinstance(limits, dict):
+                        db_target.setdefault('limits', {}).update(target.get('limits', {}))
+
+    def _persist_ai_model_overrides_to_settings(self):
+        overrides = {}
+        for provider, models in getattr(self, 'AI_PROVIDERS', {}).items():
+            if not isinstance(models, dict):
+                continue
+            provider_payload = {}
+            for model_id, info in models.items():
+                if not isinstance(info, dict):
+                    continue
+                payload = {}
+                pricing = info.get('pricing')
+                if isinstance(pricing, dict):
+                    payload['pricing'] = {
+                        'input': float(pricing.get('input', 0.0) or 0.0),
+                        'output': float(pricing.get('output', 0.0) or 0.0),
+                    }
+                limits = info.get('limits')
+                if isinstance(limits, dict):
+                    limit_payload = {}
+                    for field in ('rpm', 'rpd'):
+                        try:
+                            value = int(limits.get(field, 0) or 0)
+                        except (TypeError, ValueError):
+                            value = 0
+                        if value > 0:
+                            limit_payload[field] = value
+                    if limit_payload:
+                        payload['limits'] = limit_payload
+                if payload:
+                    provider_payload[model_id] = payload
+            if provider_payload:
+                overrides[provider] = provider_payload
+        SETTINGS['ai_model_overrides'] = overrides
+        save_settings(SETTINGS)
 
     def fetch_openrouter_pricing_async(self):
         """Mengambil data harga model OpenRouter secara dinamis dari API models resmi OpenRouter."""
@@ -5652,6 +5807,7 @@ class MangaOCRApp(QMainWindow):
                     }
                     # Pemicu reload list model agar harga langsung ter-apply
                     self._load_openrouter_models()
+                    self._apply_ai_model_overrides_from_settings()
             except Exception as e:
                 print(f"Gagal memuat harga OpenRouter dari API: {e}")
                 
@@ -5808,7 +5964,7 @@ class MangaOCRApp(QMainWindow):
             if success:
                 # manga_ocr was installed successfully by pip.
                 # However, PyTorch DLL (c10.dll) cannot be loaded from a session that
-                # already failed to import it at startup â€” a restart is required.
+                # already failed to import it at startup — a restart is required.
                 self.populate_ocr_languages()
                 self.show_banner(
                     "manga-ocr-install-complete",
@@ -5987,6 +6143,7 @@ class MangaOCRApp(QMainWindow):
 
     def increment_translated_count(self):
         self.translated_count += 1
+        self._touch_profile_activity(translated=1)
         if hasattr(self, "translated_label"):
             self.translated_label.setText(str(self.translated_count))
 
@@ -6031,6 +6188,12 @@ class MangaOCRApp(QMainWindow):
                 self.total_output_tokens = 0
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
+            self._touch_profile_activity(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+                requests=1,
+            )
 
             # ?? Update status detail
             self.provider_label.setText(str(provider))
@@ -6194,7 +6357,7 @@ class MangaOCRApp(QMainWindow):
         # Injeksi Glossary jika ada
         glossary = SETTINGS.get('glossary', {})
         if isinstance(glossary, dict) and glossary:
-            glossary_lines = [f'  - "{src}" â†’ "{tgt}"' for src, tgt in glossary.items() if src]
+            glossary_lines = [f'  - "{src}" → "{tgt}"' for src, tgt in glossary.items() if src]
             if glossary_lines:
                 glossary_str = '\n'.join(glossary_lines)
                 enhancements += (
@@ -6230,7 +6393,7 @@ class MangaOCRApp(QMainWindow):
                     processed_lines = []
                     for line in result.splitlines():
                         stripped = line.rstrip()
-                        if stripped.endswith('ã€‚'):
+                        if stripped.endswith('。'):
                             stripped = stripped[:-1].rstrip()
                         elif stripped.endswith('.') and not stripped.endswith('..'):
                             stripped = stripped[:-1].rstrip()
@@ -6501,9 +6664,9 @@ class MangaOCRApp(QMainWindow):
                 f"You are an expert manga translator. Translate the user's text into clear, natural {target_lang} for narration or informational text. "
                 f"Keep it smooth, neutral, and suitable for manga narration boxes.\n"
                 f"IMPORTANT RULES:\n"
-                f"- If a Japanese text includes a kanji followed by parentheses like æ¼¢å­—(ã‹ã‚“ã˜) or word(note), treat the text inside parentheses as a reading or small note â€” do NOT translate it literally.\n"
+                f"- If a Japanese text includes a kanji followed by parentheses like 漢字(かんじ) or word(note), treat the text inside parentheses as a reading or small note — do NOT translate it literally.\n"
                 f"- Translate only based on the main kanji meaning, not the content in parentheses.\n"
-                f"- Example: å‹‡è€…(ã‚†ã†ã—ã‚ƒ) â†’ translate as 'Hero', not 'Yuusha'.\n"
+                f"- Example: 勇者(ゆうしゃ) → translate as 'Hero', not 'Yuusha'.\n"
                 f"- Preserve parentheses if they indicate pronunciation notes or clarifications that exist in the original dialogue.\n"
                 f"- Avoid slang or overly casual tone.\n"
                 f"- Only output the final translation in {target_lang}.\n"
@@ -6515,11 +6678,11 @@ class MangaOCRApp(QMainWindow):
                 f"You are an expert manga translator. Translate the user's text into natural, fluent {target_lang} suitable for published manga dialogue. "
                 f"Keep the meaning, tone, and nuances from the original text.\n"
                 f"IMPORTANT RULES:\n"
-                f"- If the Japanese text contains kanji with parentheses â€” e.g. æ¼¢å­—(ã‹ã‚“ã˜) or name(note) â€” treat the content inside parentheses as furigana or reading aid, not as part of the dialogue.\n"
+                f"- If the Japanese text contains kanji with parentheses — e.g. 漢字(かんじ) or name(note) — treat the content inside parentheses as furigana or reading aid, not as part of the dialogue.\n"
                 f"- Translate the main kanji normally, but ignore or omit the reading inside parentheses in the final translation.\n"
-                f"- Example: ç¥žæ§˜(ã‹ã¿ã•ã¾) â†’ 'God', not 'Kamisama'.\n"
+                f"- Example: 神様(かみさま) → 'God', not 'Kamisama'.\n"
                 f"- If parentheses contain explanatory notes (not reading), keep them translated in parentheses in {target_lang}.\n"
-                f"- Use natural and neutral tone â€” not overly formal, but avoid slang or street language like 'lo', 'gue', or 'nih'.\n"
+                f"- Use natural and neutral tone — not overly formal, but avoid slang or street language like 'lo', 'gue', or 'nih'.\n"
                 f"- Output ONLY the final translation in {target_lang}.\n"
                 f"- No quotes, markdown, or explanations.\n"
                 f"- Preserve line breaks.\n"
@@ -6940,7 +7103,7 @@ class MangaOCRApp(QMainWindow):
             processed_lines = []
             for line in text.splitlines():
                 stripped = line.rstrip()
-                if stripped.endswith('ã€‚'):
+                if stripped.endswith('。'):
                     stripped = stripped[:-1].rstrip()
                 elif stripped.endswith('.') and not stripped.endswith('..'):
                     stripped = stripped[:-1].rstrip()
@@ -7089,7 +7252,7 @@ class MangaOCRApp(QMainWindow):
         if image_key == self.get_current_data_key():
             # Push snapshot SEBELUM perubahan teks terjemahan
             if translated_text is not None:
-                snippet = translated_text[:20] + ('â€¦' if len(translated_text) > 20 else '')
+                snippet = translated_text[:20] + ('…' if len(translated_text) > 20 else '')
                 self._push_undo_snapshot(f"Translate: {snippet}")
             self.redo_stack.clear()
             self.redraw_all_typeset_areas()
@@ -7647,6 +7810,162 @@ class MangaOCRApp(QMainWindow):
 
         return "[No translation performed: use AI providers]"
 
+    def _ensure_profile_usage_state(self):
+        if not isinstance(getattr(self, 'usage_data', None), dict):
+            self.usage_data = {}
+        profile = self.usage_data.setdefault('profile_usage', {})
+        if not isinstance(profile, dict):
+            profile = {}
+            self.usage_data['profile_usage'] = profile
+
+        today = str(date.today())
+        profile.setdefault('first_seen', today)
+        profile.setdefault('last_active_date', '')
+        profile.setdefault('current_streak', 0)
+        profile.setdefault('longest_streak', 0)
+        profile.setdefault('lifetime_input_tokens', 0)
+        profile.setdefault('lifetime_output_tokens', 0)
+        profile.setdefault('lifetime_cost_usd', float(self.usage_data.get('total_cost', 0.0) or 0.0))
+        profile.setdefault('translated_count', 0)
+        profile.setdefault('longest_session_seconds', 0)
+        profile.setdefault('activity_by_date', {})
+        if not isinstance(profile.get('activity_by_date'), dict):
+            profile['activity_by_date'] = {}
+        return profile
+
+    def _update_profile_streak(self, profile, today_obj=None):
+        today_obj = today_obj or date.today()
+        today = today_obj.isoformat()
+        last_active = str(profile.get('last_active_date') or '')
+        if last_active == today:
+            if int(profile.get('current_streak', 0) or 0) <= 0:
+                profile['current_streak'] = 1
+            profile['longest_streak'] = max(
+                int(profile.get('longest_streak', 0) or 0),
+                int(profile.get('current_streak', 0) or 0),
+            )
+            return
+
+        yesterday = (today_obj - timedelta(days=1)).isoformat()
+        if last_active == yesterday:
+            profile['current_streak'] = int(profile.get('current_streak', 0) or 0) + 1
+        else:
+            profile['current_streak'] = 1
+        profile['last_active_date'] = today
+        profile['longest_streak'] = max(
+            int(profile.get('longest_streak', 0) or 0),
+            int(profile.get('current_streak', 0) or 0),
+        )
+
+    def _touch_profile_activity(self, input_tokens=0, output_tokens=0, cost_usd=0.0, translated=0, requests=0):
+        try:
+            profile = self._ensure_profile_usage_state()
+            today_obj = date.today()
+            today = today_obj.isoformat()
+            self._update_profile_streak(profile, today_obj=today_obj)
+
+            input_tokens = int(input_tokens or 0)
+            output_tokens = int(output_tokens or 0)
+            translated = int(translated or 0)
+            requests = int(requests or 0)
+            cost_usd = float(cost_usd or 0.0)
+
+            profile['lifetime_input_tokens'] = int(profile.get('lifetime_input_tokens', 0) or 0) + input_tokens
+            profile['lifetime_output_tokens'] = int(profile.get('lifetime_output_tokens', 0) or 0) + output_tokens
+            profile['lifetime_cost_usd'] = float(profile.get('lifetime_cost_usd', 0.0) or 0.0) + cost_usd
+            profile['translated_count'] = int(profile.get('translated_count', 0) or 0) + translated
+
+            activity = profile.setdefault('activity_by_date', {})
+            day = activity.setdefault(today, {})
+            day['input_tokens'] = int(day.get('input_tokens', 0) or 0) + input_tokens
+            day['output_tokens'] = int(day.get('output_tokens', 0) or 0) + output_tokens
+            day['cost_usd'] = float(day.get('cost_usd', 0.0) or 0.0) + cost_usd
+            day['translated_count'] = int(day.get('translated_count', 0) or 0) + translated
+            day['requests'] = int(day.get('requests', 0) or 0) + requests
+        except Exception as exc:
+            print(f"Could not update profile usage data: {exc}")
+
+    def _record_profile_session_snapshot(self):
+        try:
+            profile = self._ensure_profile_usage_state()
+            self._update_profile_streak(profile)
+            started_at = float(getattr(self, 'app_session_started_at', time.time()) or time.time())
+            elapsed = max(0, int(time.time() - started_at))
+            profile['longest_session_seconds'] = max(
+                int(profile.get('longest_session_seconds', 0) or 0),
+                elapsed,
+            )
+            today = str(date.today())
+            activity = profile.setdefault('activity_by_date', {})
+            day = activity.setdefault(today, {})
+            day['active_seconds'] = max(int(day.get('active_seconds', 0) or 0), elapsed)
+        except Exception as exc:
+            print(f"Could not record profile session data: {exc}")
+
+    def get_profile_usage_snapshot(self):
+        self._record_profile_session_snapshot()
+        profile = copy.deepcopy(self._ensure_profile_usage_state())
+        provider_usage = self.usage_data.get('provider_usage', {}) if isinstance(self.usage_data, dict) else {}
+
+        top_provider = "None"
+        top_model = "None"
+        top_count = -1
+        provider_counts = {}
+        daily_requests = 0
+        rpm_snapshot = 0
+        for provider, models in provider_usage.items():
+            provider_total = 0
+            if not isinstance(models, dict):
+                continue
+            for model_name, model_data in models.items():
+                if not isinstance(model_data, dict):
+                    continue
+                count = int(model_data.get('daily_count', 0) or 0)
+                provider_total += count
+                daily_requests += count
+                rpm_snapshot += int(model_data.get('minute_count', 0) or 0)
+                if count > top_count:
+                    top_count = count
+                    top_model = str(model_name)
+            provider_counts[str(provider)] = provider_total
+
+        if top_count <= 0:
+            top_model = "None"
+        if provider_counts:
+            top_provider = max(provider_counts.items(), key=lambda item: item[1])[0]
+            if provider_counts[top_provider] <= 0:
+                top_provider = "None"
+
+        activity = profile.get('activity_by_date', {}) or {}
+        most_active_day = "None"
+        most_active_tokens = -1
+        for day_key, data in activity.items():
+            if not isinstance(data, dict):
+                continue
+            tokens = int(data.get('input_tokens', 0) or 0) + int(data.get('output_tokens', 0) or 0)
+            if tokens > most_active_tokens:
+                most_active_tokens = tokens
+                most_active_day = str(day_key)
+        if most_active_tokens <= 0:
+            most_active_day = "None"
+
+        profile['display_name'] = os.environ.get('USERNAME') or os.environ.get('USER') or "MangaTranslate User"
+        profile['lifetime_cost_usd'] = max(
+            float(profile.get('lifetime_cost_usd', 0.0) or 0.0),
+            float(getattr(self, 'total_cost', 0.0) or 0.0),
+        )
+        profile['translated_count'] = max(
+            int(profile.get('translated_count', 0) or 0),
+            int(getattr(self, 'translated_count', 0) or 0),
+        )
+        profile['project_pages'] = len([f for f in getattr(self, 'image_files', []) if "_typeset" not in str(f).lower()])
+        profile['top_provider'] = top_provider
+        profile['top_model'] = top_model
+        profile['daily_requests'] = daily_requests
+        profile['rpm_snapshot'] = rpm_snapshot
+        profile['most_active_day'] = most_active_day
+        return profile
+
     def load_usage_data(self):
         self.usage_mutex.lock()
         try:
@@ -7685,6 +8004,7 @@ class MangaOCRApp(QMainWindow):
                         self.usage_data['provider_usage'][provider][model_name]['minute_count'] = 0
 
             self.total_cost = self.usage_data.get('total_cost', 0.0)
+            self._touch_profile_activity()
             self.update_cost_display()
             self.save_usage_data()
         except Exception as e:
@@ -7694,6 +8014,7 @@ class MangaOCRApp(QMainWindow):
                 self.usage_data['provider_usage'][provider] = {}
                 for model_name in models:
                     self.usage_data['provider_usage'][provider][model_name] = {'daily_count': 0, 'minute_count': 0, 'current_minute': ''}
+            self._touch_profile_activity()
         finally:
             self.usage_mutex.unlock()
 
@@ -7701,6 +8022,7 @@ class MangaOCRApp(QMainWindow):
         self.usage_mutex.lock()
         tmp_path = self.usage_file_path + '.tmp'
         try:
+            self._record_profile_session_snapshot()
             self.usage_data['total_cost'] = self.total_cost
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.usage_data, f, ensure_ascii=False, indent=2)
@@ -8752,7 +9074,7 @@ class MangaOCRApp(QMainWindow):
     def _on_recent_translation_clicked(self, item):
         text = item.data(Qt.UserRole)
         if text and self.selected_typeset_area:
-            snippet = text[:20] + ('â€¦' if len(text) > 20 else '')
+            snippet = text[:20] + ('…' if len(text) > 20 else '')
             self._push_undo_snapshot(f"Apply Recent: {snippet}")
             self.selected_typeset_area.text = text
             self.redraw_all_typeset_areas()
@@ -9404,7 +9726,7 @@ class MangaOCRApp(QMainWindow):
 
         current_key = self.get_current_data_key()
         # Push snapshot SEBELUM tambah area (agar bisa di-undo)
-        snippet = manual_text[:20] + ('â€¦' if len(manual_text) > 20 else '') if manual_text else ''
+        snippet = manual_text[:20] + ('…' if len(manual_text) > 20 else '') if manual_text else ''
         self._push_undo_snapshot(f"Add Manual: {snippet}" if snippet else "Add Manual Area")
         self.typeset_areas.append(manual_area)
         self.set_selected_area(manual_area, notify=True)
@@ -11244,7 +11566,7 @@ class MangaOCRApp(QMainWindow):
         if area_to_delete in self.typeset_areas:
             # Push snapshot SEBELUM hapus agar bisa di-undo
             area_text = getattr(area_to_delete, 'text', '') or ''
-            snippet = area_text[:20] + ('â€¦' if len(area_text) > 20 else '')
+            snippet = area_text[:20] + ('…' if len(area_text) > 20 else '')
             self._push_undo_snapshot(f"Delete: {snippet}" if snippet else "Delete Area")
 
             # Sync to Deleted History Scene
@@ -11308,7 +11630,7 @@ class MangaOCRApp(QMainWindow):
         self.undo_button.setEnabled(can_undo)
         self.redo_button.setEnabled(can_redo)
 
-    # â”€â”€ Feature #1: Snapshot History Methods â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Feature #1: Snapshot History Methods ────────────────────────────────────
 
     def _push_undo_snapshot(self, label="Action"):
         """
@@ -11392,13 +11714,13 @@ class MangaOCRApp(QMainWindow):
             is_redo    = (i > self._undo_history_idx)
 
             if is_current:
-                prefix = "â–¶"
+                prefix = "▶"
                 color  = theme.COLORS['accent']   # state aktif
             elif is_redo:
-                prefix = "â—"
+                prefix = "◁"
                 color  = theme.COLORS['muted']   # state yang bisa di-redo
             else:
-                prefix = "Â·"
+                prefix = "·"
                 color  = theme.COLORS['muted']   # masa lalu
 
             item = QListWidgetItem(f"  {prefix}  {i + 1}. {entry['label']}")
@@ -11414,7 +11736,7 @@ class MangaOCRApp(QMainWindow):
         lst.blockSignals(False)
 
     def _on_timeline_item_clicked(self, item):
-        """Handler saat user klik item di undo timeline â€” jump ke snapshot tersebut."""
+        """Handler saat user klik item di undo timeline — jump ke snapshot tersebut."""
         idx = item.data(Qt.UserRole)
         if idx is None:
             return
@@ -11597,7 +11919,7 @@ class MangaOCRApp(QMainWindow):
                     # Only populate text from history when the area has no text of
                     # its own (e.g. area created without going through the normal
                     # translation pipeline).  When typeset_data already loaded a
-                    # non-empty text into the area, trust that value â€” it reflects
+                    # non-empty text into the area, trust that value — it reflects
                     # any manual edits the user made after the AI translation.
                     if not (area.text or '').strip():
                         area.update_plain_text(record['translated_text'])
@@ -12086,12 +12408,12 @@ class MangaOCRApp(QMainWindow):
             return
         self._load_project_from_path(file_path)
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ─────────────────────────────────────────────────────────────────────────
     # Welcome / Start Screen  (Fitur #14 & #19)
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ─────────────────────────────────────────────────────────────────────────
 
     def show_welcome_screen(self):
-        """Tampilkan welcome screen â€” sembunyikan nav bar, folder panel, dan tools panel."""
+        """Tampilkan welcome screen — sembunyikan nav bar, folder panel, dan tools panel."""
         stack = getattr(self, 'center_stack', None)
         if not stack:
             return
@@ -12104,7 +12426,7 @@ class MangaOCRApp(QMainWindow):
         if nav:
             nav.setVisible(False)
 
-        # Sembunyikan left panel (folder) â€” simpan state sebelumnya
+        # Sembunyikan left panel (folder) — simpan state sebelumnya
         left = getattr(self, 'left_panel_widget', None)
         if left:
             self._welcome_left_was_visible = left.isVisible()
@@ -12117,7 +12439,7 @@ class MangaOCRApp(QMainWindow):
             right.setVisible(False)
 
     def hide_welcome_screen(self):
-        """Sembunyikan welcome screen â€” tampilkan canvas dan kembalikan panel."""
+        """Sembunyikan welcome screen — tampilkan canvas dan kembalikan panel."""
         stack = getattr(self, 'center_stack', None)
         if not stack:
             return
@@ -12186,8 +12508,8 @@ class MangaOCRApp(QMainWindow):
         vbox.setContentsMargins(60, 50, 60, 50)
         vbox.setSpacing(0)
 
-        # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        header_lbl = QLabel("ðŸ“– MangaTranslate")
+        # ── Header ────────────────────────────────────────────────────────────
+        header_lbl = QLabel("📖 MangaTranslate")
         header_lbl.setAlignment(Qt.AlignCenter)
         header_lbl.setStyleSheet(f"""
             color: {theme.COLORS["text"]};
@@ -12210,14 +12532,14 @@ class MangaOCRApp(QMainWindow):
         """)
         vbox.addWidget(sub_lbl)
 
-        # â”€â”€ Separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Separator ─────────────────────────────────────────────────────────
         def make_sep():
             sep = QFrame()
             sep.setFrameShape(QFrame.HLine)
             sep.setStyleSheet(f"color: {theme.COLORS['border']}; margin: 0 0 24px 0;")
             return sep
 
-        # â”€â”€ Quick Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Quick Actions ──────────────────────────────────────────────────────
         qa_title = QLabel("Quick Start")
         qa_title.setStyleSheet(f"""
             color: {theme.COLORS["muted"]};
@@ -12265,12 +12587,12 @@ class MangaOCRApp(QMainWindow):
             return btn
 
         btn_folder = make_action_btn(
-            "ðŸ“", "Open Folder",
+            "📁", "Open Folder",
             self.load_folder,
             theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )
         btn_project = make_action_btn(
-            "ðŸ—‚ï¸", "Load Project",
+            "🗂️", "Load Project",
             self.load_project,
             theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )
@@ -12281,7 +12603,7 @@ class MangaOCRApp(QMainWindow):
         vbox.addSpacing(32)
         vbox.addWidget(make_sep())
 
-        # â”€â”€ Recent Projects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Recent Projects ────────────────────────────────────────────────────
         rp_header = QHBoxLayout()
         rp_title = QLabel("Recent Projects")
         rp_title.setStyleSheet(f"""
@@ -12313,7 +12635,7 @@ class MangaOCRApp(QMainWindow):
         rp_header.addWidget(clear_recent_btn)
         vbox.addLayout(rp_header)
 
-        # Container untuk grid kartu recent â€” di-refresh oleh _refresh_welcome_screen()
+        # Container untuk grid kartu recent — di-refresh oleh _refresh_welcome_screen()
         self._welcome_recent_container = QWidget()
         self._welcome_recent_container.setStyleSheet("background: transparent;")
         self._welcome_recent_grid = QGridLayout(self._welcome_recent_container)
@@ -12338,7 +12660,7 @@ class MangaOCRApp(QMainWindow):
         vbox.addSpacing(32)
         vbox.addWidget(make_sep())
 
-        # â”€â”€ Keyboard Shortcuts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Keyboard Shortcuts ────────────────────────────────────────────────
         ks_title = QLabel("Keyboard Shortcuts")
         ks_title.setStyleSheet(f"""
             color: {theme.COLORS["muted"]};
@@ -12356,7 +12678,7 @@ class MangaOCRApp(QMainWindow):
             ("F2", NavText.FOCUS_MODE_SHORTCUT),
             ("F3", "Toggle Folder Panel"),
             ("F4", "Toggle Tools Panel"),
-            ("1â€“9", "Switch Selection Mode"),
+            ("1–9", "Switch Selection Mode"),
             ("Ctrl+S", "Save Project"),
             ("Ctrl+H", "Find & Replace"),
             ("Ctrl+C / Ctrl+V", "Copy / Paste Area"),
@@ -12463,7 +12785,7 @@ class MangaOCRApp(QMainWindow):
         h.setContentsMargins(12, 8, 8, 8)
         h.setSpacing(10)
 
-        icon_lbl = QLabel("ðŸ—‚ï¸" if exists else "âš ï¸")
+        icon_lbl = QLabel("🗂️" if exists else "⚠️")
         icon_lbl.setFixedWidth(28)
         icon_lbl.setAlignment(Qt.AlignCenter)
         icon_lbl.setStyleSheet("font-size: 18pt; background: transparent; border: none;")
@@ -12493,13 +12815,13 @@ class MangaOCRApp(QMainWindow):
         max_chars = 45
         dir_text = os.path.dirname(proj_path)
         if len(dir_text) > max_chars:
-            dir_text = "â€¦" + dir_text[-(max_chars - 1):]
+            dir_text = "…" + dir_text[-(max_chars - 1):]
         path_lbl.setText(dir_text)
 
         info_col.addWidget(name_lbl)
         info_col.addWidget(path_lbl)
 
-        remove_btn = QPushButton("âœ•")
+        remove_btn = QPushButton("✕")
         remove_btn.setFixedSize(20, 20)
         remove_btn.setCursor(Qt.PointingHandCursor)
         remove_btn.setToolTip("Remove from recent list")
@@ -12521,7 +12843,7 @@ class MangaOCRApp(QMainWindow):
         h.addLayout(info_col, 1)
         h.addWidget(remove_btn)
 
-        # Klik card (bukan tombol âœ•) â†’ buka project
+        # Klik card (bukan tombol ✕) → buka project
         # Gunakan mousePressEvent pada card
         def card_clicked(event, p=proj_path):
             from PyQt5.QtCore import Qt
@@ -12840,38 +13162,16 @@ class MangaOCRApp(QMainWindow):
         dlg.exec_()
 
     def show_session_analytics_dialog(self):
-        """Tampilkan dialog Session Analytics & Export (Feature #16) â€” legacy."""
+        """Tampilkan dialog Session Analytics & Export (Feature #16) — legacy."""
         self.show_unified_help_dialog(start_tab=2)
 
     def show_unified_help_dialog(self, start_tab: int = 0):
         """
-        Buka UnifiedHelpDialog â€” gabungan About, Project Stats,
+        Buka UnifiedHelpDialog — gabungan About, Project Stats,
         Pricing Editor, dan Session Analytics dalam satu dialog tabbed.
         """
-        from src.ui.unified_help_dialog import UnifiedHelpDialog
-
-        total_input  = getattr(self, 'total_input_tokens',  0)
-        total_output = getattr(self, 'total_output_tokens', 0)
-        count        = getattr(self, 'translated_count', 0)
-
-        dlg = UnifiedHelpDialog(
-            parent               = self,
-            app_version          = APP_VERSION,
-            ai_providers         = self.AI_PROVIDERS,
-            openrouter_pricing_db= getattr(self, 'openrouter_pricing_db', {}),
-            usage_data           = self.usage_data,
-            total_cost           = self.total_cost,
-            usd_to_idr_rate      = self.usd_to_idr_rate,
-            total_input_tokens   = total_input,
-            total_output_tokens  = total_output,
-            translated_count     = count,
-            project_dir          = self.project_dir,
-            image_files          = self.image_files,
-            all_typeset_data     = self.all_typeset_data,
-            on_pricing_saved     = self._on_unified_pricing_saved,
-        )
-        dlg.tabs.setCurrentIndex(start_tab)
-        dlg.exec_()
+        key = {0: 'help_overview', 1: 'pricing', 2: 'analytics'}.get(int(start_tab or 0), 'help_overview')
+        self.show_settings_workspace(key)
 
     def _on_unified_pricing_saved(self, updated_providers: dict, updated_openrouter_db: dict):
         """
@@ -12885,6 +13185,8 @@ class MangaOCRApp(QMainWindow):
             for model_id, info in models.items():
                 if model_id in self.AI_PROVIDERS[provider]:
                     self.AI_PROVIDERS[provider][model_id]['pricing'] = info.get('pricing', {})
+                    if isinstance(info.get('limits'), dict):
+                        self.AI_PROVIDERS[provider][model_id]['limits'] = info.get('limits', {})
                 else:
                     self.AI_PROVIDERS[provider][model_id] = info
 
@@ -12894,10 +13196,17 @@ class MangaOCRApp(QMainWindow):
                 self.openrouter_pricing_db = {}
             if model_id in self.openrouter_pricing_db:
                 self.openrouter_pricing_db[model_id]['pricing'] = info.get('pricing', {})
+                if isinstance(info.get('limits'), dict):
+                    self.openrouter_pricing_db[model_id]['limits'] = info.get('limits', {})
             else:
                 self.openrouter_pricing_db[model_id] = info
 
-        self.show_toast("Pricing updated", "Harga model berhasil diperbarui dari Pricing Editor.", kind="success")
+        try:
+            self._persist_ai_model_overrides_to_settings()
+        except Exception as exc:
+            print(f"Could not persist model overrides: {exc}")
+
+        self.show_toast("Pricing updated", "Harga model dan limit RPM/RPD berhasil diperbarui.", kind="success")
 
     def _set_find_replace_busy(self, is_busy):
         ctx = getattr(self, '_find_replace_context', None)
@@ -13006,7 +13315,7 @@ class MangaOCRApp(QMainWindow):
             self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("ðŸ” Find & Replace")
+        dlg.setWindowTitle("🔍 Find & Replace")
         dlg.setModal(True)
         dlg.resize(380, 200)
         
@@ -13131,7 +13440,7 @@ class MangaOCRApp(QMainWindow):
         layout.addLayout(btn_lay)
 
         # Results Group (hidden initially)
-        results_group = QGroupBox("ðŸ” Search Results")
+        results_group = QGroupBox("🔍 Search Results")
         results_vbox = QVBoxLayout(results_group)
         results_table = QTableWidget(0, 2)
         results_table.setHorizontalHeaderLabels(["Page / File", "Text Content"])
@@ -14582,14 +14891,14 @@ class MangaOCRApp(QMainWindow):
             if advanced:
                 if letters == 0 and digits == 0 and len(cleaned) <= 3:
                     continue
-                if re.fullmatch(r'[!\?\-â€¢Â°??????]+', cleaned):
+                if re.fullmatch(r'[!\?\-•°??????]+', cleaned):
                     continue
                 repeated = re.search(r'(.)\1{2,}', cleaned)
                 if repeated and len(cleaned) <= 5:
                     if repeated.group(1) != '~':
                         continue
             unique_chars = set(cleaned)
-            if len(unique_chars) == 1 and cleaned[0] in "!?â€¦??????#@*/":
+            if len(unique_chars) == 1 and cleaned[0] in "!?…??????#@*/":
                 continue
             punctuation = sum(1 for ch in cleaned if not ch.isalnum() and not ch.isspace())
             if advanced and punctuation / max(1, len(cleaned)) > 0.6:
@@ -14956,13 +15265,13 @@ class MangaOCRApp(QMainWindow):
                 "- Do NOT explain or add any commentary.\n"
                 "- Do NOT output markdown or formatting symbols.\n"
                 "- Keep line breaks if they appear in the original image.\n"
-                "- Preserve punctuation (ã€‚, ã€, â€¦, !, ? etc.).\n"
+                "- Preserve punctuation (。, 、, …, !, ? etc.).\n"
                 "- When a small note or furigana is written next to a kanji, output it in parentheses after the kanji.\n"
-                "  Example: æ¼¢å­— + note â†’ æ¼¢å­—(note)\n"
-                "- If the note appears *before* the kanji (vertically aligned text), treat it the same way: æ¼¢å­—(note).\n"
+                "  Example: 漢字 + note → 漢字(note)\n"
+                "- If the note appears *before* the kanji (vertically aligned text), treat it the same way: 漢字(note).\n"
                 "- If the note is unrelated annotation or translation note, also wrap it in parentheses.\n"
                 "- Do NOT merge notes and kanji into a single block like [note][kanji].\n"
-                "- Do NOT drop ellipses (â€¦)\n"
+                "- Do NOT drop ellipses (…)\n"
                 "- Just return the plain text with correct kanji-note pairing."
             )
         elif lang == "English":
@@ -15012,6 +15321,44 @@ class MangaOCRApp(QMainWindow):
                 "- Preserve punctuation and line breaks.\n"
                 "- Return ONLY the plain text."
             )
+
+    def _ai_ocr_provider_label(self, provider_key):
+        normalized = str(provider_key or '').strip().lower()
+        if normalized == 'gemini':
+            return 'Gemini'
+        if normalized == 'openai':
+            return 'OpenAI'
+        if normalized == 'openrouter':
+            return 'OpenRouter'
+        return provider_key or 'AI OCR'
+
+    def _record_ai_ocr_cost_usage(self, data, provider_key, model_id, prompt_text, extracted_text, image_b64):
+        provider_label = self._ai_ocr_provider_label(provider_key)
+        usage = data.get('usage') if isinstance(data, dict) else {}
+        if not isinstance(usage, dict):
+            usage = {}
+
+        def _int_from(*keys):
+            for key in keys:
+                value = usage.get(key)
+                if value is None:
+                    continue
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        input_tokens = _int_from('prompt_tokens', 'input_tokens', 'prompt_token_count')
+        output_tokens = _int_from('completion_tokens', 'output_tokens', 'candidates_token_count')
+        if input_tokens <= 0 and output_tokens <= 0:
+            prompt_tokens = max(1, len(prompt_text or '') // 4)
+            image_tokens = max(256, len(image_b64 or '') // 2048)
+            input_tokens = prompt_tokens + image_tokens
+            output_tokens = max(1, len(extracted_text or '') // 4)
+
+        if hasattr(self, "api_cost_signal"):
+            self.api_cost_signal.emit(input_tokens, output_tokens, provider_label, model_id)
 
     def _call_ai_ocr(self, image_bgr, provider_key, model_id, model_name=None):
         if not provider_key or not model_id:
@@ -15124,6 +15471,10 @@ class MangaOCRApp(QMainWindow):
         variant_index = 0
         for payload in payload_variants:
             variant_index += 1
+            ppath = None
+            rpath = None
+            rjson_path = None
+            errpath = None
             if temp_dir:
                 try:
                     ppath = os.path.join(temp_dir, f'aiocr_payload_v{variant_index}.json')
@@ -15133,6 +15484,9 @@ class MangaOCRApp(QMainWindow):
                     pass
 
             try:
+                provider_label = self._ai_ocr_provider_label(provider_key)
+                if hasattr(self, 'check_and_increment_usage') and not self.check_and_increment_usage(provider_label, model_id):
+                    return f"[AI OCR ERROR: Rate limit reached for {model_id}]"
                 # provider-specific overrides
                 pr_timeout = int(provider_cfg.get('timeout', 45) or 45)
                 pr_retries = int(provider_cfg.get('retries', 2) or 2)
@@ -15178,6 +15532,7 @@ class MangaOCRApp(QMainWindow):
             extracted = self._extract_ai_ocr_text(data)
             # if the model explicitly says there's no image, keep trying other variants
             if extracted and 'i cannot see any image' not in extracted.lower():
+                self._record_ai_ocr_cost_usage(data, provider_key, model_id, prompt_text, extracted, image_b64)
                 # [CACHE SAVE]
                 try:
                     with open(cache_file, 'w', encoding='utf-8') as f:
@@ -15967,7 +16322,7 @@ class MangaOCRApp(QMainWindow):
         settings['target_lang'] = self.translate_combo.currentText()
         settings['use_inpaint'] = self.inpaint_checkbox.isChecked()
         
-        self.auto_translate_page_btn.setText("â³ Memproses Halaman...")
+        self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
         self.auto_translate_page_btn.setEnabled(False)
         
         use_ai_vision = self.use_ai_vision_checkbox.isChecked()
@@ -16099,7 +16454,7 @@ Each object MUST have the following keys:
 Image dimensions: Width = {w} pixels, Height = {h} pixels. Your coordinates must fit within these dimensions.
 JSON format example:
 [
-  {{"box": [100, 150, 80, 120], "original": "ã“ã‚“ã«ã¡ã¯", "translation": "Halo"}}
+  {{"box": [100, 150, 80, 120], "original": "こんにちは", "translation": "Halo"}}
 ]
 """
                 response_text = ""

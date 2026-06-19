@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -100,7 +100,7 @@ def default_settings() -> dict:
             "use_inpaint": True,
             "apply_mode": "selected",
             "text_color_threshold": 128,
-            "auto_text_color": True,   # <â€” BARU: bisa dimatikan dari Settings
+            "auto_text_color": True,   # <— BARU: bisa dimatikan dari Settings
             # When true, debug/temp files created by AI OCR and MOFRL (under ./temp/) will be removed after a run
             "constrain_text": True,
             "remove_ai_temp_files": False,

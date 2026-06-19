@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -403,7 +403,7 @@ class TypesetArea:
 
         # --- Compact polygon serialisation (schema v4) ---
         # Encode as [[x,y],...] instead of [{"x":x,"y":y},...]
-        # cleanup_polygon is ALWAYS stored explicitly â€” it represents the
+        # cleanup_polygon is ALWAYS stored explicitly — it represents the
         # inpainting/cleanup region which is semantically separate from the
         # text placement polygon and may differ intentionally.
         poly_list = polygon_to_list(self.polygon, compact=True)
@@ -1978,7 +1978,7 @@ class SelectableImageLabel(QLabel):
             painter.drawLine(self.pending_trash_icon_rect.topRight() - QPoint(6,-6), self.pending_trash_icon_rect.bottomLeft() + QPoint(6,-6))
 
             # Draw small hint text near pending polygon
-            hint = "Right-click to confirm â€¢ Middle-click to cancel"
+            hint = "Right-click to confirm • Middle-click to cancel"
             hint_rect = QRect(self.pending_trash_icon_rect.left() - 8 - 200, self.pending_trash_icon_rect.top() - 28, 200, 20)
             painter.setPen(QPen(QColor(240, 240, 240, 220)))
             painter.setBrush(QColor(0, 0, 0, 120))

@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -170,7 +170,7 @@ class ShortcutCaptureEdit(QWidget):
                 if friendly and friendly != "Unknown":
                     btn_label = friendly
                 evt_label = evt.capitalize()
-                self.display.setText(f"Mouse {evt_label} Â· {btn_label}")
+                self.display.setText(f"Mouse {evt_label} · {btn_label}")
                 return
         seq_obj = QKeySequence(self._sequence)
         rendered = seq_obj.toString(QKeySequence.NativeText)

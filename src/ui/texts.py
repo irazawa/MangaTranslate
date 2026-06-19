@@ -105,6 +105,53 @@ class SettingsText:
     ]
 
 
+class SettingsWorkspaceText:
+    TITLE = "Settings"
+    SUBTITLE = "Profile, usage, help, and app preferences in one workspace."
+    BACK_TO_APP = "Back to app"
+    SEARCH_PLACEHOLDER = "Search settings..."
+    PROFILE_NAME_FALLBACK = "MangaTranslate User"
+    PROFILE_HANDLE = "@mangatranslate"
+    PROFILE_BADGE = "Local profile"
+    PROFILE_TITLE = "Profile"
+    PROFILE_ACTIVITY = "Token activity"
+    PROFILE_INSIGHTS = "Activity insights"
+    PROFILE_MODE_DAILY = "Daily"
+    PROFILE_MODE_WEEKLY = "Weekly"
+    PROFILE_MODE_CUMULATIVE = "Cumulative"
+    REFRESH = "Refresh"
+
+    NAV_SECTIONS = [
+        (
+            "Personal",
+            [
+                ("profile", "Profile", "Usage identity and streaks", "◎"),
+                ("usage", "Usage & Billing", "Costs, analytics, pricing", "$"),
+            ],
+        ),
+        (
+            "App Settings",
+            [
+                ("general", "General", "Export, autosave, defaults", "⚙"),
+                ("appearance", "Appearance", "Theme, fonts, motion", "◐"),
+                ("translation", "Translation", "OpenRouter models", "⇄"),
+                ("api", "API Keys", "Providers and tokens", "◇"),
+                ("ocr_plugins", "OCR Plugins", "Engines and languages", "▣"),
+                ("shortcuts", "Shortcuts", "Keyboard and mouse", "⌘"),
+                ("glossary", "Glossary", "Term consistency", "≡"),
+                ("media_tools", "Media Tools", "Optional installs", "▤"),
+                ("cleanup", "Cleanup", "Text cleanup defaults", "✦"),
+            ],
+        ),
+        (
+            "Help",
+            [
+                ("help_overview", "Help & About", "About app and project stats", "?"),
+            ],
+        ),
+    ]
+
+
 class AppearanceText:
     CARD_THEME = "Theme"
     CARD_COLORS = "Colors"
