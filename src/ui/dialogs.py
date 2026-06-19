@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -12,19 +12,20 @@ import copy
 # (tidak ada impor pihak ketiga yang dibutuhkan)
 
 # ==============================
-# 🌟 PyQt5 (dibagi per kategori)
+# ðŸŒŸ PyQt5 (dibagi per kategori)
 # ==============================
 from PyQt5.QtWidgets import (
     QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
     QTextEdit, QScrollArea, QComboBox, QMessageBox, QListWidget, QListWidgetItem,
     QColorDialog, QLineEdit, QDialog, QDialogButtonBox, QCheckBox, QSpinBox,
     QTabWidget, QGroupBox, QGridLayout, QFrame, QSplitter, QToolButton, QFormLayout, QFontComboBox,
-    QDoubleSpinBox,
+    QDoubleSpinBox, QSlider,
     QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget, QProgressDialog,
     QAbstractItemView
 )
 from PyQt5.QtGui import (
-    QColor, QFont, QTextCharFormat, QTextCursor, QBrush, QTextBlockFormat, QPixmap, QImage
+    QColor, QFont, QTextCharFormat, QTextCursor, QBrush, QTextBlockFormat, QPixmap, QImage,
+    QIcon, QPainter, QPen
 )
 from PyQt5.QtCore import (
     Qt, pyqtSignal, QTimer, QSignalBlocker, QSize, QThread, QPoint
@@ -40,8 +41,20 @@ from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
 from src.ui.notifications import notify_banner, notify_toast
-from src.ui.texts import SettingsText
-from src.ui.theme import settings_center_stylesheet
+from src.ui.texts import AppearanceText, SettingsText
+from src.ui.theme import (
+    APPEARANCE_DEFAULTS,
+    DARK_THEME_CHOICES,
+    DARK_THEME_PRESETS,
+    COLORS,
+    normalize_appearance_settings,
+    resolve_appearance,
+    settings_center_stylesheet,
+    advanced_text_editor_stylesheet,
+    combo_popup_qss,
+    table_header_qss,
+    table_qss,
+)
 from src.utils.helpers import *
 from src.core.fonts import *
 
@@ -194,7 +207,7 @@ class OpenRouterSettingsDialog(QDialog):
         return self.panel.get_settings()
 
 class SettingsCenterDialog(QDialog):
-    """Unified settings dialog — modern sidebar navigation layout."""
+    """Unified settings dialog â€” modern sidebar navigation layout."""
 
     _NAV_ITEMS = SettingsText.NAV_ITEMS
 
@@ -205,7 +218,7 @@ class SettingsCenterDialog(QDialog):
         self.setModal(True)
         self.setObjectName("SettingsCenterDialog")
         self.setMinimumSize(900, 620)
-        # Fit dialog to the available screen — cap at 85 % height, 75 % width
+        # Fit dialog to the available screen â€” cap at 85 % height, 75 % width
         try:
             screen = QApplication.primaryScreen().availableGeometry()
             max_h = int(screen.height() * 0.88)
@@ -227,7 +240,10 @@ class SettingsCenterDialog(QDialog):
         }
         self._initial_translate = copy.deepcopy(SETTINGS.get('translate', {}).get('openrouter', {}))
         self._initial_shortcuts = copy.deepcopy(SETTINGS.get('shortcuts', {}))
+        self._initial_appearance = normalize_appearance_settings(SETTINGS.get('appearance', {}))
         self.shortcut_editors = {}
+        self.appearance_color_edits = {}
+        self.appearance_color_buttons = {}
 
         self._build_ui()
 
@@ -239,7 +255,7 @@ class SettingsCenterDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Splitter: left sidebar nav + right content ─────────────────
+        # â”€â”€ Splitter: left sidebar nav + right content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.setObjectName("settings-splitter")
         splitter.setHandleWidth(1)
@@ -303,6 +319,7 @@ class SettingsCenterDialog(QDialog):
 
         self.general_tab = self._create_general_tab()
         self.cleanup_tab = self._create_cleanup_tab()
+        self.appearance_tab = self._create_appearance_tab()
         self.translation_tab = self._create_translation_tab()
         self.shortcuts_tab = self._create_shortcuts_tab()
         self.api_tab = self._create_api_tab()
@@ -310,7 +327,7 @@ class SettingsCenterDialog(QDialog):
         self.media_tools_tab = self._create_media_tools_tab()
         self.glossary_tab = self._create_glossary_tab()
 
-        for page in (self.general_tab, self.cleanup_tab,
+        for page in (self.general_tab, self.cleanup_tab, self.appearance_tab,
                      self.translation_tab, self.shortcuts_tab, self.api_tab, self.ocr_plugins_tab,
                      self.media_tools_tab, self.glossary_tab):
             self._pages.addWidget(page)
@@ -351,7 +368,7 @@ class SettingsCenterDialog(QDialog):
 
         root.addWidget(splitter, 1)
 
-        # Wire nav selection → page switch
+        # Wire nav selection â†’ page switch
         self._nav_list.currentRowChanged.connect(self._on_nav_changed)
         self._nav_list.setCurrentRow(0)
 
@@ -371,6 +388,8 @@ class SettingsCenterDialog(QDialog):
             "ocr": "ocr_plugins",
             "plugins": "ocr_plugins",
             "media": "media_tools",
+            "theme": "appearance",
+            "style": "appearance",
         }
         normalized = aliases.get(normalized, normalized)
         for index, meta in enumerate(self._NAV_ITEMS):
@@ -470,8 +489,8 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        # ── Autosave card ────────────────────────────────────────────────
-        as_card = QGroupBox("💾  Autosave")
+        # â”€â”€ Autosave card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        as_card = QGroupBox("ðŸ’¾  Autosave")
         as_card.setObjectName("settings-card")
         as_vbox = QVBoxLayout(as_card)
         as_vbox.setSpacing(4)
@@ -495,8 +514,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(as_card)
 
-        # ── Output card ──────────────────────────────────────────────────
-        out_card = QGroupBox("🖼  Output")
+        # â”€â”€ Output card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        out_card = QGroupBox("ðŸ–¼  Output")
         out_card.setObjectName("settings-card")
         out_vbox = QVBoxLayout(out_card)
         out_vbox.setSpacing(4)
@@ -523,8 +542,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(out_card)
 
-        # ── Defaults & Preset card ──────────────────────────────────────────
-        def_card = QGroupBox("📋  Default Presets")
+        # â”€â”€ Defaults & Preset card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        def_card = QGroupBox("ðŸ“‹  Default Presets")
         def_card.setObjectName("settings-card")
         def_vbox = QVBoxLayout(def_card)
         def_vbox.setSpacing(4)
@@ -642,8 +661,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(def_card)
 
-        # ── Emergency Close card ──────────────────────────────────────────
-        ec_card = QGroupBox("🚨  Emergency Close")
+        # â”€â”€ Emergency Close card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        ec_card = QGroupBox("ðŸš¨  Emergency Close")
         ec_card.setObjectName("settings-card")
         ec_vbox = QVBoxLayout(ec_card)
         ec_vbox.setSpacing(4)
@@ -724,7 +743,7 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        card = QGroupBox("🧹  Text Defaults")
+        card = QGroupBox("ðŸ§¹  Text Defaults")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(4)
@@ -746,7 +765,7 @@ class SettingsCenterDialog(QDialog):
         self.threshold_spin.setValue(int(cleanup_cfg.get('text_color_threshold', 128)))
         card_vbox.addWidget(self._make_option_row(
             "Color threshold",
-            "Luminance threshold for auto text color inversion (0–255).",
+            "Luminance threshold for auto text color inversion (0â€“255).",
             self.threshold_spin))
 
         self.use_background_box_checkbox = QCheckBox()
@@ -775,6 +794,286 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
         layout.addStretch(1)
         return page
+
+    def _theme_swatch_icon(self, colors: dict):
+        pixmap = QPixmap(30, 22)
+        pixmap.fill(QColor(colors.get("bg", "#090a0f")))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(QColor(colors.get("border", "#1e293b")), 1))
+        painter.setBrush(QColor(colors.get("panel", "#0e111a")))
+        painter.drawRoundedRect(1, 1, 28, 20, 5, 5)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(colors.get("accent", "#38bdf8")))
+        painter.drawRoundedRect(5, 5, 8, 12, 3, 3)
+        painter.setBrush(QColor(colors.get("text", "#cbd5e1")))
+        painter.drawRoundedRect(16, 6, 8, 2, 1, 1)
+        painter.setBrush(QColor(colors.get("muted", "#64748b")))
+        painter.drawRoundedRect(16, 11, 6, 2, 1, 1)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _combo_set_data(self, combo, value):
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _color_button_qss(self, color_name: str):
+        color = QColor(color_name)
+        if not color.isValid():
+            color = QColor("#38bdf8")
+        luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+        text_color = "#020617" if luminance > 150 else "#f8fafc"
+        return (
+            f"QPushButton {{ background: {color.name()}; color: {text_color}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 6px 10px; }}"
+            f"\nQPushButton:hover {{ border-color: {COLORS['accent']}; }}"
+        )
+
+    def _appearance_preview_settings(self):
+        cfg = normalize_appearance_settings(SETTINGS.get('appearance', {}))
+        if hasattr(self, 'appearance_mode_combo'):
+            cfg['mode'] = self.appearance_mode_combo.currentData() or cfg['mode']
+        if hasattr(self, 'dark_theme_combo'):
+            cfg['dark_theme'] = self.dark_theme_combo.currentData() or cfg['dark_theme']
+        for key, edit in getattr(self, 'appearance_color_edits', {}).items():
+            cfg[key] = edit.text().strip()
+        if hasattr(self, 'contrast_slider'):
+            cfg['contrast'] = int(self.contrast_slider.value())
+        return normalize_appearance_settings(cfg)
+
+    def _refresh_appearance_color_editors(self):
+        resolved = resolve_appearance(self._appearance_preview_settings(), system_dark=True)
+        colors = resolved.get("colors", {})
+        key_map = {
+            "accent": colors.get("accent", "#38bdf8"),
+            "background": colors.get("bg", "#090a0f"),
+            "foreground": colors.get("text", "#cbd5e1"),
+        }
+        for key, edit in self.appearance_color_edits.items():
+            fallback = key_map.get(key, APPEARANCE_DEFAULTS.get(key, ""))
+            edit.setPlaceholderText(fallback.upper())
+            btn = self.appearance_color_buttons.get(key)
+            if btn is not None:
+                btn.setStyleSheet(self._color_button_qss(edit.text().strip() or fallback))
+
+    def _make_color_editor(self, key: str, value: str):
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        edit = QLineEdit()
+        edit.setFixedWidth(120)
+        edit.setPlaceholderText("#38BDF8")
+        edit.setText(value or "")
+        edit.setMaxLength(7)
+
+        pick_btn = QPushButton(AppearanceText.PICK_COLOR)
+        pick_btn.setFixedWidth(64)
+
+        reset_btn = QToolButton()
+        reset_btn.setText(AppearanceText.RESET_COLOR)
+        reset_btn.setToolTip("Use the selected theme preset color")
+
+        def _pick_color():
+            fallback = edit.text().strip() or edit.placeholderText() or "#38bdf8"
+            color = QColor(fallback)
+            if not color.isValid():
+                color = QColor("#38bdf8")
+            chosen = QColorDialog.getColor(color, self, f"Select {key.title()} Color")
+            if chosen.isValid():
+                edit.setText(chosen.name().upper())
+
+        pick_btn.clicked.connect(_pick_color)
+        reset_btn.clicked.connect(lambda: edit.setText(""))
+        edit.textChanged.connect(lambda _text: self._refresh_appearance_color_editors())
+
+        row.addWidget(edit)
+        row.addWidget(pick_btn)
+        row.addWidget(reset_btn)
+        self.appearance_color_edits[key] = edit
+        self.appearance_color_buttons[key] = pick_btn
+        return holder
+
+    def _create_appearance_tab(self):
+        meta = self._page_meta("appearance")
+        page, layout = self._make_page_scroll()
+        layout.addWidget(self._make_page_header(
+            meta.get("title", "Appearance"),
+            meta.get("subtitle", ""),
+        ))
+
+        cfg = normalize_appearance_settings(SETTINGS.get('appearance', {}))
+
+        theme_card = QGroupBox(AppearanceText.CARD_THEME)
+        theme_card.setObjectName("settings-card")
+        theme_vbox = QVBoxLayout(theme_card)
+        theme_vbox.setSpacing(4)
+        theme_vbox.setContentsMargins(0, 8, 0, 8)
+
+        self.appearance_mode_combo = QComboBox()
+        self.appearance_mode_combo.setFixedWidth(180)
+        for value, label in AppearanceText.MODES:
+            self.appearance_mode_combo.addItem(label, value)
+        self._combo_set_data(self.appearance_mode_combo, cfg["mode"])
+        theme_vbox.addWidget(self._make_option_row(
+            AppearanceText.MODE_LABEL,
+            AppearanceText.MODE_DESC,
+            self.appearance_mode_combo,
+        ))
+
+        self.dark_theme_combo = QComboBox()
+        self.dark_theme_combo.setFixedWidth(220)
+        for key, label in DARK_THEME_CHOICES:
+            self.dark_theme_combo.addItem(self._theme_swatch_icon(DARK_THEME_PRESETS[key]), label, key)
+        self._combo_set_data(self.dark_theme_combo, cfg["dark_theme"])
+        theme_vbox.addWidget(self._make_option_row(
+            AppearanceText.DARK_THEME_LABEL,
+            AppearanceText.DARK_THEME_DESC,
+            self.dark_theme_combo,
+        ))
+
+        layout.addWidget(theme_card)
+
+        color_card = QGroupBox(AppearanceText.CARD_COLORS)
+        color_card.setObjectName("settings-card")
+        color_vbox = QVBoxLayout(color_card)
+        color_vbox.setSpacing(4)
+        color_vbox.setContentsMargins(0, 8, 0, 8)
+        color_vbox.addWidget(self._make_option_row(
+            AppearanceText.ACCENT_LABEL,
+            AppearanceText.ACCENT_DESC,
+            self._make_color_editor("accent", cfg.get("accent", "")),
+        ))
+        color_vbox.addWidget(self._make_option_row(
+            AppearanceText.BACKGROUND_LABEL,
+            AppearanceText.BACKGROUND_DESC,
+            self._make_color_editor("background", cfg.get("background", "")),
+        ))
+        color_vbox.addWidget(self._make_option_row(
+            AppearanceText.FOREGROUND_LABEL,
+            AppearanceText.FOREGROUND_DESC,
+            self._make_color_editor("foreground", cfg.get("foreground", "")),
+        ))
+        layout.addWidget(color_card)
+
+        interface_card = QGroupBox(AppearanceText.CARD_INTERFACE)
+        interface_card.setObjectName("settings-card")
+        interface_vbox = QVBoxLayout(interface_card)
+        interface_vbox.setSpacing(4)
+        interface_vbox.setContentsMargins(0, 8, 0, 8)
+
+        self.ui_font_edit = QLineEdit()
+        self.ui_font_edit.setMinimumWidth(320)
+        self.ui_font_edit.setText(cfg["ui_font"])
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.UI_FONT_LABEL,
+            AppearanceText.UI_FONT_DESC,
+            self.ui_font_edit,
+        ))
+
+        self.code_font_edit = QLineEdit()
+        self.code_font_edit.setMinimumWidth(320)
+        self.code_font_edit.setText(cfg["code_font"])
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.CODE_FONT_LABEL,
+            AppearanceText.CODE_FONT_DESC,
+            self.code_font_edit,
+        ))
+
+        self.translucent_sidebar_checkbox = QCheckBox()
+        self.translucent_sidebar_checkbox.setChecked(bool(cfg["translucent_sidebar"]))
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.TRANSLUCENT_SIDEBAR_LABEL,
+            AppearanceText.TRANSLUCENT_SIDEBAR_DESC,
+            self.translucent_sidebar_checkbox,
+        ))
+
+        contrast_holder = QWidget()
+        contrast_layout = QHBoxLayout(contrast_holder)
+        contrast_layout.setContentsMargins(0, 0, 0, 0)
+        contrast_layout.setSpacing(8)
+        self.contrast_slider = QSlider(Qt.Horizontal)
+        self.contrast_slider.setRange(30, 100)
+        self.contrast_slider.setValue(int(cfg["contrast"]))
+        self.contrast_slider.setFixedWidth(180)
+        self.contrast_value_label = QLabel(str(cfg["contrast"]))
+        self.contrast_value_label.setFixedWidth(34)
+        self.contrast_slider.valueChanged.connect(lambda value: self.contrast_value_label.setText(str(value)))
+        self.contrast_slider.valueChanged.connect(lambda _value: self._refresh_appearance_color_editors())
+        contrast_layout.addWidget(self.contrast_slider)
+        contrast_layout.addWidget(self.contrast_value_label)
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.CONTRAST_LABEL,
+            AppearanceText.CONTRAST_DESC,
+            contrast_holder,
+        ))
+
+        self.pointer_cursor_checkbox = QCheckBox()
+        self.pointer_cursor_checkbox.setChecked(bool(cfg["use_pointer_cursors"]))
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.POINTER_LABEL,
+            AppearanceText.POINTER_DESC,
+            self.pointer_cursor_checkbox,
+        ))
+
+        self.reduce_motion_combo = QComboBox()
+        self.reduce_motion_combo.setFixedWidth(180)
+        for value, label in AppearanceText.MOTION_OPTIONS:
+            self.reduce_motion_combo.addItem(label, value)
+        self._combo_set_data(self.reduce_motion_combo, cfg["reduce_motion"])
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.REDUCE_MOTION_LABEL,
+            AppearanceText.REDUCE_MOTION_DESC,
+            self.reduce_motion_combo,
+        ))
+
+        self.ui_font_size_spin = QSpinBox()
+        self.ui_font_size_spin.setRange(10, 20)
+        self.ui_font_size_spin.setSuffix(" px")
+        self.ui_font_size_spin.setFixedWidth(90)
+        self.ui_font_size_spin.setValue(int(cfg["ui_font_size"]))
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.UI_FONT_SIZE_LABEL,
+            AppearanceText.UI_FONT_SIZE_DESC,
+            self.ui_font_size_spin,
+        ))
+
+        self.code_font_size_spin = QSpinBox()
+        self.code_font_size_spin.setRange(10, 18)
+        self.code_font_size_spin.setSuffix(" px")
+        self.code_font_size_spin.setFixedWidth(90)
+        self.code_font_size_spin.setValue(int(cfg["code_font_size"]))
+        interface_vbox.addWidget(self._make_option_row(
+            AppearanceText.CODE_FONT_SIZE_LABEL,
+            AppearanceText.CODE_FONT_SIZE_DESC,
+            self.code_font_size_spin,
+        ))
+
+        layout.addWidget(interface_card)
+        layout.addStretch(1)
+
+        self.dark_theme_combo.currentIndexChanged.connect(lambda _index: self._refresh_appearance_color_editors())
+        self.appearance_mode_combo.currentIndexChanged.connect(lambda _index: self._refresh_appearance_color_editors())
+        self._refresh_appearance_color_editors()
+        return page
+
+    def _collect_appearance_settings(self):
+        cfg = normalize_appearance_settings(SETTINGS.get('appearance', {}))
+        cfg['mode'] = self.appearance_mode_combo.currentData() or cfg['mode']
+        cfg['dark_theme'] = self.dark_theme_combo.currentData() or cfg['dark_theme']
+        for key, edit in self.appearance_color_edits.items():
+            cfg[key] = edit.text().strip()
+        cfg['ui_font'] = self.ui_font_edit.text().strip() or APPEARANCE_DEFAULTS['ui_font']
+        cfg['code_font'] = self.code_font_edit.text().strip() or APPEARANCE_DEFAULTS['code_font']
+        cfg['translucent_sidebar'] = bool(self.translucent_sidebar_checkbox.isChecked())
+        cfg['contrast'] = int(self.contrast_slider.value())
+        cfg['use_pointer_cursors'] = bool(self.pointer_cursor_checkbox.isChecked())
+        cfg['reduce_motion'] = self.reduce_motion_combo.currentData() or cfg['reduce_motion']
+        cfg['ui_font_size'] = int(self.ui_font_size_spin.value())
+        cfg['code_font_size'] = int(self.code_font_size_spin.value())
+        return normalize_appearance_settings(cfg)
 
     def _create_translation_tab(self):
         self.openrouter_panel = OpenRouterSettingsPanel(SETTINGS, self)
@@ -824,13 +1123,13 @@ class SettingsCenterDialog(QDialog):
                 row_layout.addWidget(editor, 1)
 
                 clear_btn = QToolButton()
-                clear_btn.setText("✕")
+                clear_btn.setText("âœ•")
                 clear_btn.setToolTip("Clear shortcut")
                 clear_btn.clicked.connect(editor.clear_sequence)
                 row_layout.addWidget(clear_btn)
 
                 default_btn = QToolButton()
-                default_btn.setText("↺")
+                default_btn.setText("â†º")
                 default_btn.setToolTip("Restore default")
 
                 def _reset_editor(checked=False, target_editor=editor, target_key=key):
@@ -854,6 +1153,24 @@ class SettingsCenterDialog(QDialog):
 
     def _apply_settings_styles(self):
         self.setStyleSheet(settings_center_stylesheet())
+        for table in self.findChildren(QTableWidget):
+            try:
+                table.setStyleSheet(table_qss())
+                table.horizontalHeader().setStyleSheet(table_header_qss())
+            except Exception:
+                pass
+        for combo in self.findChildren(QComboBox):
+            try:
+                combo.view().setStyleSheet(combo_popup_qss())
+            except Exception:
+                pass
+        appearance_cfg = SETTINGS.get('appearance', {})
+        if not isinstance(appearance_cfg, dict):
+            appearance_cfg = {}
+        cursor_shape = Qt.PointingHandCursor if appearance_cfg.get('use_pointer_cursors', True) else Qt.ArrowCursor
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, (QPushButton, QToolButton, QComboBox, QCheckBox, QSlider, QListWidget)):
+                widget.setCursor(cursor_shape)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1024,7 +1341,7 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", "")
         ))
 
-        card = QGroupBox("📖  Term Pairs (Source → Target)")
+        card = QGroupBox("ðŸ“–  Term Pairs (Source â†’ Target)")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(8)
@@ -1048,7 +1365,7 @@ class SettingsCenterDialog(QDialog):
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ Add Term")
         add_btn.clicked.connect(self._on_glossary_add)
-        remove_btn = QPushButton("− Remove Selected")
+        remove_btn = QPushButton("âˆ’ Remove Selected")
         remove_btn.clicked.connect(self._on_glossary_remove)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(remove_btn)
@@ -1058,7 +1375,7 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
 
         # Info box
-        info_card = QGroupBox("ℹ  How it works")
+        info_card = QGroupBox("â„¹  How it works")
         info_card.setObjectName("settings-card")
         info_vbox = QVBoxLayout(info_card)
         info_label = QLabel(
@@ -1066,9 +1383,9 @@ class SettingsCenterDialog(QDialog):
             "saat menerjemahkan. AI akan selalu menggunakan 'Target Term' untuk setiap "
             "kemunculan 'Source Term' dalam teks.\n\n"
             "Contoh:\n"
-            "  Source: 煉獄杏寿郎  →  Target: Rengoku Kyojuro\n"
-            "  Source: 無惨  →  Target: Muzan\n"
-            "  Source: 全集中  →  Target: Total Concentration"
+            "  Source: ç…‰ç„æå¯¿éƒŽ  â†’  Target: Rengoku Kyojuro\n"
+            "  Source: ç„¡æƒ¨  â†’  Target: Muzan\n"
+            "  Source: å…¨é›†ä¸­  â†’  Target: Total Concentration"
         )
         info_label.setWordWrap(True)
         info_label.setObjectName("settings-option-desc")
@@ -1135,6 +1452,8 @@ class SettingsCenterDialog(QDialog):
             return False
 
         openrouter_settings = self.openrouter_panel.export_settings()
+        appearance_cfg = self._collect_appearance_settings()
+        appearance_changed = appearance_cfg != self._initial_appearance
 
         autosave_enabled = bool(self.autosave_checkbox.isChecked())
         autosave_interval_ms = int(self.autosave_interval_spin.value() * 1000)
@@ -1207,6 +1526,7 @@ class SettingsCenterDialog(QDialog):
         SETTINGS['ocr'] = copy.deepcopy(api_export.get('ocr', {}))
         SETTINGS['tesseract'] = copy.deepcopy(api_export.get('tesseract', {}))
         SETTINGS['shortcuts'] = shortcut_settings
+        SETTINGS['appearance'] = copy.deepcopy(appearance_cfg)
 
         # Simpan Glossary
         if hasattr(self, '_glossary_table'):
@@ -1217,7 +1537,7 @@ class SettingsCenterDialog(QDialog):
         # Hot-apply custom default values to main window
         if hasattr(self.main_window, 'apply_defaults_from_settings'):
             try:
-                self.main_window.apply_defaults_from_settings()
+                self.main_window.apply_defaults_from_settings(apply_runtime_controls=False)
             except Exception as e:
                 print(f"Error applying default presets: {e}")
 
@@ -1225,6 +1545,13 @@ class SettingsCenterDialog(QDialog):
             refresh_api_clients()
         except Exception:
             pass
+
+        if hasattr(self.main_window, 'apply_appearance_from_settings'):
+            try:
+                self.main_window.apply_appearance_from_settings()
+                self._apply_settings_styles()
+            except Exception as e:
+                print(f"Error applying appearance settings: {e}")
 
         # Refresh OpenAI availability flag after API clients are recreated
         try:
@@ -1276,6 +1603,8 @@ class SettingsCenterDialog(QDialog):
             status_parts.append("Autosave preferences updated")
         if shortcuts_changed:
             status_parts.append("Shortcuts updated")
+        if appearance_changed:
+            status_parts.append("Appearance updated")
 
         if status_parts and hasattr(self.main_window, 'statusBar'):
             try:
@@ -1293,6 +1622,7 @@ class SettingsCenterDialog(QDialog):
         }
         self._initial_translate = copy.deepcopy(SETTINGS.get('translate', {}).get('openrouter', {}))
         self._initial_shortcuts = copy.deepcopy(shortcut_settings)
+        self._initial_appearance = copy.deepcopy(appearance_cfg)
 
         if close_dialog:
             self.accept()
@@ -1308,8 +1638,8 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", ""),
         ))
 
-        # ── 1. Modular OCR Plugins ────────────────────────────────────────
-        card = QGroupBox("🔌  OCR Engines")
+        # â”€â”€ 1. Modular OCR Plugins â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        card = QGroupBox("ðŸ”Œ  OCR Engines")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(4)
@@ -1356,8 +1686,8 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(card)
 
-        # ── 2. Tesseract Auto-Installer ────────────────────────────────────
-        tess_card = QGroupBox("📦  Tesseract Auto-Installer")
+        # â”€â”€ 2. Tesseract Auto-Installer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        tess_card = QGroupBox("ðŸ“¦  Tesseract Auto-Installer")
         tess_card.setObjectName("settings-card")
         tess_vbox = QVBoxLayout(tess_card)
         tess_vbox.setSpacing(10)
@@ -1370,10 +1700,10 @@ class SettingsCenterDialog(QDialog):
         from src.core.config import IS_TESSERACT_AVAILABLE, TESSERACT_PATH
         self.tess_status_label = QLabel()
         if IS_TESSERACT_AVAILABLE:
-            self.tess_status_label.setText("🟢 Installed & Ready")
+            self.tess_status_label.setText("ðŸŸ¢ Installed & Ready")
             self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
         else:
-            self.tess_status_label.setText("🔴 Not Found")
+            self.tess_status_label.setText("ðŸ”´ Not Found")
             self.tess_status_label.setStyleSheet("color: #f87171; font-weight: bold;")
         status_layout.addWidget(self.tess_status_label)
         status_layout.addStretch()
@@ -1386,15 +1716,15 @@ class SettingsCenterDialog(QDialog):
         tess_vbox.addWidget(self.tess_path_label)
 
         # Installer button
-        self.install_tess_btn = QPushButton("🚀 Auto-Install Tesseract")
+        self.install_tess_btn = QPushButton("ðŸš€ Auto-Install Tesseract")
         self.install_tess_btn.setObjectName("settings-action-btn")
         self.install_tess_btn.clicked.connect(self._run_tesseract_installer)
         tess_vbox.addWidget(self.install_tess_btn)
 
         layout.addWidget(tess_card)
 
-        # ── 3. Tesseract Language Models ──────────────────────────────────
-        lang_card = QGroupBox("🌐  Tesseract Language Models")
+        # â”€â”€ 3. Tesseract Language Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        lang_card = QGroupBox("ðŸŒ  Tesseract Language Models")
         lang_card.setObjectName("settings-card")
         lang_vbox = QVBoxLayout(lang_card)
         lang_vbox.setSpacing(8)
@@ -1414,9 +1744,8 @@ class SettingsCenterDialog(QDialog):
         self.lang_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.lang_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        # Style header explicitly to ensure high-contrast Obsidian dark theme style
-        self.lang_table.horizontalHeader().setStyleSheet("QHeaderView::section { background-color: #0f131c; color: #cbd5e1; padding: 4px; border: 1px solid #1f2b36; }")
-        self.lang_table.setStyleSheet("QTableWidget { background-color: #0c121d; border: 1px solid #1f2b36; border-radius: 8px; } QTableWidget::item { color: #cbd5e1; }")
+        self.lang_table.horizontalHeader().setStyleSheet(table_header_qss())
+        self.lang_table.setStyleSheet(table_qss())
         
         self._languages_list = [
             ("Japanese (Horizontal)", "jpn"),
@@ -1458,12 +1787,12 @@ class SettingsCenterDialog(QDialog):
                 file_exists = os.path.exists(os.path.join(system_path, f"{lang_code}.traineddata"))
             
             if file_exists:
-                uninstall_btn = QPushButton("🗑 Uninstall")
+                uninstall_btn = QPushButton("ðŸ—‘ Uninstall")
                 uninstall_btn.setStyleSheet("background: #dc2626; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
                 uninstall_btn.clicked.connect(lambda checked=False, c=lang_code: self._uninstall_lang_model(c))
                 self.lang_table.setCellWidget(idx, 2, uninstall_btn)
             else:
-                download_btn = QPushButton("📥 Download")
+                download_btn = QPushButton("ðŸ“¥ Download")
                 download_btn.setStyleSheet("background: #1f6fb5; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
                 download_btn.clicked.connect(lambda checked=False, c=lang_code: self._download_lang_model(c))
                 self.lang_table.setCellWidget(idx, 2, download_btn)
@@ -1538,10 +1867,10 @@ class SettingsCenterDialog(QDialog):
         def on_finished(success, path_or_err):
             progress_dlg.close()
             self.install_tess_btn.setEnabled(True)
-            self.install_tess_btn.setText("🚀 Auto-Install Tesseract")
+            self.install_tess_btn.setText("ðŸš€ Auto-Install Tesseract")
             if success:
                 notify_toast(self, "Success", f"Tesseract successfully installed. Path: {path_or_err}", kind="success", timeout_ms=5000)
-                self.tess_status_label.setText("🟢 Installed & Ready")
+                self.tess_status_label.setText("ðŸŸ¢ Installed & Ready")
                 self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
                 self.tess_path_label.setText(f"Path: {path_or_err}")
                 
@@ -1607,18 +1936,18 @@ class AdvancedTextEditDialog(QDialog):
         ("Justify", Qt.AlignJustify),
     ]
     EMOJI_PRESETS = [
-        ("Heart", "❤"),
-        ("Heart1", "♥︎"),
-        ("Heart2", "♡"),
-        ("Heart3", "❤"),
-        ("Heart3", "ㅤ♡ㅤ"),
-        ("Sparkle", "✨"),
-        ("Star", "★"),
-        ("Music", "♪"),
-        ("Shock", "⁉"),
-        ("Sweat", "💦"),
-        ("Smile", "😊"),
-        ("Angry", "😠"),
+        ("Heart", "â¤"),
+        ("Heart1", "â™¥ï¸Ž"),
+        ("Heart2", "â™¡"),
+        ("Heart3", "â¤"),
+        ("Heart3", "ã…¤â™¡ã…¤"),
+        ("Sparkle", "âœ¨"),
+        ("Star", "â˜…"),
+        ("Music", "â™ª"),
+        ("Shock", "â‰"),
+        ("Sweat", "ðŸ’¦"),
+        ("Smile", "ðŸ˜Š"),
+        ("Angry", "ðŸ˜ "),
         ("Glow", "glow"),
     ]
 
@@ -1654,59 +1983,7 @@ class AdvancedTextEditDialog(QDialog):
 
 
         self.setObjectName("AdvancedTextEditDialog")
-        self.setStyleSheet("""
-            QDialog#AdvancedTextEditDialog {
-                background: #0f1624;
-                color: #e8eef7;
-                font-size: 10.5pt;
-            }
-            QGroupBox {
-                background: rgba(255,255,255,0.03);
-                border: 1px solid #1f2b36;
-                border-radius: 12px;
-                margin-top: 12px;
-                padding-top: 14px;
-            }
-            QGroupBox::title {
-                color: #9fc3f5;
-                padding: 0 8px;
-                font-weight: 600;
-            }
-            QLabel { color: #e8eef7; }
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
-                background: #0c121d;
-                border: 1px solid #1f2b36;
-                border-radius: 8px;
-                padding: 6px 8px;
-            }
-            QPushButton, QToolButton {
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1f6fb5, stop:1 #2c8ae6);
-                color: #e8eef7;
-                border: 1px solid #2b6aa1;
-                border-radius: 8px;
-                padding: 7px 12px;
-                font-weight: 600;
-            }
-            QPushButton:hover, QToolButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2a7fcb, stop:1 #3b9af3); }
-            QPushButton:disabled, QToolButton:disabled {
-                background: #182131;
-                color: #7f8a96;
-                border-color: #1f2b36;
-            }
-            QTextEdit {
-                border-radius: 12px;
-                padding: 10px;
-                line-height: 1.4;
-            }
-            #ate-hero {
-                border: 1px solid #1f2b36;
-                border-radius: 14px;
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #132036, stop:1 #0c1729);
-                padding: 10px;
-            }
-            #ate-title { font-size: 16px; font-weight: 700; color: #eaf3ff; }
-            #ate-subtitle { color: #8fa6c5; }
-        """)
+        self.setStyleSheet(advanced_text_editor_stylesheet())
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 14, 16, 14)
@@ -1741,7 +2018,10 @@ class AdvancedTextEditDialog(QDialog):
         self.font_preview = QLabel("AaBb123")
         self.font_preview.setFixedWidth(140)
         self.font_preview.setAlignment(Qt.AlignCenter)
-        self.font_preview.setStyleSheet("border: 1px solid #1f2b3b; border-radius: 6px; padding: 4px;")
+        self.font_preview.setStyleSheet(
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 4px;"
+            f"background: {COLORS['card_alt']}; color: {COLORS['text']};"
+        )
         toolbar_layout.addWidget(self.font_preview)
 
         self.font_size_spin = QDoubleSpinBox(); self.font_size_spin.setRange(4.0, 220.0); self.font_size_spin.setDecimals(1); self.font_size_spin.setSingleStep(1.0); self.font_size_spin.setSuffix(" pt")
@@ -1765,7 +2045,7 @@ class AdvancedTextEditDialog(QDialog):
         self.ai_translate_btn.clicked.connect(self._on_ai_translate_clicked)
         toolbar_layout.addWidget(self.ai_translate_btn)
 
-        self.recent_translations_btn = QPushButton("📋 Recent")
+        self.recent_translations_btn = QPushButton("ðŸ“‹ Recent")
         self.recent_translations_btn.setToolTip("Apply a recently generated translation to this text area")
         self.recent_translations_btn.clicked.connect(self._show_recent_menu)
         toolbar_layout.addWidget(self.recent_translations_btn)
@@ -1876,7 +2156,7 @@ class AdvancedTextEditDialog(QDialog):
         outline_layout.addWidget(self.outline_color_button, 2, 1, 1, 3)
 
         glow_hint = QLabel("Tip: choose Glow for soft halos, Stroke for crisp comic outlines.")
-        glow_hint.setStyleSheet("color: #9bb3cf; font-size: 10.2pt;")
+        glow_hint.setStyleSheet(f"color: {COLORS['muted']}; font-size: 10.2pt;")
         glow_hint.setWordWrap(True)
         outline_layout.addWidget(glow_hint, 3, 0, 1, 4)
 
@@ -1917,8 +2197,8 @@ class AdvancedTextEditDialog(QDialog):
         self.gradient_angle_spin = QDoubleSpinBox()
         self.gradient_angle_spin.setRange(0.0, 360.0)
         self.gradient_angle_spin.setSingleStep(15.0)
-        self.gradient_angle_spin.setSuffix(" °")
-        self.gradient_angle_spin.setSuffix(" °")
+        self.gradient_angle_spin.setSuffix(" Â°")
+        self.gradient_angle_spin.setSuffix(" Â°")
         
         self.gradient_direction_combo = QComboBox()
         for label, _ in self.GRADIENT_DIRECTIONS:
@@ -2218,7 +2498,7 @@ class AdvancedTextEditDialog(QDialog):
         for idx, layer in enumerate(self.outline_layers_store):
             w = layer.get('width', 2.0)
             c = layer.get('color', '#000000')
-            item = QListWidgetItem(f"Layer {idx + 1}: Width {w}px — Color {c}")
+            item = QListWidgetItem(f"Layer {idx + 1}: Width {w}px â€” Color {c}")
             item.setBackground(QColor(c))
             item.setForeground(QColor('#000000' if self._is_light(c) else '#ffffff'))
             self.layers_list.addItem(item)
@@ -2412,7 +2692,10 @@ class AdvancedTextEditDialog(QDialog):
             
         from PyQt5.QtWidgets import QMenu, QAction
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background-color: #172330; border: 1px solid #2d3f58; } QMenu::item:selected { background-color: #1e3050; }")
+        menu.setStyleSheet(
+            f"QMenu {{ background-color: {COLORS['panel']}; color: {COLORS['text']}; border: 1px solid {COLORS['border']}; }}"
+            f"QMenu::item:selected {{ background-color: {COLORS['card_alt']}; color: {COLORS['accent']}; }}"
+        )
         
         recent_texts = []
         for entry in reversed(parent.history_entries):
@@ -3431,9 +3714,9 @@ class BatchSaveDialog(QDialog):
                 selected.append(item.data(Qt.UserRole))
         return selected
 
-# ──────────────────────────────────────────────────────────────────
-# 📦 Tesseract & Manga-OCR Background System Integration Helpers & Workers
-# ──────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ðŸ“¦ Tesseract & Manga-OCR Background System Integration Helpers & Workers
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_tessdata_path():
     tess_path = SETTINGS.get('tesseract', {}).get('path', '')
@@ -3769,7 +4052,7 @@ class ImageCurvesDialog(QDialog):
         self.curves_widget = CurvesGraphWidget(self)
         left_layout.addWidget(self.curves_widget)
 
-        instructions = QLabel("• Drag points to adjust\n• Click curve to add points\n• Right-click to remove points")
+        instructions = QLabel("â€¢ Drag points to adjust\nâ€¢ Click curve to add points\nâ€¢ Right-click to remove points")
         instructions.setStyleSheet("color: #64748b; font-size: 8.5pt;")
         left_layout.addWidget(instructions)
         content_layout.addLayout(left_layout)
@@ -3881,7 +4164,7 @@ class ImageCurvesDialog(QDialog):
 
 
 # ============================================================
-# Feature #16 — Session Analytics & Export Dialog
+# Feature #16 â€” Session Analytics & Export Dialog
 # ============================================================
 class SessionAnalyticsDialog(QDialog):
     """
@@ -3909,7 +4192,7 @@ class SessionAnalyticsDialog(QDialog):
         self.total_input_tokens  = total_input_tokens
         self.total_output_tokens = total_output_tokens
 
-        self.setWindowTitle("📈 Session Analytics & Export")
+        self.setWindowTitle("ðŸ“ˆ Session Analytics & Export")
         self.setModal(True)
         self.resize(700, 580)
         self._apply_style()
@@ -3985,25 +4268,25 @@ class SessionAnalyticsDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Header ──────────────────────────────────────────────────────
+        # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header = QWidget()
         header.setStyleSheet("background-color: #0e111a; border-bottom: 1px solid #1e293b;")
         hdr_layout = QHBoxLayout(header)
         hdr_layout.setContentsMargins(20, 14, 20, 14)
 
-        title_lbl = QLabel("📈  Session Analytics")
+        title_lbl = QLabel("ðŸ“ˆ  Session Analytics")
         title_lbl.setStyleSheet("font-size: 14pt; font-weight: bold; color: #38bdf8;")
         hdr_layout.addWidget(title_lbl)
         hdr_layout.addStretch(1)
 
         # Tombol export & reset di header
-        export_btn = QPushButton("⬇  Export CSV")
+        export_btn = QPushButton("â¬‡  Export CSV")
         export_btn.setObjectName("export_btn")
         export_btn.setFixedHeight(32)
         export_btn.clicked.connect(self._export_csv)
         hdr_layout.addWidget(export_btn)
 
-        reset_btn = QPushButton("🗑  Reset")
+        reset_btn = QPushButton("ðŸ—‘  Reset")
         reset_btn.setObjectName("reset_btn")
         reset_btn.setFixedHeight(32)
         reset_btn.clicked.connect(self._reset_usage)
@@ -4011,7 +4294,7 @@ class SessionAnalyticsDialog(QDialog):
 
         outer.addWidget(header)
 
-        # ── Scroll area ─────────────────────────────────────────────────
+        # â”€â”€ Scroll area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -4027,7 +4310,7 @@ class SessionAnalyticsDialog(QDialog):
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
-        # ── Footer ──────────────────────────────────────────────────────
+        # â”€â”€ Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         footer = QWidget()
         footer.setStyleSheet("background-color: #0e111a; border-top: 1px solid #1e293b;")
         ftr_layout = QHBoxLayout(footer)
@@ -4064,8 +4347,8 @@ class SessionAnalyticsDialog(QDialog):
 
         provider_usage = self.usage_data.get('provider_usage', {})
 
-        # ── 1. Ringkasan biaya ──────────────────────────────────────────
-        self._section_label("💰 Cost Summary")
+        # â”€â”€ 1. Ringkasan biaya â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        self._section_label("ðŸ’° Cost Summary")
         cost_card = self._make_card()
         cc_layout = QGridLayout(cost_card)
         cc_layout.setContentsMargins(16, 12, 16, 12)
@@ -4089,8 +4372,8 @@ class SessionAnalyticsDialog(QDialog):
 
         self._vbox.addWidget(cost_card)
 
-        # ── 2. Usage per provider & model ────────────────────────────────
-        self._section_label("📊 API Usage per Model")
+        # â”€â”€ 2. Usage per provider & model â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        self._section_label("ðŸ“Š API Usage per Model")
 
         # Kumpulkan total daily_count global untuk menentukan skala bar
         all_counts = []
@@ -4108,7 +4391,7 @@ class SessionAnalyticsDialog(QDialog):
 
             # Header provider
             prov_lbl = QLabel(
-                f"<b style='color:{color}; font-size:10pt;'>▶ {provider}</b>"
+                f"<b style='color:{color}; font-size:10pt;'>â–¶ {provider}</b>"
             )
             prov_lbl.setTextFormat(Qt.RichText)
             self._vbox.addWidget(prov_lbl)
@@ -4127,7 +4410,7 @@ class SessionAnalyticsDialog(QDialog):
                 # Display name
                 display = (model_info.get('display') or model_name)
                 if len(display) > 45:
-                    display = display[:42] + "…"
+                    display = display[:42] + "â€¦"
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
@@ -4163,8 +4446,8 @@ class SessionAnalyticsDialog(QDialog):
 
                 self._vbox.addWidget(row_widget)
 
-        # ── 3. Rate Limit Status ─────────────────────────────────────────
-        self._section_label("⏱ Rate Limit Status (saat ini)")
+        # â”€â”€ 3. Rate Limit Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        self._section_label("â± Rate Limit Status (saat ini)")
 
         has_any = False
         for provider in sorted(provider_usage.keys()):
@@ -4185,14 +4468,14 @@ class SessionAnalyticsDialog(QDialog):
                 has_any = True
                 display = model_info.get('display') or model_name
                 if len(display) > 45:
-                    display = display[:42] + "…"
+                    display = display[:42] + "â€¦"
 
-                status_icon = "🟢"
+                status_icon = "ðŸŸ¢"
                 rpm_pct = int(min(rpm / rpm_limit * 100, 100)) if rpm_limit > 0 else 0
                 if rpm_pct >= 100:
-                    status_icon = "🔴"
+                    status_icon = "ðŸ”´"
                 elif rpm_pct >= 60:
-                    status_icon = "🟡"
+                    status_icon = "ðŸŸ¡"
 
                 row_w = QWidget()
                 rl = QHBoxLayout(row_w)

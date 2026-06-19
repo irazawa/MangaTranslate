@@ -1,8 +1,8 @@
 """Application identity and version metadata."""
 
 APP_NAME = "Manga OCR & Typeset Tool"
-APP_VERSION = "14.8.8"
-APP_COPYRIGHT = "Copyright © 2024"
+APP_VERSION = "14.9.0"
+APP_COPYRIGHT = "Copyright Â© 2024"
 
 
 def app_title(project_name=None) -> str:

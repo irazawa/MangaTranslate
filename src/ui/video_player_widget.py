@@ -16,6 +16,7 @@ from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap, QImage
 
 from src.ui.notifications import notify_banner, notify_toast
+from src.ui import theme
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,7 @@ class VideoPlayerWidget(QWidget):
 
         # 1. ---- Source Input Card ----
         input_card = QFrame()
+        self.input_card = input_card
         input_card.setFrameShape(QFrame.NoFrame)
         input_card.setStyleSheet("""
             QFrame {
@@ -264,11 +266,13 @@ class VideoPlayerWidget(QWidget):
         # Header Row
         header_row = QHBoxLayout()
         lbl = QLabel("🎬  Media Source")
+        self.source_title_label = lbl
         lbl.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 13px; border: none; background: transparent;")
         header_row.addWidget(lbl)
         header_row.addStretch()
 
         engine_lbl = QLabel("Engine:")
+        self.engine_label = engine_lbl
         engine_lbl.setStyleSheet("color: #64748b; font-size: 11px; border: none; background: transparent;")
         header_row.addWidget(engine_lbl)
 
@@ -379,6 +383,7 @@ class VideoPlayerWidget(QWidget):
 
         # 3. ---- Playback Control Panel ----
         ctrl_card = QFrame()
+        self.ctrl_card = ctrl_card
         ctrl_card.setFrameShape(QFrame.NoFrame)
         ctrl_card.setStyleSheet("""
             QFrame {
@@ -524,6 +529,7 @@ class VideoPlayerWidget(QWidget):
 
         # 4. ---- Media Library & Playlist Tabs ----
         library_card = QFrame()
+        self.library_card = library_card
         library_card.setStyleSheet("""
             QFrame {
                 background: #0b0e16;
@@ -538,6 +544,7 @@ class VideoPlayerWidget(QWidget):
         # Title bar for Library
         lib_title_row = QHBoxLayout()
         lib_title = QLabel("📂  Media Library")
+        self.library_title_label = lib_title
         lib_title.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 13px; border: none;")
         lib_title_row.addWidget(lib_title)
         lib_title_row.addStretch()
@@ -621,6 +628,7 @@ class VideoPlayerWidget(QWidget):
         ffmpeg_layout.setSpacing(6)
 
         ff_title = QLabel("🎬  FFmpeg Power Tools")
+        self.ff_title_label = ff_title
         ff_title.setStyleSheet("color: #a78bfa; font-weight: bold; font-size: 11px; border: none;")
         ffmpeg_layout.addWidget(ff_title)
 
@@ -664,6 +672,130 @@ class VideoPlayerWidget(QWidget):
 
         # Initialize FFmpeg path checks
         self._check_ffmpeg_availability()
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        card_qss = f"""
+            QFrame {{
+                background: {theme.COLORS['panel']};
+                border: 1px solid {theme.COLORS['border']};
+                border-radius: 12px;
+            }}
+        """
+        for frame in (
+            getattr(self, 'input_card', None),
+            getattr(self, 'ctrl_card', None),
+            getattr(self, 'library_card', None),
+            getattr(self, 'ffmpeg_card', None),
+        ):
+            if frame is not None:
+                frame.setStyleSheet(card_qss)
+        for label in (
+            getattr(self, 'source_title_label', None),
+            getattr(self, 'library_title_label', None),
+        ):
+            if label is not None:
+                label.setStyleSheet(
+                    f"color: {theme.COLORS['accent']}; font-weight: bold; font-size: 13px; border: none; background: transparent;"
+                )
+        if getattr(self, 'ff_title_label', None) is not None:
+            self.ff_title_label.setStyleSheet(
+                f"color: {theme.COLORS['accent']}; font-weight: bold; font-size: 11px; border: none; background: transparent;"
+            )
+        for label in (
+            getattr(self, 'engine_label', None),
+            getattr(self, 'time_label', None),
+            getattr(self, 'lib_status', None),
+            getattr(self, 'ff_status', None),
+            getattr(self, 'placeholder_label', None),
+        ):
+            if label is not None:
+                label.setStyleSheet(
+                    f"color: {theme.COLORS['muted']}; font-size: 11px; border: none; background: transparent;"
+                )
+        combo_qss = f"""
+            QComboBox {{
+                background: {theme.COLORS['card_alt']};
+                border: 1px solid {theme.COLORS['border']};
+                border-radius: 6px;
+                padding: 2px 8px;
+                color: {theme.COLORS['text']};
+                font-size: 11px;
+            }}
+            QComboBox::drop-down {{ width: 16px; border-left: 1px solid {theme.COLORS['border']}; }}
+            {theme.combo_popup_qss()}
+        """
+        if getattr(self, 'engine_combo', None) is not None:
+            self.engine_combo.setStyleSheet(combo_qss)
+        if getattr(self, 'yt_input', None) is not None:
+            self.yt_input.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {theme.COLORS['card_alt']};
+                    border: 1px solid {theme.COLORS['border']};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    color: {theme.COLORS['text']};
+                    font-size: 12px;
+                }}
+                QLineEdit:focus {{ border-color: {theme.COLORS['accent']}; }}
+            """)
+        button_qss = theme.secondary_button_qss()
+        for button in (
+            getattr(self, 'play_btn', None),
+            getattr(self, 'prev_btn', None),
+            getattr(self, 'next_btn', None),
+            getattr(self, 'refresh_lib_btn', None),
+            getattr(self, 'ff_audio_btn', None),
+            getattr(self, 'ff_snap_btn', None),
+        ):
+            if button is not None:
+                button.setStyleSheet(button_qss)
+        if getattr(self, 'yt_play_btn', None) is not None:
+            self.yt_play_btn.setStyleSheet(theme.primary_button_qss())
+        if getattr(self, 'stop_btn', None) is not None:
+            self.stop_btn.setStyleSheet(theme.danger_button_qss())
+        if getattr(self, 'screen_stack', None) is not None:
+            self.screen_stack.setStyleSheet(f"""
+                QStackedWidget {{
+                    background: {theme.COLORS['card_alt']};
+                    border: 1px solid {theme.COLORS['border']};
+                    border-radius: 12px;
+                }}
+            """)
+        if getattr(self, 'opencv_screen', None) is not None:
+            self.opencv_screen.setStyleSheet(f"background: {theme.COLORS['card_alt']}; border-radius: 12px;")
+        slider_qss = f"""
+            QSlider::groove:horizontal {{ border: none; height: 4px; background: {theme.COLORS['border']}; border-radius: 2px; }}
+            QSlider::sub-page:horizontal {{ background: {theme.COLORS['accent']}; border-radius: 2px; }}
+            QSlider::handle:horizontal {{ background: {theme.COLORS['accent']}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
+        """
+        for slider in (getattr(self, 'slider', None), getattr(self, 'vol_slider', None)):
+            if slider is not None:
+                slider.setStyleSheet(slider_qss)
+        if getattr(self, 'mute_btn', None) is not None:
+            self.mute_btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; color: {theme.COLORS['muted']}; font-size: 12px; }}"
+                f"QPushButton:hover {{ color: {theme.COLORS['accent']}; }}"
+            )
+        if getattr(self, 'library_tabs', None) is not None:
+            self.library_tabs.setStyleSheet(f"""
+                QTabWidget::pane {{ border: 1px solid {theme.COLORS['border']}; background: {theme.COLORS['panel']}; border-radius: 8px; margin-top: -1px; }}
+                QTabBar::tab {{
+                    background: transparent; color: {theme.COLORS['muted']}; padding: 6px 12px; font-size: 11px; font-weight: 600;
+                    border-bottom: 2px solid transparent;
+                }}
+                QTabBar::tab:selected {{ color: {theme.COLORS['accent']}; border-bottom: 2px solid {theme.COLORS['accent']}; }}
+            """)
+        list_style = theme.list_widget_qss("QListWidget", compact=True)
+        for list_widget in (
+            getattr(self, 'video_list', None),
+            getattr(self, 'music_list', None),
+            getattr(self, 'playlist_list', None),
+        ):
+            if list_widget is not None:
+                list_widget.setStyleSheet(list_style)
+        if getattr(self, 'ff_progress', None) is not None:
+            self.ff_progress.setStyleSheet(theme.progress_bar_qss())
 
     # ------------------------------------------------------------------
     # Library Scanner & Selector

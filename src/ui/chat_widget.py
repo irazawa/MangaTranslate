@@ -42,6 +42,7 @@ from PyQt5.QtGui import (
 )
 
 from src.ui.notifications import notify_banner, notify_toast
+from src.ui import theme
 
 logger = logging.getLogger(__name__)
 
@@ -852,6 +853,7 @@ class AIChatWidgetContent(QWidget):
 
         # ---- Top bar ----
         top_bar = QFrame()
+        self._top_bar = top_bar
         top_bar.setFrameShape(QFrame.NoFrame)
         top_bar.setFixedHeight(48)
         top_bar.setStyleSheet("""
@@ -883,6 +885,7 @@ class AIChatWidgetContent(QWidget):
 
         # ---- Model selector row ----
         model_bar = QFrame()
+        self._model_bar = model_bar
         model_bar.setFrameShape(QFrame.NoFrame)
         model_bar.setStyleSheet("QFrame { background: #090a0f; border-bottom: 1px solid #1a2235; }")
         model_layout = QHBoxLayout(model_bar)
@@ -890,6 +893,7 @@ class AIChatWidgetContent(QWidget):
         model_layout.setSpacing(8)
 
         model_lbl = QLabel("Model:")
+        self._model_label = model_lbl
         model_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
         model_layout.addWidget(model_lbl)
 
@@ -945,6 +949,7 @@ class AIChatWidgetContent(QWidget):
 
         # ---- Input area ----
         input_frame = QFrame()
+        self._input_frame = input_frame
         input_frame.setFrameShape(QFrame.NoFrame)
         input_frame.setStyleSheet("""
             QFrame {
@@ -1007,6 +1012,76 @@ class AIChatWidgetContent(QWidget):
 
         # Populate models on first load
         self.refresh_models()
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        frame_qss = f"""
+            QFrame {{
+                background: {theme.COLORS['panel']};
+                border-color: {theme.COLORS['border']};
+            }}
+        """
+        for frame in (getattr(self, '_top_bar', None), getattr(self, '_model_bar', None), getattr(self, '_input_frame', None)):
+            if frame is not None:
+                frame.setStyleSheet(frame_qss)
+        if getattr(self, '_title_label', None) is not None:
+            self._title_label.setStyleSheet(f"color: {theme.COLORS['accent']}; font-size: 13px; font-weight: 700;")
+        if getattr(self, '_model_label', None) is not None:
+            self._model_label.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 11px;")
+        if getattr(self, '_model_combo', None) is not None:
+            self._model_combo.setStyleSheet(f"""
+                QComboBox {{
+                    background: {theme.COLORS['card_alt']};
+                    border: 1px solid {theme.COLORS['border']};
+                    border-radius: 8px;
+                    padding: 4px 8px;
+                    color: {theme.COLORS['text']};
+                    font-size: 11px;
+                    min-width: 180px;
+                }}
+                QComboBox::drop-down {{ width: 20px; border-left: 1px solid {theme.COLORS['border']}; }}
+                {theme.combo_popup_qss()}
+            """)
+        if getattr(self, '_scroll', None) is not None:
+            self._scroll.setStyleSheet(f"""
+                QScrollArea {{ background: {theme.COLORS['bg']}; border: none; }}
+                QScrollBar:vertical {{ background: {theme.COLORS['panel']}; width: 6px; border-radius: 3px; }}
+                QScrollBar::handle:vertical {{ background: {theme.COLORS['border']}; border-radius: 3px; }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            """)
+        if getattr(self, '_messages_container', None) is not None:
+            self._messages_container.setStyleSheet(f"background: {theme.COLORS['bg']};")
+        if getattr(self, '_input_box', None) is not None:
+            self._input_box.setStyleSheet(f"""
+                QTextEdit {{
+                    background: {theme.COLORS['card_alt']};
+                    border: 1px solid {theme.COLORS['border']};
+                    border-radius: 12px;
+                    padding: 8px 12px;
+                    color: {theme.COLORS['text']};
+                    font-size: 13px;
+                }}
+                QTextEdit:focus {{
+                    border: 1px solid {theme.COLORS['accent']};
+                }}
+            """)
+        if getattr(self, '_send_btn', None) is not None:
+            self._send_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {theme.COLORS['accent']};
+                    color: {theme.COLORS['bg']};
+                    border: none;
+                    border-radius: 21px;
+                    font-size: 16px;
+                    font-weight: 700;
+                }}
+                QPushButton:hover {{ background: {theme.COLORS['accent_hover']}; }}
+                QPushButton:disabled {{ background: {theme.COLORS['border']}; color: {theme.COLORS['muted']}; }}
+            """)
+        if getattr(self, '_status_label', None) is not None:
+            self._status_label.setStyleSheet(
+                f"color: {theme.COLORS['muted']}; font-size: 10px; padding: 2px 10px 4px 10px; background: {theme.COLORS['bg']};"
+            )
 
     @staticmethod
     def _make_icon_btn(icon: str, tooltip: str, slot) -> QToolButton:
@@ -1435,6 +1510,7 @@ class AIChatWidget(QWidget):
 
         # Sleek dropdown/selector to switch modes
         mode_lbl = QLabel("Mode:")
+        self.mode_label = mode_lbl
         mode_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: bold; background: transparent;")
         switcher_layout.addWidget(mode_lbl)
 
@@ -1487,6 +1563,7 @@ class AIChatWidget(QWidget):
             self._video_ok = False
 
         self.root_layout.addWidget(self.stack, 1)
+        self.refresh_theme()
 
     def _on_mode_changed(self, idx: int):
         self.stack.setCurrentIndex(idx)
@@ -1496,6 +1573,34 @@ class AIChatWidget(QWidget):
                 self.video_player_widget.player.pause()
             except Exception:
                 pass
+
+    def refresh_theme(self):
+        self.switcher_bar.setStyleSheet(f"""
+            QFrame {{
+                background: {theme.COLORS['panel']};
+                border-bottom: 1px solid {theme.COLORS['border']};
+            }}
+        """)
+        self.mode_label.setStyleSheet(
+            f"color: {theme.COLORS['muted']}; font-size: 11px; font-weight: bold; background: transparent;"
+        )
+        self.mode_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {theme.COLORS['card_alt']};
+                border: 1px solid {theme.COLORS['border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: {theme.COLORS['accent']};
+                font-size: 11px;
+                font-weight: bold;
+                min-width: 140px;
+            }}
+            QComboBox::drop-down {{ width: 18px; border-left: 1px solid {theme.COLORS['border']}; }}
+            {theme.combo_popup_qss()}
+        """)
+        for child in (getattr(self, 'chat_content_widget', None), getattr(self, 'video_player_widget', None)):
+            if child is not None and hasattr(child, 'refresh_theme'):
+                child.refresh_theme()
 
     def refresh_models(self):
         """Forward refresh_models call to the active chatbot widget."""

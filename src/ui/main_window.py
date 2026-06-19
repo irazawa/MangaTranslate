@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -83,7 +83,7 @@ from PyQt5.QtGui import (
     QPixmap, QPainter, QPen, QColor, QFont, QKeySequence, QPolygon,
     QPainterPath, QPolygonF, QImage, QIcon, QWheelEvent, QTextDocument,
     QTextCharFormat, QTextCursor, QBrush, QFontMetrics, QTransform, QTextBlockFormat,
-    QFontDatabase
+    QFontDatabase, QPalette
 )
 from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import (
@@ -98,7 +98,8 @@ from src.core.app_info import APP_VERSION, app_title
 from src.ui.dialogs import *
 from src.ui.canvas import *
 from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
-from src.ui.theme import app_stylesheet, compact_primary_button_qss, toggle_button_qss
+from src.ui import theme
+from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
 from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
 from src.utils.helpers import *
 from src.utils.geometry import *
@@ -393,12 +394,16 @@ class MangaOCRApp(QMainWindow):
             self.setWidgetResizable(True)
             self.setMaximumHeight(max_height)
             self.setFrameShape(QFrame.NoFrame)
-            self.setStyleSheet("background: transparent;")
+            self.setStyleSheet(
+                f"QScrollArea {{ background: transparent; border: none; color: {theme.COLORS['text']}; }}"
+                f"QScrollBar:vertical {{ background: {theme.COLORS['panel']}; width: 6px; }}"
+                f"QScrollBar::handle:vertical {{ background: {theme.COLORS['border']}; border-radius: 3px; }}"
+            )
             # Content
             self.content = QLabel(text)
             self.content.setWordWrap(True)
             self.content.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-            self.content.setStyleSheet("background: transparent; color: #ffffff;")
+            self.content.setStyleSheet(f"background: transparent; color: {theme.COLORS['text']};")
             self.content.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.setWidget(self.content)
             
@@ -1132,6 +1137,7 @@ class MangaOCRApp(QMainWindow):
 
         main_layout.addWidget(self.splitter)
         self._apply_right_panel_styles()
+        self._refresh_workspace_surface_theme()
 
     def _normalized_workspace_splitter_sizes(self, saved_sizes):
         default_sizes = [260, 960, 430]
@@ -1245,15 +1251,16 @@ class MangaOCRApp(QMainWindow):
         y = min(max(frame.top(), available.top()), available.bottom() - height + 1)
         self.setGeometry(x, y, width, height)
 
-    def _run_window_geometry_guard(self):
+    def _run_window_geometry_guard(self, rebalance=True):
         self._update_center_panel_constraints()
-        self._rebalance_workspace_splitter()
+        if rebalance:
+            self._rebalance_workspace_splitter()
         self._sync_image_canvas_geometry()
         self._clamp_main_window_to_screen()
 
-    def _schedule_window_geometry_guard(self):
-        QTimer.singleShot(0, self._run_window_geometry_guard)
-        QTimer.singleShot(60, self._run_window_geometry_guard)
+    def _schedule_window_geometry_guard(self, rebalance=True):
+        QTimer.singleShot(0, lambda: self._run_window_geometry_guard(rebalance=rebalance))
+        QTimer.singleShot(60, lambda: self._run_window_geometry_guard(rebalance=rebalance))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1296,7 +1303,7 @@ class MangaOCRApp(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── Header bar ──────────────────────────────────────────────────────────
+        # â”€â”€ Header bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header_bar = QWidget()
         header_bar.setObjectName("rp-header-bar")
         header_bar.setFixedHeight(46)
@@ -1304,7 +1311,7 @@ class MangaOCRApp(QMainWindow):
         header_h.setContentsMargins(14, 0, 14, 0)
         header_h.setSpacing(8)
 
-        header_icon = QLabel("⚡")
+        header_icon = QLabel("âš¡")
         header_icon.setStyleSheet("font-size:16px; background:transparent; color:#38bdf8;")
         header_h.addWidget(header_icon)
 
@@ -1314,13 +1321,13 @@ class MangaOCRApp(QMainWindow):
         header_h.addStretch()
         main_layout.addWidget(header_bar)
 
-        # ── Separator ────────────────────────────────────────────────────────────
+        # â”€â”€ Separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setObjectName("rp-sep")
         main_layout.addWidget(sep)
 
-        # ── Body: icon sidebar (left) + stacked content (right) ─────────────────
+        # â”€â”€ Body: icon sidebar (left) + stacked content (right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         body_widget = QWidget()
         body_widget.setMinimumWidth(0)
         body_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
@@ -1328,7 +1335,7 @@ class MangaOCRApp(QMainWindow):
         body_h.setContentsMargins(0, 0, 0, 0)
         body_h.setSpacing(0)
 
-        # ── Icon sidebar ─────────────────────────────────────────────────────────
+        # â”€â”€ Icon sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sidebar = QWidget()
         sidebar.setObjectName("rp-sidebar")
         sidebar.setFixedWidth(70)
@@ -1346,17 +1353,17 @@ class MangaOCRApp(QMainWindow):
 
         # Tab definitions: (label_short, emoji, tooltip, widget_builder)
         tab_defs = [
-            ("OCR",      "🔍", "Translate & OCR settings",     self._create_translate_tab),
-            ("Typeset",  "✏️", "Typography & text styling",    self._create_typeset_tab),
-            ("Layers",   "🗂️", "Canvas layer manager",         self._create_layers_tab),
-            ("Cleanup",  "🧹", "Inpainting & detection tools",  self._create_cleanup_tab),
-            ("History",  "📋", "Translation history log",       self._create_history_tab),
-            ("Scenes",   "🎬", "Scene / dialogue manager",      self._create_scene_tab),
-            ("AI Cfg",   "🤖", "AI models & hardware config",   self._create_ai_hardware_tab),
+            ("OCR",      "ðŸ”", "Translate & OCR settings",     self._create_translate_tab),
+            ("Typeset",  "âœï¸", "Typography & text styling",    self._create_typeset_tab),
+            ("Layers",   "ðŸ—‚ï¸", "Canvas layer manager",         self._create_layers_tab),
+            ("Cleanup",  "ðŸ§¹", "Inpainting & detection tools",  self._create_cleanup_tab),
+            ("History",  "ðŸ“‹", "Translation history log",       self._create_history_tab),
+            ("Scenes",   "ðŸŽ¬", "Scene / dialogue manager",      self._create_scene_tab),
+            ("AI Cfg",   "ðŸ¤–", "AI models & hardware config",   self._create_ai_hardware_tab),
         ]
         if self._chat_widget is not None:
             # Insert chat after OCR
-            tab_defs.insert(1, ("Chat", "💬", "AI Chat & Video", None))
+            tab_defs.insert(1, ("Chat", "ðŸ’¬", "AI Chat & Video", None))
 
         compact_markers = {
             "OCR": "OCR",
@@ -1424,7 +1431,7 @@ class MangaOCRApp(QMainWindow):
         page_idx = 0
         for short_label, marker, tip, builder in tab_defs:
             if builder is None:
-                # Chat widget — already built
+                # Chat widget â€” already built
                 widget = self._chat_widget
                 page = widget
                 if page is not None:
@@ -1455,18 +1462,18 @@ class MangaOCRApp(QMainWindow):
         sidebar_v.addStretch()
         body_h.addWidget(sidebar)
 
-        # ── Vertical separator ───────────────────────────────────────────────────
+        # â”€â”€ Vertical separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         vsep = QFrame()
         vsep.setFrameShape(QFrame.VLine)
         vsep.setObjectName("rp-vsep")
         body_h.addWidget(vsep)
 
-        # ── Content area ─────────────────────────────────────────────────────────
+        # â”€â”€ Content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         body_h.addWidget(self.right_stack, 1)
 
         main_layout.addWidget(body_widget, 1)
 
-        # ── Bottom status & actions bar ──────────────────────────────────────────
+        # â”€â”€ Bottom status & actions bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
         sep2.setObjectName("rp-sep")
@@ -1478,17 +1485,17 @@ class MangaOCRApp(QMainWindow):
         bottom_v.setContentsMargins(10, 8, 10, 8)
         bottom_v.setSpacing(6)
 
-        # ── Batch action row ────────────────────────────────────────────────────
+        # â”€â”€ Batch action row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         batch_row = QHBoxLayout()
         batch_row.setSpacing(6)
-        self.process_batch_button = QPushButton("⚡ Batch Now")
+        self.process_batch_button = QPushButton("âš¡ Batch Now")
         self.process_batch_button.setObjectName("rp-action-btn")
         self.process_batch_button.setText("Batch Now")
         self.process_batch_button.setToolTip("Process batch queue now")
         self.process_batch_button.clicked.connect(self.start_batch_processing)
         batch_row.addWidget(self.process_batch_button)
 
-        self.batch_process_button = QPushButton("🔍 Detect All")
+        self.batch_process_button = QPushButton("ðŸ” Detect All")
         self.batch_process_button.setObjectName("rp-action-btn")
         self.batch_process_button.setText("Detect All")
         self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder")
@@ -1497,16 +1504,16 @@ class MangaOCRApp(QMainWindow):
         bottom_v.addLayout(batch_row)
         self.on_batch_mode_changed(False)
 
-        # ── Confirm/Cancel detection (hidden by default) ──────────────────────
+        # â”€â”€ Confirm/Cancel detection (hidden by default) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         detect_row = QHBoxLayout()
         detect_row.setSpacing(6)
-        self.confirm_items_button = QPushButton("✔ Confirm (0)")
+        self.confirm_items_button = QPushButton("âœ” Confirm (0)")
         self.confirm_items_button.setObjectName("rp-confirm-btn")
         self.confirm_items_button.setText("Confirm (0)")
         self.confirm_items_button.clicked.connect(self.process_confirmed_detections)
         self.confirm_items_button.setVisible(False)
         detect_row.addWidget(self.confirm_items_button)
-        self.cancel_detection_button = QPushButton("✕ Cancel")
+        self.cancel_detection_button = QPushButton("âœ• Cancel")
         self.cancel_detection_button.setObjectName("rp-danger-btn")
         self.cancel_detection_button.setText("Cancel")
         self.cancel_detection_button.clicked.connect(self.cancel_interactive_batch)
@@ -1514,46 +1521,46 @@ class MangaOCRApp(QMainWindow):
         detect_row.addWidget(self.cancel_detection_button)
         bottom_v.addLayout(detect_row)
 
-        # ── Edit action row ─────────────────────────────────────────────────────
+        # â”€â”€ Edit action row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
-        self.undo_button = QPushButton("↩ Undo")
+        self.undo_button = QPushButton("â†© Undo")
         self.undo_button.setObjectName("rp-action-btn")
         self.undo_button.setText("Undo")
         self.undo_button.clicked.connect(self.undo_last_action)
         self.undo_button.setEnabled(False)
         edit_row.addWidget(self.undo_button)
 
-        self.redo_button = QPushButton("↪ Redo")
+        self.redo_button = QPushButton("â†ª Redo")
         self.redo_button.setObjectName("rp-action-btn")
         self.redo_button.setText("Redo")
         self.redo_button.clicked.connect(self.redo_last_action)
         self.redo_button.setEnabled(False)
         edit_row.addWidget(self.redo_button)
 
-        self.reset_button = QPushButton("🔄 Reset")
+        self.reset_button = QPushButton("ðŸ”„ Reset")
         self.reset_button.setObjectName("rp-action-btn")
         self.reset_button.setText("Reset")
         self.reset_button.clicked.connect(self.reset_view_to_original)
         edit_row.addWidget(self.reset_button)
 
-        self.save_button = QPushButton("💾 Save")
+        self.save_button = QPushButton("ðŸ’¾ Save")
         self.save_button.setObjectName("rp-save-btn")
         self.save_button.setText("Save")
         self.save_button.clicked.connect(self.save_image)
         edit_row.addWidget(self.save_button)
         bottom_v.addLayout(edit_row)
 
-        # ── Undo History Timeline (Feature #1) ──────────────────────────────────
+        # â”€â”€ Undo History Timeline (Feature #1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         timeline_header = QHBoxLayout()
         timeline_header.setContentsMargins(2, 4, 2, 0)
         timeline_header.setSpacing(4)
-        timeline_title_lbl = QLabel("🕐 History")
+        timeline_title_lbl = QLabel("ðŸ• History")
         timeline_title_lbl.setObjectName("rp-tiny-label")
         timeline_title_lbl.setText("History")
         timeline_header.addWidget(timeline_title_lbl)
         timeline_header.addStretch(1)
-        self._timeline_clear_btn = QPushButton("✕")
+        self._timeline_clear_btn = QPushButton("âœ•")
         self._timeline_clear_btn.setObjectName("rp-action-btn")
         self._timeline_clear_btn.setText("x")
         self._timeline_clear_btn.setFixedSize(18, 18)
@@ -1567,39 +1574,11 @@ class MangaOCRApp(QMainWindow):
         self.undo_timeline_list.setFixedHeight(110)
         self.undo_timeline_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.undo_timeline_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.undo_timeline_list.setStyleSheet("""
-            QListWidget#undo-timeline {
-                background-color: #060810;
-                border: 1px solid #1e293b;
-                border-radius: 4px;
-                font-size: 8pt;
-                color: #94a3b8;
-                outline: none;
-            }
-            QListWidget#undo-timeline::item {
-                padding: 2px 6px;
-                border-radius: 3px;
-            }
-            QListWidget#undo-timeline::item:selected {
-                background-color: #1e3a5f;
-                color: #38bdf8;
-            }
-            QListWidget#undo-timeline::item:hover {
-                background-color: #0f172a;
-            }
-            QScrollBar:vertical {
-                background: #0e111a;
-                width: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #334155;
-                border-radius: 3px;
-            }
-        """)
+        self.undo_timeline_list.setStyleSheet(self._undo_timeline_qss())
         self.undo_timeline_list.itemClicked.connect(self._on_timeline_item_clicked)
         bottom_v.addWidget(self.undo_timeline_list)
 
-        # ── Status metrics (compact 2-row grid) ─────────────────────────────────
+        # â”€â”€ Status metrics (compact 2-row grid) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         metrics_widget = QWidget()
         metrics_widget.setObjectName("rp-metrics")
         metrics_grid = QGridLayout(metrics_widget)
@@ -1638,7 +1617,7 @@ class MangaOCRApp(QMainWindow):
         self.translated_label = QLabel("0"); self.translated_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.translated_label, 1, 5)
 
-        # Row 2 — provider + model  (spans full width)
+        # Row 2 â€” provider + model  (spans full width)
         metrics_grid.addWidget(_mlabel("Provider"), 2, 0)
         self.provider_label = QLabel("-"); self.provider_label.setObjectName("rp-metric-val")
         self.provider_label.setMinimumWidth(0)
@@ -1653,7 +1632,7 @@ class MangaOCRApp(QMainWindow):
 
         bottom_v.addWidget(metrics_widget)
 
-        # ── Token rates (very small, collapsed to single row) ─────────────────
+        # â”€â”€ Token rates (very small, collapsed to single row) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         token_row = QHBoxLayout()
         token_row.setSpacing(12)
         self.input_tokens_label = QLabel("In: 0 tok")
@@ -1671,8 +1650,8 @@ class MangaOCRApp(QMainWindow):
         token_row.addStretch()
         bottom_v.addLayout(token_row)
 
-        # ── Cooldown label ───────────────────────────────────────────────────────
-        self.countdown_label = QLabel("⏳ Cooldown: 60s")
+        # â”€â”€ Cooldown label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        self.countdown_label = QLabel("â³ Cooldown: 60s")
         self.countdown_label.setObjectName("rp-countdown")
         self.countdown_label.setText("Cooldown: 60s")
         self.countdown_label.setVisible(False)
@@ -1680,7 +1659,7 @@ class MangaOCRApp(QMainWindow):
 
         main_layout.addWidget(bottom_bar)
 
-        # ── Activate first tab ───────────────────────────────────────────────────
+        # â”€â”€ Activate first tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if self._sidebar_buttons:
             self._on_sidebar_nav(0)
 
@@ -1701,14 +1680,14 @@ class MangaOCRApp(QMainWindow):
         if not panel_widget:
             return
 
-        panel_widget.setStyleSheet("""
-            /* ── Root panel ─────────────────────────────────────────────────── */
+        panel_qss = """
+            /* â”€â”€ Root panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #right-panel {
                 background-color: #0b0e17;
                 border-left: 1px solid #1a2235;
             }
 
-            /* ── Header bar ─────────────────────────────────────────────────── */
+            /* â”€â”€ Header bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-header-bar {
                 background-color: #0d111b;
                 border-bottom: 1px solid #1a2235;
@@ -1722,7 +1701,7 @@ class MangaOCRApp(QMainWindow):
                 padding: 0px;
             }
 
-            /* ── Separators ─────────────────────────────────────────────────── */
+            /* â”€â”€ Separators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-sep {
                 background-color: #1a2235;
                 border: none;
@@ -1734,7 +1713,7 @@ class MangaOCRApp(QMainWindow):
                 max-width: 1px;
             }
 
-            /* ── Icon sidebar ───────────────────────────────────────────────── */
+            /* â”€â”€ Icon sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-sidebar {
                 background-color: #0d111b;
             }
@@ -1757,7 +1736,7 @@ class MangaOCRApp(QMainWindow):
                 border: 1px solid #1e3a5f;
             }
 
-            /* ── Stacked content area ───────────────────────────────────────── */
+            /* â”€â”€ Stacked content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack {
                 background-color: #0b0e17;
             }
@@ -1770,7 +1749,7 @@ class MangaOCRApp(QMainWindow):
                 border: none;
             }
 
-            /* ── Group boxes ────────────────────────────────────────────────── */
+            /* â”€â”€ Group boxes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack QGroupBox {
                 background: rgba(255,255,255,0.015);
                 border: 1px solid #1e293b;
@@ -1788,7 +1767,7 @@ class MangaOCRApp(QMainWindow):
                 letter-spacing: 0.3px;
             }
 
-            /* ── Section label titles (used instead of QGroupBox in new tabs) */
+            /* â”€â”€ Section label titles (used instead of QGroupBox in new tabs) */
             QLabel#rp-section-title {
                 color: #38bdf8;
                 font-size: 9.5pt;
@@ -1797,7 +1776,7 @@ class MangaOCRApp(QMainWindow):
                 background: transparent;
             }
 
-            /* ── Input controls ─────────────────────────────────────────────── */
+            /* â”€â”€ Input controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack QComboBox,
             #rp-stack QLineEdit,
             #rp-stack QSpinBox,
@@ -1824,7 +1803,7 @@ class MangaOCRApp(QMainWindow):
                 height: 10px;
             }
 
-            /* ── Checkboxes & radios ─────────────────────────────────────────── */
+            /* â”€â”€ Checkboxes & radios â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack QCheckBox,
             #rp-stack QRadioButton {
                 color: #94a3b8;
@@ -1851,7 +1830,7 @@ class MangaOCRApp(QMainWindow):
                 border-color: #38bdf8;
             }
 
-            /* ── Standard button ─────────────────────────────────────────────── */
+            /* â”€â”€ Standard button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack QPushButton {
                 background-color: #141c2e;
                 color: #94a3b8;
@@ -1861,12 +1840,12 @@ class MangaOCRApp(QMainWindow):
                 font-weight: 600;
                 font-size: 9.5pt;
             }
-            #rp-stack QPushButton:hover:!disabled {
+            #rp-stack QPushButton:enabled:hover {
                 background-color: #1e3050;
                 color: #e2e8f0;
                 border-color: #2d4a72;
             }
-            #rp-stack QPushButton:pressed:!disabled {
+            #rp-stack QPushButton:enabled:pressed {
                 background-color: #1a4276;
                 color: #ffffff;
             }
@@ -1876,7 +1855,7 @@ class MangaOCRApp(QMainWindow):
                 border-color: #131c2e;
             }
 
-            /* ── Sliders ─────────────────────────────────────────────────────── */
+            /* â”€â”€ Sliders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-stack QSlider::groove:horizontal {
                 border: none;
                 height: 4px;
@@ -1896,13 +1875,13 @@ class MangaOCRApp(QMainWindow):
                 border-radius: 2px;
             }
 
-            /* ── Bottom bar ──────────────────────────────────────────────────── */
+            /* â”€â”€ Bottom bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-bottom-bar {
                 background-color: #0d111b;
                 border-top: 1px solid #1a2235;
             }
 
-            /* ── Bottom action buttons ───────────────────────────────────────── */
+            /* â”€â”€ Bottom action buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             QPushButton#rp-action-btn {
                 background-color: #141c2e;
                 color: #94a3b8;
@@ -1912,7 +1891,7 @@ class MangaOCRApp(QMainWindow):
                 font-size: 9pt;
                 font-weight: 600;
             }
-            QPushButton#rp-action-btn:hover:!disabled {
+            QPushButton#rp-action-btn:enabled:hover {
                 background-color: #1e3050;
                 color: #e2e8f0;
                 border-color: #38bdf8;
@@ -1968,7 +1947,7 @@ class MangaOCRApp(QMainWindow):
                 color: #fecaca;
             }
 
-            /* ── Metrics grid ────────────────────────────────────────────────── */
+            /* â”€â”€ Metrics grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             #rp-metrics {
                 background: rgba(255,255,255,0.02);
                 border: 1px solid #1a2235;
@@ -1995,7 +1974,7 @@ class MangaOCRApp(QMainWindow):
                 padding: 0;
             }
 
-            /* ── Token row ───────────────────────────────────────────────────── */
+            /* â”€â”€ Token row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             QLabel#rp-tiny-label {
                 color: #374151;
                 font-size: 8pt;
@@ -2003,14 +1982,166 @@ class MangaOCRApp(QMainWindow):
                 padding: 0;
             }
 
-            /* ── Countdown ───────────────────────────────────────────────────── */
+            /* â”€â”€ Countdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
             QLabel#rp-countdown {
                 color: #fbbf24;
                 font-size: 9pt;
                 font-weight: 600;
                 background: transparent;
             }
-        """)
+        """
+        for source, target in {
+            "#0b0e17": theme.COLORS["bg"],
+            "#0d111b": theme.COLORS["panel"],
+            "#1a2235": theme.COLORS["border"],
+            "#e2e8f0": theme.COLORS["text"],
+            "#4a5c78": theme.COLORS["muted"],
+            "#141c2e": theme.COLORS["card_alt"],
+            "#94a3b8": theme.COLORS["muted"],
+            "#162035": theme.COLORS["card_alt"],
+            "#38bdf8": theme.COLORS["accent"],
+            "#1e3a5f": theme.COLORS["border"],
+            "#cbd5e1": theme.COLORS["text"],
+            "#1e293b": theme.COLORS["border"],
+            "#0f1624": theme.COLORS["card_alt"],
+            "#1e2d42": theme.COLORS["border"],
+            "#2d3f58": theme.COLORS["border"],
+            "#1e3050": theme.COLORS["card_alt"],
+            "#2d4a72": theme.COLORS["accent"],
+            "#0d1220": theme.COLORS["panel"],
+            "#374151": theme.COLORS["muted"],
+            "#131c2e": theme.COLORS["border"],
+            "#111827": theme.COLORS["border"],
+            "#334155": theme.COLORS["border"],
+        }.items():
+            panel_qss = panel_qss.replace(source, target)
+        panel_widget.setStyleSheet(panel_qss)
+
+    def _preview_label_qss(self) -> str:
+        return (
+            f"background-color: {theme.COLORS['panel']};"
+            f"border: 1px solid {theme.COLORS['border']};"
+            "border-radius: 12px;"
+            "padding: 10px;"
+            f"color: {theme.COLORS['text']};"
+        )
+
+    def _undo_timeline_qss(self) -> str:
+        return (
+            theme.list_widget_qss("QListWidget#undo-timeline", compact=True)
+            + f"""
+            QListWidget#undo-timeline {{
+                font-size: 8pt;
+            }}
+            QScrollBar:vertical {{
+                background: {theme.COLORS["panel"]};
+                width: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {theme.COLORS["border"]};
+                border-radius: 3px;
+            }}
+            """
+        )
+
+    def _layers_list_qss(self) -> str:
+        return (
+            f"""
+            QListWidget#layers-list {{
+                background-color: {theme.COLORS["panel"]};
+                border: 1px solid {theme.COLORS["border"]};
+                border-radius: 8px;
+                padding: 4px;
+                color: {theme.COLORS["text"]};
+                outline: none;
+            }}
+            QListWidget#layers-list::item {{
+                background-color: {theme.COLORS["card_alt"]};
+                border: 1px solid {theme.COLORS["border"]};
+                border-radius: 6px;
+                margin-bottom: 4px;
+                padding: 4px;
+            }}
+            QListWidget#layers-list::item:hover {{
+                background-color: {theme.COLORS["border"]};
+                color: {theme.COLORS["text"]};
+            }}
+            QListWidget#layers-list::item:selected {{
+                background-color: {theme.COLORS["border"]};
+                border: 1px solid {theme.COLORS["accent"]};
+                color: {theme.COLORS["accent"]};
+            }}
+            """
+        )
+
+    def _small_layer_button_qss(self, danger: bool = False, active: bool = False) -> str:
+        if danger:
+            return (
+                f"background-color: {theme.COLORS['danger']};"
+                f"border: 1px solid {theme.COLORS['danger']};"
+                f"color: {theme.COLORS['bg']};"
+                "border-radius: 5px;"
+            )
+        border = theme.COLORS["accent"] if active else theme.COLORS["border"]
+        color = theme.COLORS["accent"] if active else theme.COLORS["muted"]
+        return (
+            f"background-color: {theme.COLORS['card_alt']};"
+            f"border: 1px solid {border};"
+            f"color: {color};"
+            "border-radius: 5px;"
+        )
+
+    def _refresh_workspace_surface_theme(self):
+        for attr in ('undo_timeline_list',):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(self._undo_timeline_qss())
+        if getattr(self, 'layers_list_widget', None) is not None:
+            self.layers_list_widget.setStyleSheet(self._layers_list_qss())
+        for attr in ('font_preview_label', 'typeset_preview_label'):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(self._preview_label_qss())
+        for attr in (
+            'bold_toggle', 'italic_toggle', 'underline_toggle', 'outline_toggle',
+            'align_left_button', 'align_center_button', 'align_right_button',
+            'orientation_horizontal_button', 'orientation_vertical_button',
+        ):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(self._typeset_button_stylesheet())
+        icon_map = (
+            ('bold_toggle', self._make_style_icon, 'B'),
+            ('italic_toggle', self._make_style_icon, 'I'),
+            ('underline_toggle', self._make_style_icon, 'U'),
+        )
+        for attr, factory, value in icon_map:
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setIcon(factory(value))
+        if getattr(self, 'outline_toggle', None) is not None:
+            self.outline_toggle.setIcon(self._make_outline_icon())
+        for table in list(getattr(self, 'result_table_registry', {}).get('history', [])):
+            try:
+                table.setStyleSheet(theme.table_qss())
+                table.horizontalHeader().setStyleSheet(theme.table_header_qss())
+            except Exception:
+                pass
+        for combo in self.findChildren(QComboBox):
+            try:
+                combo.view().setStyleSheet(theme.combo_popup_qss())
+            except Exception:
+                pass
+        try:
+            self._update_color_button()
+            self._update_outline_color_button()
+            self._update_font_preview_label()
+            self._update_typeset_preview()
+            self.refresh_history_views()
+            self._refresh_undo_timeline()
+            self._refresh_layers_list()
+        except Exception:
+            pass
 
     def _create_translate_tab(self):
         tab = QWidget()
@@ -2018,7 +2149,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(14)
 
-        # ── OCR & Language ──────────────────────────────────────────────────
+        # â”€â”€ OCR & Language â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         ocr_group = QGroupBox("OCR & Language")
         ocr_form = QFormLayout(ocr_group)
         ocr_form.setContentsMargins(12, 16, 12, 12)
@@ -2069,7 +2200,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(ocr_group)
 
-        # ── Per-Language Orientation ─────────────────────────────────────────
+        # â”€â”€ Per-Language Orientation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         lang_ori_group = QGroupBox("Per-Language Orientation")
         lang_ori_form = QFormLayout(lang_ori_group)
         lang_ori_form.setContentsMargins(12, 16, 12, 12)
@@ -2091,7 +2222,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(lang_ori_group)
 
-        # ── Detection Source ─────────────────────────────────────────────────
+        # â”€â”€ Detection Source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         detection_group = QGroupBox("OCR Detection Source")
         det_layout = QVBoxLayout(detection_group)
         det_layout.setContentsMargins(12, 16, 12, 12)
@@ -2378,11 +2509,11 @@ class MangaOCRApp(QMainWindow):
 
         # Title/desc
         desc = QLabel("Canvas Layers Manager")
-        desc.setStyleSheet("font-size: 13px; font-weight: bold; color: #38bdf8;")
+        desc.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {theme.COLORS['accent']};")
         layout.addWidget(desc)
 
         help_lbl = QLabel("Right-Click: Rename / Fast Opacity  |  Double-Click: Edit Text")
-        help_lbl.setStyleSheet("font-size: 9pt; color: #64748b;")
+        help_lbl.setStyleSheet(f"font-size: 9pt; color: {theme.COLORS['muted']};")
         layout.addWidget(help_lbl)
 
         # Opacity Slider section
@@ -2405,25 +2536,7 @@ class MangaOCRApp(QMainWindow):
         self.layers_list_widget.setObjectName("layers-list")
         self.layers_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.layers_list_widget.customContextMenuRequested.connect(self._show_layer_context_menu)
-        self.layers_list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: #0c121d;
-                border: 1px solid #1f2b36;
-                border-radius: 8px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                background-color: #0f172a;
-                border: 1px solid #1e293b;
-                border-radius: 6px;
-                margin-bottom: 4px;
-                padding: 4px;
-            }
-            QListWidget::item:selected {
-                background-color: #1e293b;
-                border: 1px solid #38bdf8;
-            }
-        """)
+        self.layers_list_widget.setStyleSheet(self._layers_list_qss())
         self.layers_list_widget.itemSelectionChanged.connect(self._on_layer_selection_changed)
         layout.addWidget(self.layers_list_widget, 1)
 
@@ -2431,11 +2544,11 @@ class MangaOCRApp(QMainWindow):
         btn_row = QHBoxLayout()
         add_layer_btn = QPushButton("+ Add Layer")
         add_layer_btn.clicked.connect(self._add_new_manual_layer)
-        add_layer_btn.setStyleSheet("background-color: #1e293b; border: 1px solid #334155; color: #cbd5e1;")
+        add_layer_btn.setStyleSheet(theme.secondary_button_qss())
         
         clear_all_btn = QPushButton("Clear All")
         clear_all_btn.clicked.connect(self._clear_all_layers)
-        clear_all_btn.setStyleSheet("background-color: #7f1d1d; border: 1px solid #991b1b; color: #fecaca;")
+        clear_all_btn.setStyleSheet(theme.danger_button_qss())
         
         btn_row.addWidget(add_layer_btn)
         btn_row.addWidget(clear_all_btn)
@@ -2473,10 +2586,7 @@ class MangaOCRApp(QMainWindow):
             eye_btn.setIconSize(QSize(20, 20))
             eye_btn.setFixedSize(28, 28)
             eye_btn.setToolTip("Toggle Visibility")
-            eye_btn.setStyleSheet(
-                "background-color: #1e293b; border: 1px solid #38bdf8; color: #38bdf8;" if visible else
-                "background-color: #0f172a; border: 1px solid #334155; color: #64748b;"
-            )
+            eye_btn.setStyleSheet(self._small_layer_button_qss(active=visible))
             eye_btn.clicked.connect(partial(self._toggle_layer_visibility, area, eye_btn))
             layout.addWidget(eye_btn)
             
@@ -2487,10 +2597,7 @@ class MangaOCRApp(QMainWindow):
             lock_btn.setIconSize(QSize(20, 20))
             lock_btn.setFixedSize(28, 28)
             lock_btn.setToolTip("Toggle Lock")
-            lock_btn.setStyleSheet(
-                "background-color: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5;" if locked else
-                "background-color: #0f172a; border: 1px solid #334155; color: #64748b;"
-            )
+            lock_btn.setStyleSheet(self._small_layer_button_qss(danger=locked))
             lock_btn.clicked.connect(partial(self._toggle_layer_lock, area, lock_btn))
             layout.addWidget(lock_btn)
             
@@ -2504,19 +2611,29 @@ class MangaOCRApp(QMainWindow):
                     text_preview = f"Text Block #{idx+1}"
             
             label = QLabel(text_preview)
-            label.setStyleSheet("color: #cbd5e1; font-weight: bold;" if visible else "color: #475569; text-decoration: line-through;")
+            label.setStyleSheet(
+                f"color: {theme.COLORS['text']}; font-weight: bold;"
+                if visible else
+                f"color: {theme.COLORS['muted']}; text-decoration: line-through;"
+            )
             layout.addWidget(label, 1)
             
             # 4. Reorder Buttons
-            up_btn = QPushButton("▲")
+            up_btn = QPushButton("â–²")
             up_btn.setFixedSize(20, 20)
-            up_btn.setStyleSheet("background-color: #1e293b; border: none; color: #94a3b8; font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;")
+            up_btn.setStyleSheet(
+                self._small_layer_button_qss()
+                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
+            )
             up_btn.clicked.connect(partial(self._move_layer_up, area))
             layout.addWidget(up_btn)
             
-            down_btn = QPushButton("▼")
+            down_btn = QPushButton("â–¼")
             down_btn.setFixedSize(20, 20)
-            down_btn.setStyleSheet("background-color: #1e293b; border: none; color: #94a3b8; font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;")
+            down_btn.setStyleSheet(
+                self._small_layer_button_qss()
+                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
+            )
             down_btn.clicked.connect(partial(self._move_layer_down, area))
             layout.addWidget(down_btn)
             
@@ -2525,7 +2642,7 @@ class MangaOCRApp(QMainWindow):
             del_btn.setIcon(self._make_trash_icon())
             del_btn.setIconSize(QSize(16, 16))
             del_btn.setFixedSize(24, 24)
-            del_btn.setStyleSheet("background-color: #7f1d1d; border: none; color: #fca5a5;")
+            del_btn.setStyleSheet(self._small_layer_button_qss(danger=True))
             del_btn.clicked.connect(partial(self._delete_layer, area))
             layout.addWidget(del_btn)
             
@@ -2806,7 +2923,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(14)
 
-        # ── Defaults card ──
+        # â”€â”€ Defaults card â”€â”€
         defaults_group = QGroupBox("Defaults")
         defaults_layout = QVBoxLayout(defaults_group)
         defaults_layout.setContentsMargins(12, 14, 12, 12)
@@ -2830,7 +2947,7 @@ class MangaOCRApp(QMainWindow):
         defaults_layout.addLayout(actions_layout)
         layout.addWidget(defaults_group)
 
-        # ── Typography card ──
+        # â”€â”€ Typography card â”€â”€
         font_group = QGroupBox("Typography")
         font_layout = QGridLayout(font_group)
         font_layout.setContentsMargins(12, 14, 12, 12)
@@ -2883,7 +3000,7 @@ class MangaOCRApp(QMainWindow):
         self.font_preview_label.setMinimumHeight(56)
         self.font_preview_label.setMinimumWidth(0)
         self.font_preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.font_preview_label.setStyleSheet("border: 1px solid #1f2b3b; border-radius: 8px; padding: 10px; background-color: #161f2b;")
+        self.font_preview_label.setStyleSheet(self._preview_label_qss())
         font_layout.addWidget(self.font_preview_label, 4, 1)
 
         self.auto_font_checkbox = QCheckBox("Enable Auto-Font (Smart)")
@@ -2895,7 +3012,7 @@ class MangaOCRApp(QMainWindow):
         
         layout.addWidget(font_group)
 
-        # ── Appearance card ──
+        # â”€â”€ Appearance card â”€â”€
         appearance_group = QGroupBox("Appearance")
         appearance_layout = QGridLayout(appearance_group)
         appearance_layout.setContentsMargins(12, 14, 12, 12)
@@ -2964,7 +3081,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(appearance_group)
 
-        # ── Gradient card ──
+        # â”€â”€ Gradient card â”€â”€
         gradient_group = QGroupBox("Gradient Coloring")
         gradient_group.setCheckable(True)
         self.gradient_group = gradient_group
@@ -2979,7 +3096,7 @@ class MangaOCRApp(QMainWindow):
         self.grad_angle_spin = QDoubleSpinBox()
         self.grad_angle_spin.setRange(0.0, 360.0)
         self.grad_angle_spin.setSingleStep(15.0)
-        self.grad_angle_spin.setSuffix(" °")
+        self.grad_angle_spin.setSuffix(" Â°")
         self.grad_angle_spin.setMaximumWidth(100)
         self.grad_angle_spin.valueChanged.connect(self._on_typeset_gradient_changed)
         angle_row.addWidget(self.grad_angle_spin)
@@ -3004,7 +3121,7 @@ class MangaOCRApp(QMainWindow):
         
         layout.addWidget(gradient_group)
 
-        # ── Spacing & Size card ──
+        # â”€â”€ Spacing & Size card â”€â”€
         spacing_group = QGroupBox("Spacing & Size")
         spacing_layout = QGridLayout(spacing_group)
         spacing_layout.setContentsMargins(12, 14, 12, 12)
@@ -3059,7 +3176,7 @@ class MangaOCRApp(QMainWindow):
         spacing_layout.addLayout(char_row, 2, 1)
         layout.addWidget(spacing_group)
 
-        # ── Layout card ──
+        # â”€â”€ Layout card â”€â”€
         layout_group = QGroupBox("Layout")
         layout_grid = QGridLayout(layout_group)
         layout_grid.setContentsMargins(12, 14, 12, 12)
@@ -3101,7 +3218,7 @@ class MangaOCRApp(QMainWindow):
         layout_grid.addLayout(orientation_row, 1, 1)
         layout.addWidget(layout_group)
 
-        # ── Warp & Curve card ──
+        # â”€â”€ Warp & Curve card â”€â”€
         warp_group = QGroupBox("Text Warp & Curve")
         warp_layout = QGridLayout(warp_group)
         warp_layout.setContentsMargins(12, 14, 12, 12)
@@ -3148,7 +3265,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(warp_group)
 
-        # ── Preview card ──
+        # â”€â”€ Preview card â”€â”€
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_layout.setContentsMargins(12, 10, 12, 12)
@@ -3157,18 +3274,18 @@ class MangaOCRApp(QMainWindow):
         self.typeset_preview_label.setMinimumHeight(180)
         self.typeset_preview_label.setMinimumWidth(0)
         self.typeset_preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.typeset_preview_label.setStyleSheet("background-color: #172330; border: 1px solid #1f2b3b; border-radius: 12px;")
+        self.typeset_preview_label.setStyleSheet(self._preview_label_qss())
         preview_layout.addWidget(self.typeset_preview_label)
         layout.addWidget(preview_group)
 
-        # ── Recent Translations card ──
+        # â”€â”€ Recent Translations card â”€â”€
         recent_group = QGroupBox("Recent Translations")
         recent_layout = QVBoxLayout(recent_group)
         recent_layout.setContentsMargins(12, 10, 12, 12)
         
         recent_desc = QLabel("Click to apply recent translation to active text area.")
         recent_desc.setWordWrap(True)
-        recent_desc.setStyleSheet("color: #8fa6c5; font-size: 8.5pt;")
+        recent_desc.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
         recent_layout.addWidget(recent_desc)
         
         self.typeset_recent_list = QListWidget()
@@ -3848,23 +3965,8 @@ class MangaOCRApp(QMainWindow):
         table.setWordWrap(True)
         table.setAlternatingRowColors(True)
 
-        # Tambahkan styling
-        table.setStyleSheet("""
-            QTableWidget {
-                background-color: #2b2b2b;       /* dark gray */
-                alternate-background-color: #383838;
-                color: #ffffff;                  /* teks putih */
-                gridline-color: #444444;
-                font-size: 13px;
-            }
-            QHeaderView::section {
-                background-color: #3c3c3c;
-                color: #ffffff;
-                font-weight: bold;
-                border: 1px solid #555555;
-                padding: 4px;
-            }
-        """)
+        table.setStyleSheet(theme.table_qss())
+        table.horizontalHeader().setStyleSheet(theme.table_header_qss())
 
         return table
 
@@ -4022,7 +4124,11 @@ class MangaOCRApp(QMainWindow):
                  scroll_widget = self.ScrollableItemWidget(display_translated, max_height=120)
                  # Apply staged style if needed
                  if entry.get('staged'):
-                     scroll_widget.setStyleSheet("background: #313a3c;")
+                     scroll_widget.setStyleSheet(
+                         f"QScrollArea {{ background: {theme.COLORS['card_alt']}; border: 1px solid {theme.COLORS['accent']}; color: {theme.COLORS['text']}; }}"
+                         f"QScrollBar:vertical {{ background: {theme.COLORS['panel']}; width: 6px; }}"
+                         f"QScrollBar::handle:vertical {{ background: {theme.COLORS['border']}; border-radius: 3px; }}"
+                     )
                  table.setCellWidget(row, 2, scroll_widget)
             else:
                  table.setItem(row, 2, QTableWidgetItem(""))
@@ -4034,6 +4140,7 @@ class MangaOCRApp(QMainWindow):
 
             # --- Kolom Actions ---
             action_widget = QWidget(table)
+            action_widget.setStyleSheet("background: transparent;")
             action_layout = QGridLayout(action_widget)
             action_layout.setContentsMargins(2, 2, 2, 2)
             action_layout.setSpacing(4)
@@ -4631,7 +4738,7 @@ class MangaOCRApp(QMainWindow):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(14)
 
-        # ── AI Model & Translation ────────────────────────────────────────────
+        # â”€â”€ AI Model & Translation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         ai_group = QGroupBox("AI Models & Translation")
         ai_form = QFormLayout(ai_group)
         ai_form.setContentsMargins(12, 16, 12, 12)
@@ -4652,7 +4759,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(ai_group)
 
-        # ── Custom Styles ─────────────────────────────────────────────────────
+        # â”€â”€ Custom Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         custom_style_group = QGroupBox("Custom Styles")
         cs_layout = QVBoxLayout(custom_style_group)
         cs_layout.setContentsMargins(12, 14, 12, 12)
@@ -4672,13 +4779,13 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(custom_style_group)
 
-        # ── Processing Modes ─────────────────────────────────────────────────
+        # â”€â”€ Processing Modes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         mode_group = QGroupBox("Processing Modes")
         mode_v = QVBoxLayout(mode_group)
         mode_v.setContentsMargins(12, 14, 12, 12)
         mode_v.setSpacing(8)
 
-        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only · More API)")
+        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only Â· More API)")
         self.enhanced_pipeline_checkbox.stateChanged.connect(self.on_pipeline_mode_changed)
         mode_v.addWidget(self.enhanced_pipeline_checkbox)
 
@@ -4699,7 +4806,7 @@ class MangaOCRApp(QMainWindow):
 
         layout.addWidget(mode_group)
 
-        # ── Hardware & Performance ────────────────────────────────────────────
+        # â”€â”€ Hardware & Performance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         hardware_group = QGroupBox("Hardware & Performance")
         hw_form = QFormLayout(hardware_group)
         hw_form.setContentsMargins(12, 16, 12, 12)
@@ -4717,7 +4824,7 @@ class MangaOCRApp(QMainWindow):
         self.use_gpu_checkbox.stateChanged.connect(self.update_gpu_status_label)
         gpu_row.addWidget(self.use_gpu_checkbox)
         gpu_row.addStretch()
-        self.gpu_status_label = QLabel("● GPU OK" if self.is_gpu_available else "● No GPU")
+        self.gpu_status_label = QLabel("â— GPU OK" if self.is_gpu_available else "â— No GPU")
         self.gpu_status_label.setObjectName("gpu-status")
         self.gpu_status_label.setStyleSheet(
             "color: #4ade80; font-weight:700; font-size:9pt;" if self.is_gpu_available
@@ -4757,38 +4864,133 @@ class MangaOCRApp(QMainWindow):
         parent_layout.addWidget(spin_box, row, col + 1)
         return spin_box
 
-    def setup_styles(self):
-        self.setStyleSheet(app_stylesheet())
+    def _system_prefers_dark_theme(self):
+        try:
+            app = QApplication.instance()
+            palette = app.palette() if app is not None else QApplication.palette()
+            return palette.color(QPalette.Window).lightness() < 128
+        except Exception:
+            return True
 
-    def apply_defaults_from_settings(self):
+    def setup_styles(self):
+        self.apply_appearance_from_settings()
+
+    def apply_appearance_from_settings(self):
+        appearance_cfg = SETTINGS.get('appearance', {})
+        if not isinstance(appearance_cfg, dict):
+            appearance_cfg = {}
+        resolved = set_active_appearance(
+            appearance_cfg,
+            system_dark=self._system_prefers_dark_theme(),
+        )
+        self.current_theme = resolved.get('effective_mode', 'dark')
+        self.setStyleSheet(app_stylesheet())
+        self._refresh_theme_dependent_styles()
+        return resolved
+
+    def _refresh_theme_dependent_styles(self):
+        for attr_name, qss_factory in (
+            ('toggle_left_btn', toggle_button_qss),
+            ('toggle_right_btn', toggle_button_qss),
+            ('compare_mode_btn', toggle_button_qss),
+            ('focus_mode_btn', compact_primary_button_qss),
+            ('auto_translate_page_btn', compact_primary_button_qss),
+        ):
+            widget = getattr(self, attr_name, None)
+            if widget is None:
+                continue
+            try:
+                widget.setStyleSheet(qss_factory())
+            except Exception:
+                pass
+        try:
+            self._apply_right_panel_styles()
+        except Exception:
+            pass
+        try:
+            self._refresh_workspace_surface_theme()
+        except Exception:
+            pass
+        chat_widget = getattr(self, '_chat_widget', None)
+        if chat_widget is not None and hasattr(chat_widget, 'refresh_theme'):
+            try:
+                chat_widget.refresh_theme()
+            except Exception:
+                pass
+        self._refresh_welcome_theme()
+        self._apply_pointer_cursor_preference()
+
+    def _refresh_welcome_theme(self):
+        center_stack = getattr(self, 'center_stack', None)
+        welcome_widget = getattr(self, 'welcome_widget', None)
+        if center_stack is None or welcome_widget is None:
+            return
+        try:
+            current_index = center_stack.currentIndex()
+            welcome_index = center_stack.indexOf(welcome_widget)
+            if welcome_index < 0:
+                return
+            new_welcome = self._build_welcome_widget()
+            center_stack.removeWidget(welcome_widget)
+            welcome_widget.deleteLater()
+            center_stack.insertWidget(welcome_index, new_welcome)
+            self.welcome_widget = new_welcome
+            if current_index == welcome_index:
+                center_stack.setCurrentIndex(welcome_index)
+        except Exception:
+            pass
+
+    def _apply_pointer_cursor_preference(self):
+        appearance_cfg = SETTINGS.get('appearance', {})
+        if not isinstance(appearance_cfg, dict):
+            appearance_cfg = {}
+        enabled = bool(appearance_cfg.get('use_pointer_cursors', True))
+        cursor_shape = Qt.PointingHandCursor if enabled else Qt.ArrowCursor
+        interactive_types = (
+            QPushButton,
+            QToolButton,
+            QComboBox,
+            QCheckBox,
+            QRadioButton,
+            QListWidget,
+        )
+        try:
+            for widget in self.findChildren(QWidget):
+                if isinstance(widget, interactive_types):
+                    widget.setCursor(cursor_shape)
+        except Exception:
+            pass
+
+    def apply_defaults_from_settings(self, apply_runtime_controls=True):
         """Memuat default presets dari settings.json dan menerapkan ke UI."""
         gen_cfg = SETTINGS.get('general', {}) if isinstance(SETTINGS.get('general'), dict) else {}
         
-        # 1. OCR Language default
-        default_ocr = gen_cfg.get('default_ocr_lang', 'Japanese (Manga-OCR)')
-        if hasattr(self, 'ocr_lang_combo'):
-            idx = self.ocr_lang_combo.findText(default_ocr)
-            if idx != -1:
-                self.ocr_lang_combo.setCurrentIndex(idx)
-                
-        # 2. AI-Only Translate default
-        default_ai_only = bool(gen_cfg.get('default_ai_only_translate', False))
-        if hasattr(self, 'ai_only_translate_checkbox'):
-            self.ai_only_translate_checkbox.setChecked(default_ai_only)
-            
-        # 3. AI Model default
-        default_ai_model = gen_cfg.get('default_ai_model', '')
-        if default_ai_model and hasattr(self, 'ai_model_combo'):
-            idx = self.ai_model_combo.findText(default_ai_model)
-            if idx != -1:
-                self.ai_model_combo.setCurrentIndex(idx)
-                
-        # 3.5 Default Translation Style
-        default_style = gen_cfg.get('default_translation_style', 'Santai (Default)')
-        if default_style and hasattr(self, 'style_combo'):
-            idx = self.style_combo.findText(default_style)
-            if idx != -1:
-                self.style_combo.setCurrentIndex(idx)
+        if apply_runtime_controls:
+            # 1. OCR Language default
+            default_ocr = gen_cfg.get('default_ocr_lang', 'Japanese (Manga-OCR)')
+            if hasattr(self, 'ocr_lang_combo'):
+                idx = self.ocr_lang_combo.findText(default_ocr)
+                if idx != -1:
+                    self.ocr_lang_combo.setCurrentIndex(idx)
+
+            # 2. AI-Only Translate default
+            default_ai_only = bool(gen_cfg.get('default_ai_only_translate', False))
+            if hasattr(self, 'ai_only_translate_checkbox'):
+                self.ai_only_translate_checkbox.setChecked(default_ai_only)
+
+            # 3. AI Model default
+            default_ai_model = gen_cfg.get('default_ai_model', '')
+            if default_ai_model and hasattr(self, 'ai_model_combo'):
+                idx = self.ai_model_combo.findText(default_ai_model)
+                if idx != -1:
+                    self.ai_model_combo.setCurrentIndex(idx)
+
+            # 3.5 Default Translation Style
+            default_style = gen_cfg.get('default_translation_style', 'Santai (Default)')
+            if default_style and hasattr(self, 'style_combo'):
+                idx = self.style_combo.findText(default_style)
+                if idx != -1:
+                    self.style_combo.setCurrentIndex(idx)
                 
         # 4. Typesetting Defaults
         # Update the font template used for NEW areas only.
@@ -5228,6 +5430,9 @@ class MangaOCRApp(QMainWindow):
             'engine': 'MOFRL-GPT'
         }
 
+        previous_ocr_text = self.ocr_lang_combo.currentText() if getattr(self, 'ocr_lang_combo', None) else ''
+        default_ocr_text = SETTINGS.get('general', {}).get('default_ocr_lang', 'Japanese (Manga-OCR)')
+
         # Populate ComboBox
         self.ocr_lang_combo.blockSignals(True)
         self.ocr_lang_combo.clear()
@@ -5239,10 +5444,14 @@ class MangaOCRApp(QMainWindow):
             self.ocr_lang_combo.addItem(display_name, data)
         self.ocr_lang_combo.blockSignals(False)
 
-        # Set default to Japanese
-        jp_index = self.ocr_lang_combo.findText("Japanese (Manga-OCR)")
-        if jp_index != -1:
-            self.ocr_lang_combo.setCurrentIndex(jp_index)
+        target_texts = [previous_ocr_text, default_ocr_text, "Japanese (Manga-OCR)"]
+        for target_text in target_texts:
+            if not target_text:
+                continue
+            target_index = self.ocr_lang_combo.findText(target_text)
+            if target_index != -1:
+                self.ocr_lang_combo.setCurrentIndex(target_index)
+                break
 
         self.on_ocr_lang_changed(self.ocr_lang_combo.currentIndex())
 
@@ -5317,6 +5526,9 @@ class MangaOCRApp(QMainWindow):
 
     def populate_ai_models(self):
         """Mengisi daftar model AI yang tersedia dari semua provider."""
+        previous_text = self.ai_model_combo.currentText() if getattr(self, 'ai_model_combo', None) else ''
+        previous_data = self.ai_model_combo.currentData(Qt.UserRole) if getattr(self, 'ai_model_combo', None) else None
+        default_text = SETTINGS.get('general', {}).get('default_ai_model', '')
         self._load_openrouter_models()
         self.ai_model_combo.blockSignals(True)
         self.ai_model_combo.clear()
@@ -5333,8 +5545,20 @@ class MangaOCRApp(QMainWindow):
                 if description:
                     self.ai_model_combo.setItemData(index, description, Qt.ToolTipRole)
         self.ai_model_combo.blockSignals(False)
-        if self.ai_model_combo.count() > 0 and self.ai_model_combo.currentIndex() < 0:
-            self.ai_model_combo.setCurrentIndex(0)
+        target_index = -1
+        if previous_data is not None:
+            for idx in range(self.ai_model_combo.count()):
+                if self.ai_model_combo.itemData(idx, Qt.UserRole) == previous_data:
+                    target_index = idx
+                    break
+        if target_index < 0 and previous_text:
+            target_index = self.ai_model_combo.findText(previous_text)
+        if target_index < 0 and default_text:
+            target_index = self.ai_model_combo.findText(default_text)
+        if target_index < 0 and self.ai_model_combo.count() > 0:
+            target_index = 0
+        if target_index >= 0:
+            self.ai_model_combo.setCurrentIndex(target_index)
         # Also refresh the chatbot model list so OpenRouter models appear there
         try:
             if getattr(self, '_chat_widget', None) is not None:
@@ -5557,7 +5781,7 @@ class MangaOCRApp(QMainWindow):
         progress_dlg.setWindowModality(Qt.WindowModal)
         progress_dlg.setWindowTitle("Reinstalling Manga-OCR (CPU)" if cpu_only else "Installing Manga-OCR")
         # Apply premium dark theme styling
-        progress_dlg.setStyleSheet("QProgressDialog { background-color: #090a0f; color: #cbd5e1; } QLabel { color: #cbd5e1; } QPushButton { background-color: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background-color: #334155; border-color: #38bdf8; }")
+        progress_dlg.setStyleSheet(theme.progress_dialog_qss())
         progress_dlg.show()
 
         from src.ui.dialogs import PipInstallWorker
@@ -5584,7 +5808,7 @@ class MangaOCRApp(QMainWindow):
             if success:
                 # manga_ocr was installed successfully by pip.
                 # However, PyTorch DLL (c10.dll) cannot be loaded from a session that
-                # already failed to import it at startup — a restart is required.
+                # already failed to import it at startup â€” a restart is required.
                 self.populate_ocr_languages()
                 self.show_banner(
                     "manga-ocr-install-complete",
@@ -5970,7 +6194,7 @@ class MangaOCRApp(QMainWindow):
         # Injeksi Glossary jika ada
         glossary = SETTINGS.get('glossary', {})
         if isinstance(glossary, dict) and glossary:
-            glossary_lines = [f'  - "{src}" → "{tgt}"' for src, tgt in glossary.items() if src]
+            glossary_lines = [f'  - "{src}" â†’ "{tgt}"' for src, tgt in glossary.items() if src]
             if glossary_lines:
                 glossary_str = '\n'.join(glossary_lines)
                 enhancements += (
@@ -6006,7 +6230,7 @@ class MangaOCRApp(QMainWindow):
                     processed_lines = []
                     for line in result.splitlines():
                         stripped = line.rstrip()
-                        if stripped.endswith('。'):
+                        if stripped.endswith('ã€‚'):
                             stripped = stripped[:-1].rstrip()
                         elif stripped.endswith('.') and not stripped.endswith('..'):
                             stripped = stripped[:-1].rstrip()
@@ -6277,9 +6501,9 @@ class MangaOCRApp(QMainWindow):
                 f"You are an expert manga translator. Translate the user's text into clear, natural {target_lang} for narration or informational text. "
                 f"Keep it smooth, neutral, and suitable for manga narration boxes.\n"
                 f"IMPORTANT RULES:\n"
-                f"- If a Japanese text includes a kanji followed by parentheses like 漢字(かんじ) or word(note), treat the text inside parentheses as a reading or small note — do NOT translate it literally.\n"
+                f"- If a Japanese text includes a kanji followed by parentheses like æ¼¢å­—(ã‹ã‚“ã˜) or word(note), treat the text inside parentheses as a reading or small note â€” do NOT translate it literally.\n"
                 f"- Translate only based on the main kanji meaning, not the content in parentheses.\n"
-                f"- Example: 勇者(ゆうしゃ) → translate as 'Hero', not 'Yuusha'.\n"
+                f"- Example: å‹‡è€…(ã‚†ã†ã—ã‚ƒ) â†’ translate as 'Hero', not 'Yuusha'.\n"
                 f"- Preserve parentheses if they indicate pronunciation notes or clarifications that exist in the original dialogue.\n"
                 f"- Avoid slang or overly casual tone.\n"
                 f"- Only output the final translation in {target_lang}.\n"
@@ -6291,11 +6515,11 @@ class MangaOCRApp(QMainWindow):
                 f"You are an expert manga translator. Translate the user's text into natural, fluent {target_lang} suitable for published manga dialogue. "
                 f"Keep the meaning, tone, and nuances from the original text.\n"
                 f"IMPORTANT RULES:\n"
-                f"- If the Japanese text contains kanji with parentheses — e.g. 漢字(かんじ) or name(note) — treat the content inside parentheses as furigana or reading aid, not as part of the dialogue.\n"
+                f"- If the Japanese text contains kanji with parentheses â€” e.g. æ¼¢å­—(ã‹ã‚“ã˜) or name(note) â€” treat the content inside parentheses as furigana or reading aid, not as part of the dialogue.\n"
                 f"- Translate the main kanji normally, but ignore or omit the reading inside parentheses in the final translation.\n"
-                f"- Example: 神様(かみさま) → 'God', not 'Kamisama'.\n"
+                f"- Example: ç¥žæ§˜(ã‹ã¿ã•ã¾) â†’ 'God', not 'Kamisama'.\n"
                 f"- If parentheses contain explanatory notes (not reading), keep them translated in parentheses in {target_lang}.\n"
-                f"- Use natural and neutral tone — not overly formal, but avoid slang or street language like 'lo', 'gue', or 'nih'.\n"
+                f"- Use natural and neutral tone â€” not overly formal, but avoid slang or street language like 'lo', 'gue', or 'nih'.\n"
                 f"- Output ONLY the final translation in {target_lang}.\n"
                 f"- No quotes, markdown, or explanations.\n"
                 f"- Preserve line breaks.\n"
@@ -6716,7 +6940,7 @@ class MangaOCRApp(QMainWindow):
             processed_lines = []
             for line in text.splitlines():
                 stripped = line.rstrip()
-                if stripped.endswith('。'):
+                if stripped.endswith('ã€‚'):
                     stripped = stripped[:-1].rstrip()
                 elif stripped.endswith('.') and not stripped.endswith('..'):
                     stripped = stripped[:-1].rstrip()
@@ -6865,7 +7089,7 @@ class MangaOCRApp(QMainWindow):
         if image_key == self.get_current_data_key():
             # Push snapshot SEBELUM perubahan teks terjemahan
             if translated_text is not None:
-                snippet = translated_text[:20] + ('…' if len(translated_text) > 20 else '')
+                snippet = translated_text[:20] + ('â€¦' if len(translated_text) > 20 else '')
                 self._push_undo_snapshot(f"Translate: {snippet}")
             self.redo_stack.clear()
             self.redraw_all_typeset_areas()
@@ -7873,7 +8097,7 @@ class MangaOCRApp(QMainWindow):
             self._refresh_undo_timeline()
             self._refresh_detection_overlay()
             self.refresh_history_views()
-            self._schedule_window_geometry_guard()
+            self._schedule_window_geometry_guard(rebalance=False)
         except Exception as e:
             self.show_banner("image-load-error", "Error loading image", f"Could not load image: {file_path}\nError: {e}", kind="error")
             self.clear_view()
@@ -7967,7 +8191,7 @@ class MangaOCRApp(QMainWindow):
         self._refresh_detection_overlay()
         self.refresh_history_views()
         self.update_nav_buttons()
-        self._schedule_window_geometry_guard()
+        self._schedule_window_geometry_guard(rebalance=False)
 
     def get_current_data_key(self, path=None, page=-1):
         path_to_use = path if path is not None else self.current_image_path
@@ -8096,18 +8320,21 @@ class MangaOCRApp(QMainWindow):
     def _typeset_button_stylesheet(self):
         return (
             "QToolButton {"
-            " border: 1px solid #1f2b3b;"
-            " background-color: #152231;"
+            f" border: 1px solid {theme.COLORS['border']};"
+            f" background-color: {theme.COLORS['card_alt']};"
+            f" color: {theme.COLORS['text']};"
             " border-radius: 6px;"
             " padding: 4px;"
             " }"
             " QToolButton:hover {"
-            " border-color: #3a9bff;"
-            " background-color: #1c2b3d;"
+            f" border-color: {theme.COLORS['accent']};"
+            f" background-color: {theme.COLORS['border']};"
+            f" color: {theme.COLORS['accent']};"
             " }"
             " QToolButton:checked {"
-            " border-color: #3a9bff;"
-            " background-color: #25426b;"
+            f" border-color: {theme.COLORS['accent']};"
+            f" background-color: {theme.COLORS['border']};"
+            f" color: {theme.COLORS['accent']};"
             " }"
         )
 
@@ -8151,12 +8378,12 @@ class MangaOCRApp(QMainWindow):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        color_hex = '#ef4444' if locked else '#64748b'
+        color_hex = theme.COLORS['danger'] if locked else theme.COLORS['muted']
         color = QColor(color_hex)
         
         # Draw lock body (rounded rect)
         painter.setPen(QPen(color, 2))
-        fill_color = QColor('#7f1d1d' if locked else '#1e293b')
+        fill_color = QColor(theme.COLORS['danger'] if locked else theme.COLORS['card_alt'])
         painter.setBrush(QBrush(fill_color))
         painter.drawRoundedRect(8, 14, 16, 12, 3, 3)
         
@@ -8184,9 +8411,9 @@ class MangaOCRApp(QMainWindow):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        color = QColor('#fca5a5')
+        color = QColor(theme.COLORS['bg'])
         painter.setPen(QPen(color, 2))
-        painter.setBrush(QBrush(QColor('#7f1d1d')))
+        painter.setBrush(QBrush(QColor(theme.COLORS['danger'])))
         
         # Draw trash body
         painter.drawRoundedRect(9, 11, 14, 15, 2, 2)
@@ -8227,7 +8454,7 @@ class MangaOCRApp(QMainWindow):
         elif letter == 'U':
             font.setUnderline(True)
         painter.setFont(font)
-        painter.setPen(QPen(QColor('#f3f6fb')))
+        painter.setPen(QPen(QColor(theme.COLORS['text'])))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, letter)
         painter.end()
         return QIcon(pixmap)
@@ -8237,11 +8464,11 @@ class MangaOCRApp(QMainWindow):
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
-        outer_pen = QPen(QColor('#f3f6fb'))
+        outer_pen = QPen(QColor(theme.COLORS['text']))
         outer_pen.setWidth(2)
         painter.setPen(outer_pen)
         painter.drawEllipse(5, 5, 22, 22)
-        painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
+        painter.setBrush(QBrush(QColor(theme.COLORS['card_alt'])))
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(10, 10, 12, 12)
         painter.end()
@@ -8525,7 +8752,7 @@ class MangaOCRApp(QMainWindow):
     def _on_recent_translation_clicked(self, item):
         text = item.data(Qt.UserRole)
         if text and self.selected_typeset_area:
-            snippet = text[:20] + ('…' if len(text) > 20 else '')
+            snippet = text[:20] + ('â€¦' if len(text) > 20 else '')
             self._push_undo_snapshot(f"Apply Recent: {snippet}")
             self.selected_typeset_area.text = text
             self.redraw_all_typeset_areas()
@@ -8796,8 +9023,8 @@ class MangaOCRApp(QMainWindow):
             luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
             text_color = '#000000' if luminance > 160 else '#f3f6fb'
             self.color_button.setStyleSheet(
-                f"QPushButton {{ background-color: {color.name()}; color: {text_color}; border: 1px solid #1f2b3b; border-radius: 6px; padding: 6px 12px; }}"
-                " QPushButton:hover { border-color: #3a9bff; }"
+                f"QPushButton {{ background-color: {color.name()}; color: {text_color}; border: 1px solid {theme.COLORS['border']}; border-radius: 6px; padding: 6px 12px; }}"
+                f" QPushButton:hover {{ border-color: {theme.COLORS['accent']}; }}"
             )
         except Exception:
             traceback.print_exc()
@@ -8813,8 +9040,8 @@ class MangaOCRApp(QMainWindow):
             luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
             text_color = '#000000' if luminance > 160 else '#f3f6fb'
             self.outline_color_button.setStyleSheet(
-                f"QPushButton {{ background-color: {color.name()}; color: {text_color}; border: 1px solid #1f2b3b; border-radius: 6px; padding: 6px 12px; }}"
-                " QPushButton:hover { border-color: #3a9bff; }"
+                f"QPushButton {{ background-color: {color.name()}; color: {text_color}; border: 1px solid {theme.COLORS['border']}; border-radius: 6px; padding: 6px 12px; }}"
+                f" QPushButton:hover {{ border-color: {theme.COLORS['accent']}; }}"
             )
         except Exception:
             traceback.print_exc()
@@ -9177,7 +9404,7 @@ class MangaOCRApp(QMainWindow):
 
         current_key = self.get_current_data_key()
         # Push snapshot SEBELUM tambah area (agar bisa di-undo)
-        snippet = manual_text[:20] + ('…' if len(manual_text) > 20 else '') if manual_text else ''
+        snippet = manual_text[:20] + ('â€¦' if len(manual_text) > 20 else '') if manual_text else ''
         self._push_undo_snapshot(f"Add Manual: {snippet}" if snippet else "Add Manual Area")
         self.typeset_areas.append(manual_area)
         self.set_selected_area(manual_area, notify=True)
@@ -11017,7 +11244,7 @@ class MangaOCRApp(QMainWindow):
         if area_to_delete in self.typeset_areas:
             # Push snapshot SEBELUM hapus agar bisa di-undo
             area_text = getattr(area_to_delete, 'text', '') or ''
-            snippet = area_text[:20] + ('…' if len(area_text) > 20 else '')
+            snippet = area_text[:20] + ('â€¦' if len(area_text) > 20 else '')
             self._push_undo_snapshot(f"Delete: {snippet}" if snippet else "Delete Area")
 
             # Sync to Deleted History Scene
@@ -11081,7 +11308,7 @@ class MangaOCRApp(QMainWindow):
         self.undo_button.setEnabled(can_undo)
         self.redo_button.setEnabled(can_redo)
 
-    # ── Feature #1: Snapshot History Methods ────────────────────────────────────
+    # â”€â”€ Feature #1: Snapshot History Methods â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _push_undo_snapshot(self, label="Action"):
         """
@@ -11154,7 +11381,7 @@ class MangaOCRApp(QMainWindow):
 
         if not self._undo_history:
             empty_item = QListWidgetItem("  (kosong)")
-            empty_item.setForeground(QColor('#334155'))
+            empty_item.setForeground(QColor(theme.COLORS['muted']))
             empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsSelectable)
             lst.addItem(empty_item)
             lst.blockSignals(False)
@@ -11165,14 +11392,14 @@ class MangaOCRApp(QMainWindow):
             is_redo    = (i > self._undo_history_idx)
 
             if is_current:
-                prefix = "▶"
-                color  = '#38bdf8'   # biru terang = state aktif
+                prefix = "â–¶"
+                color  = theme.COLORS['accent']   # state aktif
             elif is_redo:
-                prefix = "◁"
-                color  = '#475569'   # dim = state yang bisa di-redo
+                prefix = "â—"
+                color  = theme.COLORS['muted']   # state yang bisa di-redo
             else:
-                prefix = "·"
-                color  = '#64748b'   # lebih muda = masa lalu
+                prefix = "Â·"
+                color  = theme.COLORS['muted']   # masa lalu
 
             item = QListWidgetItem(f"  {prefix}  {i + 1}. {entry['label']}")
             item.setData(Qt.UserRole, i)
@@ -11187,7 +11414,7 @@ class MangaOCRApp(QMainWindow):
         lst.blockSignals(False)
 
     def _on_timeline_item_clicked(self, item):
-        """Handler saat user klik item di undo timeline — jump ke snapshot tersebut."""
+        """Handler saat user klik item di undo timeline â€” jump ke snapshot tersebut."""
         idx = item.data(Qt.UserRole)
         if idx is None:
             return
@@ -11370,7 +11597,7 @@ class MangaOCRApp(QMainWindow):
                     # Only populate text from history when the area has no text of
                     # its own (e.g. area created without going through the normal
                     # translation pipeline).  When typeset_data already loaded a
-                    # non-empty text into the area, trust that value — it reflects
+                    # non-empty text into the area, trust that value â€” it reflects
                     # any manual edits the user made after the AI translation.
                     if not (area.text or '').strip():
                         area.update_plain_text(record['translated_text'])
@@ -11859,12 +12086,12 @@ class MangaOCRApp(QMainWindow):
             return
         self._load_project_from_path(file_path)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Welcome / Start Screen  (Fitur #14 & #19)
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def show_welcome_screen(self):
-        """Tampilkan welcome screen — sembunyikan nav bar, folder panel, dan tools panel."""
+        """Tampilkan welcome screen â€” sembunyikan nav bar, folder panel, dan tools panel."""
         stack = getattr(self, 'center_stack', None)
         if not stack:
             return
@@ -11877,7 +12104,7 @@ class MangaOCRApp(QMainWindow):
         if nav:
             nav.setVisible(False)
 
-        # Sembunyikan left panel (folder) — simpan state sebelumnya
+        # Sembunyikan left panel (folder) â€” simpan state sebelumnya
         left = getattr(self, 'left_panel_widget', None)
         if left:
             self._welcome_left_was_visible = left.isVisible()
@@ -11890,7 +12117,7 @@ class MangaOCRApp(QMainWindow):
             right.setVisible(False)
 
     def hide_welcome_screen(self):
-        """Sembunyikan welcome screen — tampilkan canvas dan kembalikan panel."""
+        """Sembunyikan welcome screen â€” tampilkan canvas dan kembalikan panel."""
         stack = getattr(self, 'center_stack', None)
         if not stack:
             return
@@ -11936,15 +12163,10 @@ class MangaOCRApp(QMainWindow):
 
         outer = QWidget()
         outer.setObjectName("welcome-outer")
-        outer.setStyleSheet("""
-            QWidget#welcome-outer {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #090a0f,
-                    stop:0.5 #0d1117,
-                    stop:1 #090a0f
-                );
-            }
+        outer.setStyleSheet(f"""
+            QWidget#welcome-outer {{
+                background: {theme.COLORS["bg"]};
+            }}
         """)
 
         outer_layout = QVBoxLayout(outer)
@@ -11964,14 +12186,14 @@ class MangaOCRApp(QMainWindow):
         vbox.setContentsMargins(60, 50, 60, 50)
         vbox.setSpacing(0)
 
-        # ── Header ────────────────────────────────────────────────────────────
-        header_lbl = QLabel("📖 MangaTranslate")
+        # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        header_lbl = QLabel("ðŸ“– MangaTranslate")
         header_lbl.setAlignment(Qt.AlignCenter)
-        header_lbl.setStyleSheet("""
-            color: #f1f5f9;
+        header_lbl.setStyleSheet(f"""
+            color: {theme.COLORS["text"]};
             font-size: 32pt;
             font-weight: 800;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             letter-spacing: 1px;
             margin-bottom: 4px;
         """)
@@ -11980,30 +12202,30 @@ class MangaOCRApp(QMainWindow):
         sub_lbl = QLabel(welcome_subtitle_html())
         sub_lbl.setAlignment(Qt.AlignCenter)
         sub_lbl.setTextFormat(Qt.RichText)
-        sub_lbl.setStyleSheet("""
-            color: #64748b;
+        sub_lbl.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 11pt;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             margin-bottom: 36px;
         """)
         vbox.addWidget(sub_lbl)
 
-        # ── Separator ─────────────────────────────────────────────────────────
+        # â”€â”€ Separator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         def make_sep():
             sep = QFrame()
             sep.setFrameShape(QFrame.HLine)
-            sep.setStyleSheet("color: #1e293b; margin: 0 0 24px 0;")
+            sep.setStyleSheet(f"color: {theme.COLORS['border']}; margin: 0 0 24px 0;")
             return sep
 
-        # ── Quick Actions ──────────────────────────────────────────────────────
+        # â”€â”€ Quick Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         qa_title = QLabel("Quick Start")
-        qa_title.setStyleSheet("""
-            color: #94a3b8;
+        qa_title.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 9pt;
             font-weight: 700;
             letter-spacing: 2px;
             text-transform: uppercase;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             margin-bottom: 12px;
         """)
         vbox.addWidget(qa_title)
@@ -12022,20 +12244,20 @@ class MangaOCRApp(QMainWindow):
                         stop:0 {color_start}, stop:1 {color_end});
                     border: 1px solid {border_color};
                     border-radius: 12px;
-                    color: #f1f5f9;
+                    color: {theme.COLORS["text"]};
                     font-size: 10pt;
                     font-weight: 600;
-                    font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+                    font-family: {theme.FONT_FAMILY};
                     padding: 8px;
                     text-align: center;
                 }}
                 QPushButton:hover {{
-                    border: 1px solid #38bdf8;
+                    border: 1px solid {theme.COLORS["accent"]};
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #1e3a5f, stop:1 #0f2742);
+                        stop:0 {theme.COLORS["card_alt"]}, stop:1 {theme.COLORS["panel"]});
                 }}
                 QPushButton:pressed {{
-                    background: #0c1e33;
+                    background: {theme.COLORS["border"]};
                 }}
             """)
             btn.setText(f"{icon}\n{label}")
@@ -12043,14 +12265,14 @@ class MangaOCRApp(QMainWindow):
             return btn
 
         btn_folder = make_action_btn(
-            "📁", "Open Folder",
+            "ðŸ“", "Open Folder",
             self.load_folder,
-            "#13263d", "#0c1a2c", "#1e3a5f"
+            theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )
         btn_project = make_action_btn(
-            "🗂️", "Load Project",
+            "ðŸ—‚ï¸", "Load Project",
             self.load_project,
-            "#1a1340", "#110d2a", "#2d1d6b"
+            theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )
         qa_row.addWidget(btn_folder)
         qa_row.addWidget(btn_project)
@@ -12059,15 +12281,15 @@ class MangaOCRApp(QMainWindow):
         vbox.addSpacing(32)
         vbox.addWidget(make_sep())
 
-        # ── Recent Projects ────────────────────────────────────────────────────
+        # â”€â”€ Recent Projects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         rp_header = QHBoxLayout()
         rp_title = QLabel("Recent Projects")
-        rp_title.setStyleSheet("""
-            color: #94a3b8;
+        rp_title.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 9pt;
             font-weight: 700;
             letter-spacing: 2px;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             margin-bottom: 12px;
         """)
         rp_header.addWidget(rp_title)
@@ -12075,23 +12297,23 @@ class MangaOCRApp(QMainWindow):
         clear_recent_btn = QPushButton("Clear All")
         clear_recent_btn.setFixedHeight(24)
         clear_recent_btn.setCursor(Qt.PointingHandCursor)
-        clear_recent_btn.setStyleSheet("""
-            QPushButton {
+        clear_recent_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                color: #475569;
-                border: 1px solid #1e293b;
+                color: {theme.COLORS["muted"]};
+                border: 1px solid {theme.COLORS["border"]};
                 border-radius: 4px;
                 padding: 0 8px;
                 font-size: 8pt;
-                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
-            }
-            QPushButton:hover { color: #f87171; border-color: #f87171; }
+                font-family: {theme.FONT_FAMILY};
+            }}
+            QPushButton:hover {{ color: {theme.COLORS["danger"]}; border-color: {theme.COLORS["danger"]}; }}
         """)
         clear_recent_btn.clicked.connect(self._clear_recent_projects)
         rp_header.addWidget(clear_recent_btn)
         vbox.addLayout(rp_header)
 
-        # Container untuk grid kartu recent — di-refresh oleh _refresh_welcome_screen()
+        # Container untuk grid kartu recent â€” di-refresh oleh _refresh_welcome_screen()
         self._welcome_recent_container = QWidget()
         self._welcome_recent_container.setStyleSheet("background: transparent;")
         self._welcome_recent_grid = QGridLayout(self._welcome_recent_container)
@@ -12103,10 +12325,10 @@ class MangaOCRApp(QMainWindow):
         # PENTING: inisialisasi _welcome_no_recent_lbl SEBELUM _populate_recent_cards() dipanggil
         self._welcome_no_recent_lbl = QLabel("No recent projects yet.\nOpen a folder or load a project to get started.")
         self._welcome_no_recent_lbl.setAlignment(Qt.AlignCenter)
-        self._welcome_no_recent_lbl.setStyleSheet("""
-            color: #334155;
+        self._welcome_no_recent_lbl.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 10pt;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             padding: 24px;
         """)
         vbox.addWidget(self._welcome_no_recent_lbl)
@@ -12116,14 +12338,14 @@ class MangaOCRApp(QMainWindow):
         vbox.addSpacing(32)
         vbox.addWidget(make_sep())
 
-        # ── Keyboard Shortcuts ────────────────────────────────────────────────
+        # â”€â”€ Keyboard Shortcuts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         ks_title = QLabel("Keyboard Shortcuts")
-        ks_title.setStyleSheet("""
-            color: #94a3b8;
+        ks_title.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 9pt;
             font-weight: 700;
             letter-spacing: 2px;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             margin-bottom: 10px;
         """)
         vbox.addWidget(ks_title)
@@ -12134,7 +12356,7 @@ class MangaOCRApp(QMainWindow):
             ("F2", NavText.FOCUS_MODE_SHORTCUT),
             ("F3", "Toggle Folder Panel"),
             ("F4", "Toggle Tools Panel"),
-            ("1–9", "Switch Selection Mode"),
+            ("1â€“9", "Switch Selection Mode"),
             ("Ctrl+S", "Save Project"),
             ("Ctrl+H", "Find & Replace"),
             ("Ctrl+C / Ctrl+V", "Copy / Paste Area"),
@@ -12147,22 +12369,22 @@ class MangaOCRApp(QMainWindow):
             col = (i % 2) * 2
             row = i // 2
             key_lbl = QLabel(key)
-            key_lbl.setStyleSheet("""
-                color: #38bdf8;
-                font-family: 'Consolas', 'Courier New', monospace;
+            key_lbl.setStyleSheet(f"""
+                color: {theme.COLORS["accent"]};
+                font-family: {theme.CODE_FONT_FAMILY};
                 font-size: 9pt;
                 font-weight: 700;
-                background: #0f172a;
-                border: 1px solid #1e3a5f;
+                background: {theme.COLORS["card_alt"]};
+                border: 1px solid {theme.COLORS["border"]};
                 border-radius: 4px;
                 padding: 2px 8px;
             """)
             key_lbl.setFixedWidth(130)
             desc_lbl = QLabel(desc)
-            desc_lbl.setStyleSheet("""
-                color: #64748b;
+            desc_lbl.setStyleSheet(f"""
+                color: {theme.COLORS["muted"]};
                 font-size: 9pt;
-                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+                font-family: {theme.FONT_FAMILY};
             """)
             sc_grid.addWidget(key_lbl, row, col)
             sc_grid.addWidget(desc_lbl, row, col + 1)
@@ -12220,15 +12442,20 @@ class MangaOCRApp(QMainWindow):
         card.setFixedHeight(68)
         card.setCursor(Qt.PointingHandCursor)
         exists = os.path.isfile(proj_path)
+        card_bg = theme.COLORS["card_alt"] if exists else theme.COLORS["panel"]
+        card_hover = theme.COLORS["panel"] if exists else theme.COLORS["card_alt"]
+        card_border = theme.COLORS["border"] if exists else theme.COLORS["danger"]
+        card_accent = theme.COLORS["accent"] if exists else theme.COLORS["danger"]
+        name_color = theme.COLORS["text"] if exists else theme.COLORS["danger"]
         card.setStyleSheet(f"""
             QWidget {{
-                background: {'#0f1729' if exists else '#130a0a'};
-                border: 1px solid {'#1e3a5f' if exists else '#3a1515'};
+                background: {card_bg};
+                border: 1px solid {card_border};
                 border-radius: 10px;
             }}
             QWidget:hover {{
-                background: {'#172035' if exists else '#1a0c0c'};
-                border-color: {'#38bdf8' if exists else '#f87171'};
+                background: {card_hover};
+                border-color: {card_accent};
             }}
         """)
 
@@ -12236,7 +12463,7 @@ class MangaOCRApp(QMainWindow):
         h.setContentsMargins(12, 8, 8, 8)
         h.setSpacing(10)
 
-        icon_lbl = QLabel("🗂️" if exists else "⚠️")
+        icon_lbl = QLabel("ðŸ—‚ï¸" if exists else "âš ï¸")
         icon_lbl.setFixedWidth(28)
         icon_lbl.setAlignment(Qt.AlignCenter)
         icon_lbl.setStyleSheet("font-size: 18pt; background: transparent; border: none;")
@@ -12245,19 +12472,19 @@ class MangaOCRApp(QMainWindow):
         info_col.setSpacing(2)
         name_lbl = QLabel(os.path.basename(proj_path))
         name_lbl.setStyleSheet(f"""
-            color: {'#e2e8f0' if exists else '#f87171'};
+            color: {name_color};
             font-size: 9.5pt;
             font-weight: 600;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             background: transparent;
             border: none;
         """)
         name_lbl.setToolTip(proj_path)
         path_lbl = QLabel(os.path.dirname(proj_path))
-        path_lbl.setStyleSheet("""
-            color: #475569;
+        path_lbl.setStyleSheet(f"""
+            color: {theme.COLORS["muted"]};
             font-size: 8pt;
-            font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
+            font-family: {theme.FONT_FAMILY};
             background: transparent;
             border: none;
         """)
@@ -12266,27 +12493,27 @@ class MangaOCRApp(QMainWindow):
         max_chars = 45
         dir_text = os.path.dirname(proj_path)
         if len(dir_text) > max_chars:
-            dir_text = "…" + dir_text[-(max_chars - 1):]
+            dir_text = "â€¦" + dir_text[-(max_chars - 1):]
         path_lbl.setText(dir_text)
 
         info_col.addWidget(name_lbl)
         info_col.addWidget(path_lbl)
 
-        remove_btn = QPushButton("✕")
+        remove_btn = QPushButton("âœ•")
         remove_btn.setFixedSize(20, 20)
         remove_btn.setCursor(Qt.PointingHandCursor)
         remove_btn.setToolTip("Remove from recent list")
-        remove_btn.setStyleSheet("""
-            QPushButton {
+        remove_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                color: #475569;
+                color: {theme.COLORS["muted"]};
                 border: none;
                 font-size: 9pt;
                 font-weight: bold;
                 border-radius: 10px;
                 padding: 0;
-            }
-            QPushButton:hover { color: #f87171; background: #1f1010; }
+            }}
+            QPushButton:hover {{ color: {theme.COLORS["danger"]}; background: {theme.COLORS["card_alt"]}; }}
         """)
         remove_btn.clicked.connect(lambda checked=False, p=proj_path: self._remove_single_recent(p))
 
@@ -12294,7 +12521,7 @@ class MangaOCRApp(QMainWindow):
         h.addLayout(info_col, 1)
         h.addWidget(remove_btn)
 
-        # Klik card (bukan tombol ✕) → buka project
+        # Klik card (bukan tombol âœ•) â†’ buka project
         # Gunakan mousePressEvent pada card
         def card_clicked(event, p=proj_path):
             from PyQt5.QtCore import Qt
@@ -12469,7 +12696,25 @@ class MangaOCRApp(QMainWindow):
         return QRect(zoomed_x, zoomed_y, zoomed_w, zoomed_h)
 
     def toggle_theme(self):
-        pass # Light theme TBD
+        appearance_cfg = SETTINGS.setdefault('appearance', {})
+        if not isinstance(appearance_cfg, dict):
+            appearance_cfg = {}
+            SETTINGS['appearance'] = appearance_cfg
+        next_mode = 'light' if getattr(self, 'current_theme', 'dark') == 'dark' else 'dark'
+        appearance_cfg['mode'] = next_mode
+        save_settings(SETTINGS)
+        resolved = self.apply_appearance_from_settings()
+        label = resolved.get('preset_name', next_mode.title())
+        message = f"{next_mode.title()} theme applied"
+        if label:
+            message = f"{message}: {label}"
+        try:
+            notify_toast(self, "Appearance updated", message, kind="success")
+        except Exception:
+            try:
+                self.statusBar().showMessage(message, 3500)
+            except Exception:
+                pass
 
     def show_about_dialog(self):
         self.load_usage_data()
@@ -12595,12 +12840,12 @@ class MangaOCRApp(QMainWindow):
         dlg.exec_()
 
     def show_session_analytics_dialog(self):
-        """Tampilkan dialog Session Analytics & Export (Feature #16) — legacy."""
+        """Tampilkan dialog Session Analytics & Export (Feature #16) â€” legacy."""
         self.show_unified_help_dialog(start_tab=2)
 
     def show_unified_help_dialog(self, start_tab: int = 0):
         """
-        Buka UnifiedHelpDialog — gabungan About, Project Stats,
+        Buka UnifiedHelpDialog â€” gabungan About, Project Stats,
         Pricing Editor, dan Session Analytics dalam satu dialog tabbed.
         """
         from src.ui.unified_help_dialog import UnifiedHelpDialog
@@ -12761,7 +13006,7 @@ class MangaOCRApp(QMainWindow):
             self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("🔍 Find & Replace")
+        dlg.setWindowTitle("ðŸ” Find & Replace")
         dlg.setModal(True)
         dlg.resize(380, 200)
         
@@ -12886,7 +13131,7 @@ class MangaOCRApp(QMainWindow):
         layout.addLayout(btn_lay)
 
         # Results Group (hidden initially)
-        results_group = QGroupBox("🔍 Search Results")
+        results_group = QGroupBox("ðŸ” Search Results")
         results_vbox = QVBoxLayout(results_group)
         results_table = QTableWidget(0, 2)
         results_table.setHorizontalHeaderLabels(["Page / File", "Text Content"])
@@ -14337,14 +14582,14 @@ class MangaOCRApp(QMainWindow):
             if advanced:
                 if letters == 0 and digits == 0 and len(cleaned) <= 3:
                     continue
-                if re.fullmatch(r'[!\?\-•°??????]+', cleaned):
+                if re.fullmatch(r'[!\?\-â€¢Â°??????]+', cleaned):
                     continue
                 repeated = re.search(r'(.)\1{2,}', cleaned)
                 if repeated and len(cleaned) <= 5:
                     if repeated.group(1) != '~':
                         continue
             unique_chars = set(cleaned)
-            if len(unique_chars) == 1 and cleaned[0] in "!?…??????#@*/":
+            if len(unique_chars) == 1 and cleaned[0] in "!?â€¦??????#@*/":
                 continue
             punctuation = sum(1 for ch in cleaned if not ch.isalnum() and not ch.isspace())
             if advanced and punctuation / max(1, len(cleaned)) > 0.6:
@@ -14711,13 +14956,13 @@ class MangaOCRApp(QMainWindow):
                 "- Do NOT explain or add any commentary.\n"
                 "- Do NOT output markdown or formatting symbols.\n"
                 "- Keep line breaks if they appear in the original image.\n"
-                "- Preserve punctuation (。, 、, …, !, ? etc.).\n"
+                "- Preserve punctuation (ã€‚, ã€, â€¦, !, ? etc.).\n"
                 "- When a small note or furigana is written next to a kanji, output it in parentheses after the kanji.\n"
-                "  Example: 漢字 + note → 漢字(note)\n"
-                "- If the note appears *before* the kanji (vertically aligned text), treat it the same way: 漢字(note).\n"
+                "  Example: æ¼¢å­— + note â†’ æ¼¢å­—(note)\n"
+                "- If the note appears *before* the kanji (vertically aligned text), treat it the same way: æ¼¢å­—(note).\n"
                 "- If the note is unrelated annotation or translation note, also wrap it in parentheses.\n"
                 "- Do NOT merge notes and kanji into a single block like [note][kanji].\n"
-                "- Do NOT drop ellipses (…)\n"
+                "- Do NOT drop ellipses (â€¦)\n"
                 "- Just return the plain text with correct kanji-note pairing."
             )
         elif lang == "English":
@@ -15451,7 +15696,7 @@ class MangaOCRApp(QMainWindow):
         progress_dlg = QProgressDialog("Mengunduh model panel YOLO26 dari Hugging Face... (~10MB)", "Batal", 0, 100, self)
         progress_dlg.setWindowModality(Qt.WindowModal)
         progress_dlg.setWindowTitle("Unduh Model Panel")
-        progress_dlg.setStyleSheet("QProgressDialog { background-color: #090a0f; color: #cbd5e1; } QLabel { color: #cbd5e1; } QPushButton { background-color: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background-color: #334155; border-color: #38bdf8; }")
+        progress_dlg.setStyleSheet(theme.progress_dialog_qss())
         progress_dlg.show()
 
         url = "https://huggingface.co/leoxs22/manga-panel-detector-yolo26n/resolve/main/manga_panel_detector_fp32.pt"
@@ -15722,7 +15967,7 @@ class MangaOCRApp(QMainWindow):
         settings['target_lang'] = self.translate_combo.currentText()
         settings['use_inpaint'] = self.inpaint_checkbox.isChecked()
         
-        self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
+        self.auto_translate_page_btn.setText("â³ Memproses Halaman...")
         self.auto_translate_page_btn.setEnabled(False)
         
         use_ai_vision = self.use_ai_vision_checkbox.isChecked()
@@ -15854,7 +16099,7 @@ Each object MUST have the following keys:
 Image dimensions: Width = {w} pixels, Height = {h} pixels. Your coordinates must fit within these dimensions.
 JSON format example:
 [
-  {{"box": [100, 150, 80, 120], "original": "こんにちは", "translation": "Halo"}}
+  {{"box": [100, 150, 80, 120], "original": "ã“ã‚“ã«ã¡ã¯", "translation": "Halo"}}
 ]
 """
                 response_text = ""

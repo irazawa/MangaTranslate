@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
 
 from src.core.app_info import APP_NAME
 from src.ui.texts import StartupText
-from src.ui.theme import COLORS, FONT_FAMILY
+from src.ui import theme
 
 
 class SpinnerWidget(QWidget):
@@ -55,7 +55,7 @@ class SpinnerWidget(QWidget):
             painter.translate(center)
             painter.rotate(self._angle + index * 30)
             alpha = int(45 + (index / 11) * 210)
-            color = QColor(COLORS["accent"])
+            color = QColor(theme.COLORS["accent"])
             color.setAlpha(alpha)
             pen = QPen(color, 3, Qt.SolidLine, Qt.RoundCap)
             painter.setPen(pen)
@@ -188,57 +188,58 @@ class StartupSplash(QWidget):
     def _stylesheet(self):
         return f"""
         QWidget {{
-            font-family: {FONT_FAMILY};
-            color: {COLORS["text"]};
-            background: {COLORS["bg"]};
+            font-family: {theme.FONT_FAMILY};
+            color: {theme.COLORS["text"]};
+            background: {theme.COLORS["bg"]};
         }}
         QFrame#startupCard {{
-            background-color: {COLORS["panel"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["panel"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 14px;
         }}
         QLabel {{
             background: transparent;
-            color: {COLORS["text"]};
+            color: {theme.COLORS["text"]};
         }}
         QLabel#startupTitle {{
-            color: #f8fafc;
+            color: {theme.COLORS["text"]};
             font-size: 18pt;
             font-weight: 800;
         }}
         QLabel#startupVersion {{
-            color: {COLORS["accent"]};
+            color: {theme.COLORS["accent"]};
             font-size: 10pt;
             font-weight: 700;
         }}
         QLabel#startupSubtitle {{
-            color: {COLORS["text"]};
+            color: {theme.COLORS["text"]};
             font-size: 10pt;
         }}
         QLabel#startupStatus {{
-            color: #e2e8f0;
+            color: {theme.COLORS["text"]};
             font-size: 10pt;
             font-weight: 600;
         }}
         QLabel#startupHint {{
-            color: {COLORS["muted"]};
+            color: {theme.COLORS["muted"]};
             font-size: 9pt;
         }}
         QPlainTextEdit#startupLog {{
-            background-color: {COLORS["card_alt"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["card_alt"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 8px;
-            color: #94a3b8;
-            font-size: 8.5pt;
+            color: {theme.COLORS["muted"]};
+            font-family: {theme.CODE_FONT_FAMILY};
+            font-size: {theme.CODE_FONT_SIZE}px;
             padding: 8px;
         }}
         QProgressBar {{
-            background-color: {COLORS["card_alt"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["card_alt"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 4px;
         }}
         QProgressBar::chunk {{
-            background-color: {COLORS["accent"]};
+            background-color: {theme.COLORS["accent"]};
             border-radius: 4px;
         }}
         """

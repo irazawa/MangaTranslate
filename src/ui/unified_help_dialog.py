@@ -1,6 +1,6 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ============================================================
-# UnifiedHelpDialog — menggabungkan About, Project Stats,
+# UnifiedHelpDialog â€” menggabungkan About, Project Stats,
 # Pricing Editor, dan Session Analytics dalam satu dialog tab.
 # ============================================================
 import os
@@ -20,123 +20,117 @@ from PyQt5.QtGui import QColor, QFont, QBrush
 from src.core.app_info import APP_VERSION
 from src.ui.notifications import notify_banner, notify_toast
 from src.ui.texts import DialogText
+from src.ui import theme
 
 
-_STYLE = """
-QDialog {
-    background-color: #090a0f;
-    color: #cbd5e1;
-    font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
-    font-size: 9pt;
-}
-QTabWidget::pane {
-    border: 1px solid #1e293b;
+def _style():
+    return """
+QDialog {{
+    background-color: {bg};
+    color: {text};
+    font-family: {font_family};
+    font-size: {ui_font_size}px;
+}}
+QTabWidget::pane {{
+    border: 1px solid {border};
     border-radius: 6px;
-    background: #0b0e17;
+    background: {bg};
     top: -1px;
-}
-QTabBar::tab {
-    background: #0e111a;
-    color: #64748b;
-    border: 1px solid #1e293b;
+}}
+QTabBar::tab {{
+    background: {panel};
+    color: {muted};
+    border: 1px solid {border};
     border-bottom: none;
     padding: 6px 16px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
-    font-size: 9pt;
-}
-QTabBar::tab:selected {
-    background: #0b0e17;
-    color: #38bdf8;
-    border-bottom: 2px solid #38bdf8;
-}
-QTabBar::tab:hover:!selected { color: #94a3b8; }
-QScrollArea { border: none; background: transparent; }
-QWidget#tab_inner { background: transparent; }
-QLabel { color: #cbd5e1; background: transparent; }
-QLabel#section_title {
-    color: #38bdf8;
+}}
+QTabBar::tab:selected {{
+    background: {bg};
+    color: {accent};
+    border-bottom: 2px solid {accent};
+}}
+QTabBar::tab:hover {{ color: {text}; }}
+QScrollArea {{ border: none; background: transparent; }}
+QWidget#tab_inner {{ background: transparent; }}
+QLabel {{ color: {text}; background: transparent; }}
+QLabel#section_title {{
+    color: {accent};
     font-size: 10pt;
     font-weight: bold;
-}
-QFrame#sep {
-    background: #1e293b;
+}}
+QFrame#sep {{
+    background: {border};
     max-height: 1px;
     border: none;
-}
-QFrame#card {
-    background: #0e111a;
-    border: 1px solid #1e293b;
+}}
+QFrame#card {{
+    background: {panel};
+    border: 1px solid {border};
     border-radius: 8px;
-}
-QProgressBar {
-    background: #1e293b;
-    border: none;
-    border-radius: 4px;
-    height: 10px;
-}
-QProgressBar::chunk { border-radius: 4px; }
-QPushButton {
-    background: #1e293b;
-    color: #94a3b8;
-    border: 1px solid #334155;
+}}
+{progress_qss}
+QPushButton {{
+    background: {border};
+    color: {text};
+    border: 1px solid {border};
     border-radius: 6px;
     padding: 5px 14px;
-    font-size: 9pt;
-}
-QPushButton:hover {
-    background: #334155;
-    color: #f1f5f9;
-    border-color: #38bdf8;
-}
-QPushButton#accent_btn {
-    background: #0ea5e9;
-    color: #f8fafc;
+}}
+QPushButton:hover {{
+    background: {card_alt};
+    color: {text};
+    border-color: {accent};
+}}
+QPushButton#accent_btn {{
+    background: {accent};
+    color: {bg};
     border: none;
     font-weight: bold;
-}
-QPushButton#accent_btn:hover { background: #38bdf8; color: #0f172a; }
-QPushButton#danger_btn {
-    background: #7f1d1d;
-    color: #fca5a5;
-    border: 1px solid #b91c1c;
-}
-QPushButton#danger_btn:hover { background: #b91c1c; color: #fff; }
-QTableWidget {
-    background: #060810;
-    color: #cbd5e1;
-    border: 1px solid #1e293b;
-    border-radius: 4px;
-    gridline-color: #1e293b;
-    selection-background-color: #1e3a5f;
-    selection-color: #38bdf8;
-}
-QTableWidget QHeaderView::section {
-    background: #0e111a;
-    color: #64748b;
-    border: none;
-    border-bottom: 1px solid #1e293b;
-    padding: 4px 8px;
-    font-size: 8pt;
-}
-QDoubleSpinBox {
-    background: #0e111a;
-    color: #cbd5e1;
-    border: 1px solid #334155;
+}}
+QPushButton#accent_btn:hover {{ background: {accent_hover}; color: {bg}; }}
+QPushButton#danger_btn {{
+    background: {danger};
+    color: {bg};
+    border: 1px solid {danger};
+}}
+QPushButton#danger_btn:hover {{ background: {danger}; color: {bg}; }}
+{table_qss}
+{table_header_qss}
+QDoubleSpinBox {{
+    background: {panel};
+    color: {text};
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 2px 4px;
     font-size: 8pt;
-}
-QDoubleSpinBox:focus { border-color: #38bdf8; }
-QScrollBar:vertical {
-    background: #0e111a;
+}}
+QDoubleSpinBox:focus {{ border-color: {accent}; }}
+QScrollBar:vertical {{
+    background: {panel};
     width: 6px;
-}
-QScrollBar::handle:vertical {
-    background: #334155;
+}}
+QScrollBar::handle:vertical {{
+    background: {border};
     border-radius: 3px;
-}
-"""
+}}
+""".format(
+        bg=theme.COLORS["bg"],
+        panel=theme.COLORS["panel"],
+        card_alt=theme.COLORS["card_alt"],
+        border=theme.COLORS["border"],
+        accent=theme.COLORS["accent"],
+        accent_hover=theme.COLORS["accent_hover"],
+        text=theme.COLORS["text"],
+        muted=theme.COLORS["muted"],
+        danger=theme.COLORS["danger"],
+        font_family=theme.FONT_FAMILY,
+        ui_font_size=theme.UI_FONT_SIZE,
+        progress_qss=theme.progress_bar_qss(height=10),
+        table_qss=theme.table_qss(),
+        table_header_qss=theme.table_header_qss(),
+    )
 
 PROVIDER_COLORS = {
     'Gemini': '#4ade80',
@@ -150,9 +144,9 @@ PRICE_DISPLAY_MULTIPLIER = 1_000_000.0
 class UnifiedHelpDialog(QDialog):
     """
     Dialog terpadu Help / Usage yang menggabungkan:
-      Tab 1 — 📋 Overview : About app + Project Statistics
-      Tab 2 — 💰 Pricing   : Daftar model + harga per 1M token (bisa diedit user)
-      Tab 3 — 📈 Analytics : Usage, biaya sesi, rate limit, export CSV
+      Tab 1 â€” ðŸ“‹ Overview : About app + Project Statistics
+      Tab 2 â€” ðŸ’° Pricing   : Daftar model + harga per 1M token (bisa diedit user)
+      Tab 3 â€” ðŸ“ˆ Analytics : Usage, biaya sesi, rate limit, export CSV
     """
 
     def __init__(self, parent=None, *,
@@ -189,37 +183,37 @@ class UnifiedHelpDialog(QDialog):
         self.setWindowTitle(DialogText.HELP_USAGE_TITLE)
         self.setModal(True)
         self.resize(820, 620)
-        self.setStyleSheet(_STYLE)
+        self.setStyleSheet(_style())
         self._build_ui()
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Builder
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _build_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         hdr = QWidget()
-        hdr.setStyleSheet("background: #0e111a; border-bottom: 1px solid #1e293b;")
+        hdr.setStyleSheet(f"background: {theme.COLORS['panel']}; border-bottom: 1px solid {theme.COLORS['border']};")
         hl = QHBoxLayout(hdr)
         hl.setContentsMargins(20, 12, 20, 12)
         title = QLabel(DialogText.HELP_USAGE_HEADER)
-        title.setStyleSheet("font-size:14pt; font-weight:bold; color:#38bdf8;")
+        title.setStyleSheet(f"font-size:14pt; font-weight:bold; color:{theme.COLORS['accent']};")
         hl.addWidget(title)
         hl.addStretch(1)
         ver = QLabel(f"v{self.app_version}")
-        ver.setStyleSheet("color:#475569; font-size:9pt;")
+        ver.setStyleSheet(f"color:{theme.COLORS['muted']}; font-size:9pt;")
         hl.addWidget(ver)
         outer.addWidget(hdr)
 
-        # ── Tabs ──────────────────────────────────────────────────────────────
+        # â”€â”€ Tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self.tabs = QTabWidget()
         self.tabs.setContentsMargins(8, 8, 8, 8)
-        self.tabs.addTab(self._make_overview_tab(),  "📋  Overview")
-        self.tabs.addTab(self._make_pricing_tab(),   "💰  Pricing")
-        self.tabs.addTab(self._make_analytics_tab(), "📈  Analytics")
+        self.tabs.addTab(self._make_overview_tab(),  "ðŸ“‹  Overview")
+        self.tabs.addTab(self._make_pricing_tab(),   "ðŸ’°  Pricing")
+        self.tabs.addTab(self._make_analytics_tab(), "ðŸ“ˆ  Analytics")
 
         tab_wrapper = QWidget()
         tw_layout = QVBoxLayout(tab_wrapper)
@@ -227,9 +221,9 @@ class UnifiedHelpDialog(QDialog):
         tw_layout.addWidget(self.tabs)
         outer.addWidget(tab_wrapper, 1)
 
-        # ── Footer ────────────────────────────────────────────────────────────
+        # â”€â”€ Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         ftr = QWidget()
-        ftr.setStyleSheet("background: #0e111a; border-top: 1px solid #1e293b;")
+        ftr.setStyleSheet(f"background: {theme.COLORS['panel']}; border-top: 1px solid {theme.COLORS['border']};")
         fl = QHBoxLayout(ftr)
         fl.setContentsMargins(20, 8, 20, 8)
         fl.addStretch(1)
@@ -239,9 +233,9 @@ class UnifiedHelpDialog(QDialog):
         fl.addWidget(close_btn)
         outer.addWidget(ftr)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Helper widgets
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     @staticmethod
     def _scrollable(widget) -> QScrollArea:
         sa = QScrollArea()
@@ -263,15 +257,15 @@ class UnifiedHelpDialog(QDialog):
     @staticmethod
     def _row(vbox, label, value, value_color="#f1f5f9"):
         lbl = QLabel(
-            f"<span style='color:#64748b;'>{label}</span>"
+            f"<span style='color:{theme.COLORS['muted']};'>{label}</span>"
             f"  <b style='color:{value_color};'>{value}</b>"
         )
         lbl.setTextFormat(Qt.RichText)
         vbox.addWidget(lbl)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tab 1 — Overview
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Tab 1 â€” Overview
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_overview_tab(self) -> QWidget:
         inner = QWidget(); inner.setObjectName("tab_inner")
         vbox = QVBoxLayout(inner)
@@ -279,11 +273,11 @@ class UnifiedHelpDialog(QDialog):
         vbox.setSpacing(10)
 
         # About
-        self._section(vbox, "ℹ️ About")
+        self._section(vbox, "â„¹ï¸ About")
         about_lbl = QLabel(
-            f"<b style='color:#f1f5f9;font-size:12pt;'>Manga OCR &amp; Typeset Tool</b>"
-            f"<span style='color:#64748b;'> v{self.app_version}</span><br>"
-            "<span style='color:#94a3b8;'>Aplikasi desktop untuk baca, OCR, terjemah, dan typeset teks manga/komik.<br>"
+            f"<b style='color:{theme.COLORS['text']};font-size:12pt;'>Manga OCR &amp; Typeset Tool</b>"
+            f"<span style='color:{theme.COLORS['muted']};'> v{self.app_version}</span><br>"
+            f"<span style='color:{theme.COLORS['muted']};'>Aplikasi desktop untuk baca, OCR, terjemah, dan typeset teks manga/komik.<br>"
             "Powered by Python, PyQt5, dan berbagai AI API.</span>"
         )
         about_lbl.setTextFormat(Qt.RichText)
@@ -292,7 +286,7 @@ class UnifiedHelpDialog(QDialog):
         vbox.addSpacing(8)
 
         # Session cost quick-view
-        self._section(vbox, "💰 Session Cost")
+        self._section(vbox, "ðŸ’° Session Cost")
         cost_idr = self.total_cost * self.usd_to_idr_rate
         self._row(vbox, "Estimasi Biaya (USD)", f"${self.total_cost:.6f}", "#4ade80")
         self._row(vbox, "Estimasi Biaya (IDR)", f"Rp {cost_idr:,.0f}", "#fbbf24")
@@ -303,7 +297,7 @@ class UnifiedHelpDialog(QDialog):
 
         # Project stats
         if self.project_dir:
-            self._section(vbox, "📁 Project Statistics")
+            self._section(vbox, "ðŸ“ Project Statistics")
             total_pages = len([f for f in self.image_files if "_typeset" not in f.lower()])
             pages_done = 0; total_areas = 0; areas_text = 0; total_words = 0
             model_cnt: dict[str, int] = {}
@@ -336,20 +330,20 @@ class UnifiedHelpDialog(QDialog):
 
             if model_cnt:
                 vbox.addSpacing(4)
-                self._section(vbox, "🤖 Model Used (per area)")
+                self._section(vbox, "ðŸ¤– Model Used (per area)")
                 for m, c in sorted(model_cnt.items(), key=lambda x: -x[1]):
                     self._row(vbox, m, str(c))
         else:
-            notice = QLabel("<i style='color:#475569;'>Buka folder/project untuk melihat statistik project.</i>")
+            notice = QLabel(f"<i style='color:{theme.COLORS['muted']};'>Buka folder/project untuk melihat statistik project.</i>")
             notice.setTextFormat(Qt.RichText)
             vbox.addWidget(notice)
 
         vbox.addStretch(1)
         return self._scrollable(inner)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tab 2 — Pricing Editor
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Tab 2 â€” Pricing Editor
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_pricing_tab(self) -> QWidget:
         outer_w = QWidget(); outer_w.setObjectName("tab_inner")
         outer_v = QVBoxLayout(outer_w)
@@ -357,9 +351,9 @@ class UnifiedHelpDialog(QDialog):
         outer_v.setSpacing(8)
 
         info = QLabel(
-            "<span style='color:#94a3b8;'>Harga di bawah digunakan untuk kalkulasi biaya sesi. "
-            "Kolom <b style='color:#38bdf8;'>Input $/1M tok</b> dan <b style='color:#38bdf8;'>Output $/1M tok</b> "
-            "bisa diedit langsung — klik sel, ubah nilainya, lalu tekan <b>💾 Simpan</b>.<br>"
+            f"<span style='color:{theme.COLORS['muted']};'>Harga di bawah digunakan untuk kalkulasi biaya sesi. "
+            f"Kolom <b style='color:{theme.COLORS['accent']};'>Input $/1M tok</b> dan <b style='color:{theme.COLORS['accent']};'>Output $/1M tok</b> "
+            "bisa diedit langsung â€” klik sel, ubah nilainya, lalu tekan <b>ðŸ’¾ Simpan</b>.<br>"
             "Nilai internal tetap disimpan per token agar kalkulasi biaya tetap akurat. "
             "Harga OpenRouter diambil <i>otomatis</i> dari API mereka saat startup. "
             "Model dengan harga 0 berarti gratis atau belum diketahui.</span>"
@@ -388,18 +382,18 @@ class UnifiedHelpDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        refresh_btn = QPushButton("🔄 Refresh dari OpenRouter")
+        refresh_btn = QPushButton("ðŸ”„ Refresh dari OpenRouter")
         refresh_btn.clicked.connect(self._refresh_openrouter_prices)
         btn_row.addWidget(refresh_btn)
 
         btn_row.addStretch(1)
 
-        reset_btn = QPushButton("↩ Reset ke Default")
+        reset_btn = QPushButton("â†© Reset ke Default")
         reset_btn.setObjectName("danger_btn")
         reset_btn.clicked.connect(self._reset_pricing_to_default)
         btn_row.addWidget(reset_btn)
 
-        save_btn = QPushButton("💾  Simpan Perubahan")
+        save_btn = QPushButton("ðŸ’¾  Simpan Perubahan")
         save_btn.setObjectName("accent_btn")
         save_btn.clicked.connect(self._save_pricing)
         btn_row.addWidget(save_btn)
@@ -407,7 +401,7 @@ class UnifiedHelpDialog(QDialog):
         outer_v.addLayout(btn_row)
 
         note = QLabel(
-            "<span style='color:#475569; font-size:8pt;'>* Perubahan harga hanya berlaku untuk sesi ini "
+            f"<span style='color:{theme.COLORS['muted']}; font-size:8pt;'>* Perubahan harga hanya berlaku untuk sesi ini "
             "dan tidak mempengaruhi data usage yang sudah tersimpan.</span>"
         )
         note.setTextFormat(Qt.RichText)
@@ -437,14 +431,14 @@ class UnifiedHelpDialog(QDialog):
             pricing = info.get('pricing', {'input': 0.0, 'output': 0.0})
             limits  = info.get('limits', {})
             display = info.get('display') or info.get('name') or model_id
-            color   = PROVIDER_COLORS.get(provider, DEFAULT_COLOR)
+            color   = PROVIDER_COLORS.get(provider, theme.COLORS['muted'])
 
             def _item(text, editable=False, align=Qt.AlignLeft | Qt.AlignVCenter):
                 it = QTableWidgetItem(str(text))
                 it.setTextAlignment(align)
                 if not editable:
                     it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-                it.setForeground(QBrush(QColor('#cbd5e1')))
+                it.setForeground(QBrush(QColor(theme.COLORS['text'])))
                 return it
 
             prov_item = _item(provider)
@@ -453,7 +447,7 @@ class UnifiedHelpDialog(QDialog):
             tbl.setItem(row, 1, _item(model_id))
             tbl.setItem(row, 2, _item(display))
 
-            # Kolom Input $/1M tok — QDoubleSpinBox
+            # Kolom Input $/1M tok â€” QDoubleSpinBox
             spin_in = QDoubleSpinBox()
             spin_in.setRange(0.0, 1_000_000.0)
             spin_in.setDecimals(6)
@@ -462,10 +456,12 @@ class UnifiedHelpDialog(QDialog):
             spin_in.setProperty('_provider', provider)
             spin_in.setProperty('_model', model_id)
             spin_in.setProperty('_field', 'input')
-            spin_in.setStyleSheet("QDoubleSpinBox { background: #0e111a; color: #93c5fd; border: none; }")
+            spin_in.setStyleSheet(
+                f"QDoubleSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['accent']}; border: none; }}"
+            )
             tbl.setCellWidget(row, 3, spin_in)
 
-            # Kolom Output $/1M tok — QDoubleSpinBox
+            # Kolom Output $/1M tok â€” QDoubleSpinBox
             spin_out = QDoubleSpinBox()
             spin_out.setRange(0.0, 1_000_000.0)
             spin_out.setDecimals(6)
@@ -474,12 +470,14 @@ class UnifiedHelpDialog(QDialog):
             spin_out.setProperty('_provider', provider)
             spin_out.setProperty('_model', model_id)
             spin_out.setProperty('_field', 'output')
-            spin_out.setStyleSheet("QDoubleSpinBox { background: #0e111a; color: #86efac; border: none; }")
+            spin_out.setStyleSheet(
+                f"QDoubleSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['success']}; border: none; }}"
+            )
             tbl.setCellWidget(row, 4, spin_out)
 
             rpm = limits.get('rpm', '-')
             rpd = limits.get('rpd', '-')
-            limits_str = f"{rpm}/{rpd}" if rpm != '-' else "—"
+            limits_str = f"{rpm}/{rpd}" if rpm != '-' else "â€”"
             tbl.setItem(row, 5, _item(limits_str, align=Qt.AlignCenter | Qt.AlignVCenter))
 
         tbl.resizeColumnsToContents()
@@ -542,9 +540,9 @@ class UnifiedHelpDialog(QDialog):
             self._populate_pricing_table()
             notify_toast(self, "Reset", "Harga sudah dikembalikan ke default. Tekan Simpan untuk menerapkan.", kind="info")
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tab 3 — Analytics
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Tab 3 â€” Analytics
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_analytics_tab(self) -> QWidget:
         inner = QWidget(); inner.setObjectName("tab_inner")
         vbox = QVBoxLayout(inner)
@@ -556,29 +554,29 @@ class UnifiedHelpDialog(QDialog):
         # Tombol actions di atas
         act_row = QHBoxLayout()
         act_row.setSpacing(8)
-        exp_btn = QPushButton("⬇  Export CSV")
+        exp_btn = QPushButton("â¬‡  Export CSV")
         exp_btn.setObjectName("accent_btn")
         exp_btn.clicked.connect(self._export_csv)
         act_row.addWidget(exp_btn)
         act_row.addStretch(1)
-        rst_btn = QPushButton("🗑  Reset Usage")
+        rst_btn = QPushButton("ðŸ—‘  Reset Usage")
         rst_btn.setObjectName("danger_btn")
         rst_btn.clicked.connect(self._reset_usage)
         act_row.addWidget(rst_btn)
         vbox.addLayout(act_row)
 
         # Cost summary
-        self._section(vbox, "💰 Cost Summary")
+        self._section(vbox, "ðŸ’° Cost Summary")
         cost_idr = self.total_cost * self.usd_to_idr_rate
         self._row(vbox, "Total Session Cost (USD)", f"${self.total_cost:.6f}", "#4ade80")
         self._row(vbox, "Estimasi IDR",             f"Rp {cost_idr:,.0f}",    "#fbbf24")
         self._row(vbox, "Total Input Tokens",       f"{self.total_input_tokens:,}")
         self._row(vbox, "Total Output Tokens",      f"{self.total_output_tokens:,}")
-        self._row(vbox, "Tanggal Data",             self.usage_data.get('date', '-'), "#64748b")
+        self._row(vbox, "Tanggal Data",             self.usage_data.get('date', '-'), theme.COLORS['muted'])
         vbox.addSpacing(6)
 
         # Usage per model (bar chart)
-        self._section(vbox, "📊 API Usage per Model (Daily)")
+        self._section(vbox, "ðŸ“Š API Usage per Model (Daily)")
         all_counts = [
             m.get('daily_count', 0)
             for models in provider_usage.values()
@@ -590,8 +588,8 @@ class UnifiedHelpDialog(QDialog):
             models = provider_usage[provider]
             if not models:
                 continue
-            color = PROVIDER_COLORS.get(provider, DEFAULT_COLOR)
-            prov_lbl = QLabel(f"<b style='color:{color};font-size:10pt;'>▶ {provider}</b>")
+            color = PROVIDER_COLORS.get(provider, theme.COLORS['muted'])
+            prov_lbl = QLabel(f"<b style='color:{color};font-size:10pt;'>â–¶ {provider}</b>")
             prov_lbl.setTextFormat(Qt.RichText)
             vbox.addWidget(prov_lbl)
 
@@ -605,14 +603,14 @@ class UnifiedHelpDialog(QDialog):
                 rpd_limit = limits.get('rpd', 1000)
                 display   = model_info.get('display') or model_name
                 if len(display) > 45:
-                    display = display[:42] + "…"
+                    display = display[:42] + "â€¦"
 
                 rw = QWidget()
                 rl = QHBoxLayout(rw)
                 rl.setContentsMargins(8, 2, 8, 2)
                 rl.setSpacing(10)
 
-                nm_lbl = QLabel(f"<span style='color:#cbd5e1;'>{display}</span>")
+                nm_lbl = QLabel(f"<span style='color:{theme.COLORS['text']};'>{display}</span>")
                 nm_lbl.setTextFormat(Qt.RichText)
                 nm_lbl.setMinimumWidth(220)
                 nm_lbl.setMaximumWidth(260)
@@ -626,12 +624,11 @@ class UnifiedHelpDialog(QDialog):
                 bar.setTextVisible(False)
                 chunk_c = "#ef4444" if rpd_pct >= 90 else ("#f59e0b" if rpd_pct >= 60 else color)
                 bar.setStyleSheet(
-                    f"QProgressBar{{background:#1e293b;border:none;border-radius:4px;}}"
-                    f"QProgressBar::chunk{{background:{chunk_c};border-radius:4px;}}"
+                    theme.progress_bar_qss(chunk_c, radius=4)
                 )
                 rl.addWidget(bar, 1)
 
-                cnt_lbl = QLabel(f"<span style='color:#94a3b8;font-size:8pt;'>{daily}/{rpd_limit} daily</span>")
+                cnt_lbl = QLabel(f"<span style='color:{theme.COLORS['muted']};font-size:8pt;'>{daily}/{rpd_limit} daily</span>")
                 cnt_lbl.setTextFormat(Qt.RichText)
                 cnt_lbl.setMinimumWidth(100)
                 rl.addWidget(cnt_lbl)
@@ -641,10 +638,10 @@ class UnifiedHelpDialog(QDialog):
         vbox.addSpacing(6)
 
         # Rate limit status
-        self._section(vbox, "⏱ Rate Limit Status (RPM saat ini)")
+        self._section(vbox, "â± Rate Limit Status (RPM saat ini)")
         has_any = False
         for provider in sorted(provider_usage.keys()):
-            color = PROVIDER_COLORS.get(provider, DEFAULT_COLOR)
+            color = PROVIDER_COLORS.get(provider, theme.COLORS['muted'])
             for model_name, mdata in sorted(provider_usage[provider].items()):
                 rpm   = mdata.get('minute_count', 0)
                 daily = mdata.get('daily_count', 0)
@@ -658,9 +655,9 @@ class UnifiedHelpDialog(QDialog):
                 rpm_limit = limits.get('rpm', 60)
                 display   = model_info.get('display') or model_name
                 if len(display) > 45:
-                    display = display[:42] + "…"
+                    display = display[:42] + "â€¦"
                 rpm_pct = int(min(rpm / rpm_limit * 100, 100)) if rpm_limit > 0 else 0
-                icon = "🔴" if rpm_pct >= 100 else ("🟡" if rpm_pct >= 60 else "🟢")
+                icon = "ðŸ”´" if rpm_pct >= 100 else ("ðŸŸ¡" if rpm_pct >= 60 else "ðŸŸ¢")
 
                 rw = QWidget()
                 rl = QHBoxLayout(rw)
@@ -669,7 +666,7 @@ class UnifiedHelpDialog(QDialog):
 
                 rl.addWidget(QLabel(icon))
 
-                nm = QLabel(f"<span style='color:#cbd5e1;'>{display}</span>")
+                nm = QLabel(f"<span style='color:{theme.COLORS['text']};'>{display}</span>")
                 nm.setTextFormat(Qt.RichText)
                 nm.setMinimumWidth(220)
                 nm.setMaximumWidth(260)
@@ -682,12 +679,11 @@ class UnifiedHelpDialog(QDialog):
                 rpm_bar.setTextVisible(False)
                 chunk_c = "#ef4444" if rpm_pct >= 90 else ("#f59e0b" if rpm_pct >= 60 else color)
                 rpm_bar.setStyleSheet(
-                    f"QProgressBar{{background:#1e293b;border:none;border-radius:3px;}}"
-                    f"QProgressBar::chunk{{background:{chunk_c};border-radius:3px;}}"
+                    theme.progress_bar_qss(chunk_c, radius=3)
                 )
                 rl.addWidget(rpm_bar, 1)
 
-                rpm_lbl = QLabel(f"<span style='color:#94a3b8;font-size:8pt;'>{rpm}/{rpm_limit} rpm</span>")
+                rpm_lbl = QLabel(f"<span style='color:{theme.COLORS['muted']};font-size:8pt;'>{rpm}/{rpm_limit} rpm</span>")
                 rpm_lbl.setTextFormat(Qt.RichText)
                 rpm_lbl.setMinimumWidth(90)
                 rl.addWidget(rpm_lbl)
@@ -695,16 +691,16 @@ class UnifiedHelpDialog(QDialog):
                 vbox.addWidget(rw)
 
         if not has_any:
-            nl = QLabel("<i style='color:#475569;'>Belum ada model yang digunakan sesi ini.</i>")
+            nl = QLabel(f"<i style='color:{theme.COLORS['muted']};'>Belum ada model yang digunakan sesi ini.</i>")
             nl.setTextFormat(Qt.RichText)
             vbox.addWidget(nl)
 
         vbox.addStretch(1)
         return self._scrollable(inner)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Export CSV
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Analytics CSV", "session_analytics.csv", "CSV Files (*.csv)"
@@ -743,9 +739,9 @@ class UnifiedHelpDialog(QDialog):
         except Exception as e:
             notify_banner(self, "usage-export-failed", "Export gagal", str(e), kind="error")
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Reset usage
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _reset_usage(self):
         reply = QMessageBox.question(
             self, "Reset Usage",

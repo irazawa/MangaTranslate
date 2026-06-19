@@ -54,6 +54,13 @@ class SettingsText:
             "subtitle": "Choose how new text areas behave when the app cleans and redraws bubbles.",
         },
         {
+            "key": "appearance",
+            "label": "Appearance",
+            "description": "Theme and UI style",
+            "title": "Appearance",
+            "subtitle": "Use light, dark, or system theme mode and tune the app colors, fonts, and motion preferences.",
+        },
+        {
             "key": "translation",
             "label": "Translation",
             "description": "OpenRouter models",
@@ -98,6 +105,50 @@ class SettingsText:
     ]
 
 
+class AppearanceText:
+    CARD_THEME = "Theme"
+    CARD_COLORS = "Colors"
+    CARD_INTERFACE = "Interface"
+    MODE_LABEL = "Theme"
+    MODE_DESC = "Use light, dark, or match your system."
+    DARK_THEME_LABEL = "Dark theme"
+    DARK_THEME_DESC = "Choose the dark palette used when dark mode is active."
+    ACCENT_LABEL = "Accent"
+    ACCENT_DESC = "Primary action and selection color. Leave empty to use the preset."
+    BACKGROUND_LABEL = "Background"
+    BACKGROUND_DESC = "Main window background override. Leave empty to use the preset."
+    FOREGROUND_LABEL = "Foreground"
+    FOREGROUND_DESC = "Main text color override. Leave empty to use the preset."
+    UI_FONT_LABEL = "UI font"
+    UI_FONT_DESC = "Font stack used by the MangaTranslate interface."
+    CODE_FONT_LABEL = "Code font"
+    CODE_FONT_DESC = "Font stack reserved for monospace/code-like fields."
+    TRANSLUCENT_SIDEBAR_LABEL = "Translucent sidebar"
+    TRANSLUCENT_SIDEBAR_DESC = "Soften sidebar panels where the theme supports translucency."
+    CONTRAST_LABEL = "Contrast"
+    CONTRAST_DESC = "Adjust border and muted text contrast."
+    POINTER_LABEL = "Use pointer cursors"
+    POINTER_DESC = "Change the cursor to a pointer over interactive controls."
+    REDUCE_MOTION_LABEL = "Reduce motion"
+    REDUCE_MOTION_DESC = "Reduce animations or match your system."
+    UI_FONT_SIZE_LABEL = "UI font size"
+    UI_FONT_SIZE_DESC = "Adjust the base size used for the MangaTranslate UI."
+    CODE_FONT_SIZE_LABEL = "Code font size"
+    CODE_FONT_SIZE_DESC = "Adjust the base size used for code-like text."
+    PICK_COLOR = "Pick"
+    RESET_COLOR = "Reset"
+    MODES = [
+        ("dark", "Dark"),
+        ("light", "Light"),
+        ("system", "System"),
+    ]
+    MOTION_OPTIONS = [
+        ("system", "Match system"),
+        ("reduce", "Reduce motion"),
+        ("full", "Full motion"),
+    ]
+
+
 class StartupText:
     VERSION_LABEL = f"v{APP_VERSION}"
     SUBTITLE = "Menyiapkan OCR, translator, dan workspace typeset."
@@ -107,7 +158,7 @@ class StartupText:
     STATUS_CHECKING_DEPENDENCIES = "Memeriksa dependency..."
     STATUS_PREPARING_SESSION = "Menyiapkan data sesi..."
     STATUS_BUILDING_UI = "Membangun interface..."
-    STATUS_APPLYING_THEME = "Menerapkan dark theme..."
+    STATUS_APPLYING_THEME = "Menerapkan theme..."
     STATUS_SETTING_SHORTCUTS = "Menyiapkan shortcut..."
     STATUS_INITIALIZING_ENGINES = "Menyiapkan engine OCR..."
     STATUS_SYNCING_TESSDATA = "Menyinkronkan data Tesseract..."

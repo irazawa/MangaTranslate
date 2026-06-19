@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -100,7 +100,7 @@ def default_settings() -> dict:
             "use_inpaint": True,
             "apply_mode": "selected",
             "text_color_threshold": 128,
-            "auto_text_color": True,   # <— BARU: bisa dimatikan dari Settings
+            "auto_text_color": True,   # <â€” BARU: bisa dimatikan dari Settings
             # When true, debug/temp files created by AI OCR and MOFRL (under ./temp/) will be removed after a run
             "constrain_text": True,
             "remove_ai_temp_files": False,
@@ -145,6 +145,22 @@ def default_settings() -> dict:
         "autosave": {
             "enabled": False,
             "interval_ms": 300000
+        },
+        "appearance": {
+            "mode": "dark",
+            "dark_theme": "codex",
+            "light_theme": "daylight",
+            "accent": "",
+            "background": "",
+            "foreground": "",
+            "ui_font": "'Outfit', 'Inter', 'Segoe UI', sans-serif",
+            "code_font": "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace",
+            "use_pointer_cursors": True,
+            "reduce_motion": "system",
+            "ui_font_size": 14,
+            "code_font_size": 12,
+            "contrast": 60,
+            "translucent_sidebar": False
         },
         "emergency_close": {
             "action_type": "url",
@@ -315,7 +331,15 @@ def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
         except Exception:
             interval = autosave_defaults.get('interval_ms', 300000)
         autosave_settings['interval_ms'] = max(5000, interval)
-        
+
+        appearance_defaults = base.get('appearance', {})
+        appearance_settings = merged.setdefault('appearance', {})
+        if not isinstance(appearance_settings, dict):
+            appearance_settings = {}
+            merged['appearance'] = appearance_settings
+        for key, value in appearance_defaults.items():
+            appearance_settings.setdefault(key, value)
+
         emergency_defaults = base.get('emergency_close', {})
         emergency_settings = merged.setdefault('emergency_close', {})
         for key, value in emergency_defaults.items():

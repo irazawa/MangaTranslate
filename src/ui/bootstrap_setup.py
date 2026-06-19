@@ -5,7 +5,7 @@ import shutil
 import subprocess
 
 from PyQt5.QtCore import QEventLoop, QObject, QSize, QThread, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 
 from src.core.app_info import APP_NAME
 from src.ui.texts import BootstrapText
-from src.ui.theme import COLORS, FONT_FAMILY
+from src.ui import theme
 
 
 class BootstrapWorker(QObject):
@@ -161,6 +161,12 @@ class BootstrapSetupWindow(QWidget):
     def __init__(self, base_dir, icon_path=None, parent=None):
         super().__init__(parent)
         self.base_dir = base_dir
+        try:
+            app = QApplication.instance()
+            system_dark = app.palette().color(QPalette.Window).lightness() < 128 if app is not None else True
+        except Exception:
+            system_dark = True
+        theme.apply_appearance_from_settings_file(self.base_dir, system_dark=system_dark)
         self._running = False
         self._finished = False
         self._emitted = False
@@ -327,72 +333,72 @@ class BootstrapSetupWindow(QWidget):
     def _stylesheet(self):
         return f"""
         QWidget {{
-            background-color: {COLORS["bg"]};
-            color: {COLORS["text"]};
-            font-family: {FONT_FAMILY};
-            font-size: 10pt;
+            background-color: {theme.COLORS["bg"]};
+            color: {theme.COLORS["text"]};
+            font-family: {theme.FONT_FAMILY};
+            font-size: {theme.UI_FONT_SIZE}px;
         }}
         QFrame#bootstrapCard {{
-            background-color: {COLORS["panel"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["panel"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 14px;
         }}
         QLabel {{
             background: transparent;
-            color: {COLORS["text"]};
+            color: {theme.COLORS["text"]};
         }}
         QLabel#bootstrapTitle {{
-            color: #f8fafc;
+            color: {theme.COLORS["text"]};
             font-size: 18pt;
             font-weight: 800;
         }}
         QLabel#bootstrapSubtitle {{
-            color: {COLORS["text"]};
+            color: {theme.COLORS["text"]};
             font-size: 10pt;
         }}
         QLabel#bootstrapStatus {{
-            color: #e2e8f0;
+            color: {theme.COLORS["text"]};
             font-size: 10pt;
             font-weight: 700;
         }}
         QLabel#bootstrapHint {{
-            color: {COLORS["muted"]};
+            color: {theme.COLORS["muted"]};
             font-size: 9pt;
         }}
         QPlainTextEdit#bootstrapLog {{
-            background-color: {COLORS["card_alt"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["card_alt"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 8px;
-            color: #94a3b8;
-            font-family: Consolas, 'Cascadia Mono', monospace;
-            font-size: 9pt;
+            color: {theme.COLORS["muted"]};
+            font-family: {theme.CODE_FONT_FAMILY};
+            font-size: {theme.CODE_FONT_SIZE}px;
             padding: 8px;
         }}
         QProgressBar {{
-            background-color: {COLORS["card_alt"]};
-            border: 1px solid {COLORS["border"]};
+            background-color: {theme.COLORS["card_alt"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 4px;
         }}
         QProgressBar::chunk {{
-            background-color: {COLORS["accent"]};
+            background-color: {theme.COLORS["accent"]};
             border-radius: 4px;
         }}
         QPushButton {{
-            background-color: {COLORS["border"]};
-            color: {COLORS["text"]};
-            border: 1px solid #334155;
+            background-color: {theme.COLORS["border"]};
+            color: {theme.COLORS["text"]};
+            border: 1px solid {theme.COLORS["border"]};
             border-radius: 8px;
             padding: 8px 16px;
             font-weight: 600;
         }}
-        QPushButton:hover:!disabled {{
-            background-color: #334155;
-            border-color: {COLORS["accent"]};
+        QPushButton:enabled:hover {{
+            background-color: {theme.COLORS["card_alt"]};
+            border-color: {theme.COLORS["accent"]};
         }}
         QPushButton:disabled {{
-            color: {COLORS["muted"]};
-            background-color: #0f131a;
-            border-color: {COLORS["border"]};
+            color: {theme.COLORS["muted"]};
+            background-color: {theme.COLORS["panel"]};
+            border-color: {theme.COLORS["border"]};
         }}
         """
 

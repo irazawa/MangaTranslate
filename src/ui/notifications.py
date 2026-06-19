@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from src.ui.theme import COLORS, notification_frame_qss
+
 
 _KIND_COLORS = {
     "info": "#38bdf8",
@@ -25,7 +27,16 @@ _KIND_COLORS = {
 
 
 def _kind_color(kind: str) -> str:
-    return _KIND_COLORS.get((kind or "info").lower(), _KIND_COLORS["info"])
+    kind = (kind or "info").lower()
+    if kind == "info":
+        return COLORS["accent"]
+    if kind == "success":
+        return COLORS["success"]
+    if kind == "warning":
+        return COLORS["warning"]
+    if kind == "error":
+        return COLORS["danger"]
+    return _KIND_COLORS.get(kind, COLORS["accent"])
 
 
 class _NotificationFrame(QFrame):
@@ -49,55 +60,7 @@ class _NotificationFrame(QFrame):
 
         accent = _kind_color(self.kind)
         radius = 7 if compact else 8
-        self.setStyleSheet(
-            f"""
-            QFrame#appNotification {{
-                background-color: #0e111a;
-                border: 1px solid #1f2937;
-                border-left: 4px solid {accent};
-                border-radius: {radius}px;
-            }}
-            QLabel#notificationTitle {{
-                color: #e2e8f0;
-                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
-                font-size: 10pt;
-                font-weight: 700;
-                background: transparent;
-            }}
-            QLabel#notificationMessage {{
-                color: #94a3b8;
-                font-family: 'Outfit', 'Inter', 'Segoe UI', sans-serif;
-                font-size: 9pt;
-                background: transparent;
-            }}
-            QPushButton#notificationClose {{
-                color: #94a3b8;
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 5px;
-                font-weight: 700;
-                min-width: 22px;
-                min-height: 22px;
-                padding: 0;
-            }}
-            QPushButton#notificationClose:hover {{
-                color: #e2e8f0;
-                background: #1f2937;
-                border-color: #334155;
-            }}
-            QPushButton#notificationAction {{
-                color: #08111f;
-                background: {accent};
-                border: 0;
-                border-radius: 5px;
-                font-weight: 700;
-                padding: 5px 10px;
-            }}
-            QPushButton#notificationAction:hover {{
-                background: #7dd3fc;
-            }}
-            """
-        )
+        self.setStyleSheet(notification_frame_qss(accent, radius=radius))
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(12, 9 if compact else 10, 8, 9 if compact else 10)
@@ -135,6 +98,7 @@ class _NotificationFrame(QFrame):
         if kind and kind.lower() != self.kind:
             self.kind = kind.lower()
             self.setProperty("kind", self.kind)
+            self.setStyleSheet(notification_frame_qss(_kind_color(self.kind)))
 
     def set_action(self, text: Optional[str], callback: Optional[Callable[[], None]]):
         if self.action_button is not None:

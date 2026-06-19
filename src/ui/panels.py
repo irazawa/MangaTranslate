@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -28,6 +28,7 @@ from PyQt5.QtCore import (
 
 from src.core.config import *
 from src.ui.notifications import notify_banner, notify_toast
+from src.ui.theme import COLORS, table_header_qss, table_qss
 
 class APIManagerPanel(QWidget):
     """Panel widget to manage translation and AI OCR API settings."""
@@ -68,7 +69,7 @@ class APIManagerPanel(QWidget):
         tess_layout.addWidget(self.tess_path_edit)
         tess_layout.addWidget(browse_btn)
         tess_hint = QLabel("Set the executable path Tesseract OCR should use.")
-        tess_hint.setStyleSheet("color: #9cb4d0; font-size: 11px;")
+        tess_hint.setStyleSheet(f"color: {COLORS['muted']}; font-size: 11px;")
         tess_layout.addWidget(tess_hint)
         main_layout.addWidget(tess_group)
 
@@ -84,7 +85,7 @@ class APIManagerPanel(QWidget):
 
         description = QLabel("Manage translation API keys and select the active key per provider.")
         description.setWordWrap(True)
-        description.setStyleSheet("color: #9cb4d0;")
+        description.setStyleSheet(f"color: {COLORS['muted']};")
         layout.addWidget(description)
 
         for provider in self.TRANSLATION_PROVIDERS:
@@ -130,7 +131,7 @@ class APIManagerPanel(QWidget):
 
         description = QLabel("Configure AI-powered OCR providers. Set API URL, API key, and manage available models.")
         description.setWordWrap(True)
-        description.setStyleSheet("color: #9cb4d0;")
+        description.setStyleSheet(f"color: {COLORS['muted']};")
         layout.addWidget(description)
 
         for provider_key, display_name in self.OCR_PROVIDERS.items():
@@ -176,7 +177,7 @@ class APIManagerPanel(QWidget):
             info_layout.addWidget(key_widget, 1, 1)
 
             warning_label = QLabel("")
-            warning_label.setStyleSheet("color: #ff6b6b;")
+            warning_label.setStyleSheet(f"color: {COLORS['danger']};")
             info_layout.addWidget(warning_label, 2, 0, 1, 2)
 
             group_layout.addLayout(info_layout)
@@ -196,40 +197,8 @@ class APIManagerPanel(QWidget):
             models_table.setSelectionMode(QAbstractItemView.SingleSelection)
             models_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             models_table.setAlternatingRowColors(True)
-            models_table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #0e111a;
-                    alternate-background-color: #0f131c;
-                    border: 1px solid #1e293b;
-                    gridline-color: #1e293b;
-                    color: #cbd5e1;
-                    border-radius: 8px;
-                }
-                QTableWidget::item {
-                    background-color: transparent;
-                    color: #cbd5e1;
-                    border: none;
-                    padding: 6px;
-                }
-                QTableWidget::item:selected {
-                    background-color: #1e293b;
-                    color: #38bdf8;
-                }
-                QTableWidget::item:hover {
-                    background-color: #1e293b;
-                    color: #f8fafc;
-                }
-            """)
-            header.setStyleSheet("""
-                QHeaderView::section {
-                    background-color: #0f131c;
-                    color: #cbd5e1;
-                    border: none;
-                    border-bottom: 1px solid #1e293b;
-                    padding: 6px;
-                    font-weight: 600;
-                }
-            """)
+            models_table.setStyleSheet(table_qss())
+            header.setStyleSheet(table_header_qss())
             group_layout.addWidget(models_table)
 
             button_row = QHBoxLayout()
@@ -576,7 +545,7 @@ class OpenRouterSettingsPanel(QWidget):
         self.backoff_spin.setValue(float(self.data.get('backoff', 1.5) or 1.5))
         form.addRow("Backoff factor", self.backoff_spin)
         help_label = QLabel("Tip: Find your OpenRouter API key at https://openrouter.ai/account")
-        help_label.setStyleSheet("color: #9cb4d0;")
+        help_label.setStyleSheet(f"color: {COLORS['muted']};")
         help_label.setWordWrap(True)
         form.addRow(help_label)
         self.tabs.addTab(api_widget, "API Configuration")
@@ -586,7 +555,7 @@ class OpenRouterSettingsPanel(QWidget):
         vbox = QVBoxLayout(models_widget)
         info = QLabel("Add translation models to call via OpenRouter. Multiple models can be active at the same time.")
         info.setWordWrap(True)
-        info.setStyleSheet("color: #9cb4d0;")
+        info.setStyleSheet(f"color: {COLORS['muted']};")
         vbox.addWidget(info)
 
         self.models_table = QTableWidget(0, 4, self)
@@ -601,40 +570,8 @@ class OpenRouterSettingsPanel(QWidget):
         self.models_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.models_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.models_table.setAlternatingRowColors(True)
-        self.models_table.setStyleSheet("""
-            QTableWidget {
-                background-color: #0e111a;
-                alternate-background-color: #0f131c;
-                border: 1px solid #1e293b;
-                gridline-color: #1e293b;
-                color: #cbd5e1;
-                border-radius: 8px;
-            }
-            QTableWidget::item {
-                background-color: transparent;
-                color: #cbd5e1;
-                border: none;
-                padding: 6px;
-            }
-            QTableWidget::item:selected {
-                background-color: #1e293b;
-                color: #38bdf8;
-            }
-            QTableWidget::item:hover {
-                background-color: #1e293b;
-                color: #f8fafc;
-            }
-        """)
-        header.setStyleSheet("""
-            QHeaderView::section {
-                background-color: #0f131c;
-                color: #cbd5e1;
-                border: none;
-                border-bottom: 1px solid #1e293b;
-                padding: 6px;
-                font-weight: 600;
-            }
-        """)
+        self.models_table.setStyleSheet(table_qss())
+        header.setStyleSheet(table_header_qss())
         vbox.addWidget(self.models_table, 1)
 
         button_row = QHBoxLayout()

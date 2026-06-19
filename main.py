@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 import os
 import sys
 import traceback
@@ -18,14 +18,15 @@ warnings.filterwarnings("ignore")
 # Loading torch here pins its DLLs into the process before any other library
 # can interfere.
 try:
-    import torch  # noqa: F401  — side-effect import to pre-load DLLs
+    import torch  # noqa: F401  â€” side-effect import to pre-load DLLs
 except Exception:
-    pass  # torch missing or broken — handled gracefully later in config.py
+    pass  # torch missing or broken â€” handled gracefully later in config.py
 
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPalette
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from src.core.app_info import APP_VERSION
+from src.ui.theme import apply_appearance_from_settings_file
 from src.ui.startup_splash import StartupSplash
 from src.ui.texts import StartupText
 
@@ -70,6 +71,11 @@ def main():
     app.setQuitOnLastWindowClosed(False)  # Mencegah aplikasi keluar premature saat dialog peringatan ditutup
 
     configure_windows_app_id()
+    try:
+        system_dark = app.palette().color(QPalette.Window).lightness() < 128
+    except Exception:
+        system_dark = True
+    apply_appearance_from_settings_file(root_dir, system_dark=system_dark)
 
     # Set icon untuk aplikasi global
     icon_path = os.path.join(root_dir, "src", "icon.png")

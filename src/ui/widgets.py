@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -23,6 +23,7 @@ from PyQt5.QtCore import (
     Qt, pyqtSignal, QEvent, QSize, QPointF, QRectF
 )
 
+from src.ui import theme
 from src.utils.geometry import mouse_button_to_name, mouse_name_to_button
 
 class ShortcutCaptureEdit(QWidget):
@@ -169,7 +170,7 @@ class ShortcutCaptureEdit(QWidget):
                 if friendly and friendly != "Unknown":
                     btn_label = friendly
                 evt_label = evt.capitalize()
-                self.display.setText(f"Mouse {evt_label} · {btn_label}")
+                self.display.setText(f"Mouse {evt_label} Â· {btn_label}")
                 return
         seq_obj = QKeySequence(self._sequence)
         rendered = seq_obj.toString(QKeySequence.NativeText)
@@ -210,19 +211,18 @@ class FontDelegate(QStyledItemDelegate):
         is_selected = option.state & QStyle.State_Selected
         is_hovered = option.state & QStyle.State_MouseOver
         
-        # Premium Obsidian Slate Palette
         if is_selected:
-            bg_color = QColor('#1e293b')  # Slate-800 selected
-            text_color = QColor('#38bdf8')  # Sky-400 (Cyan) accent
-            preview_color = QColor('#7dd3fc')
+            bg_color = QColor(theme.COLORS["border"])
+            text_color = QColor(theme.COLORS["accent"])
+            preview_color = QColor(theme.COLORS["accent_hover"])
         elif is_hovered:
-            bg_color = QColor('#0f172a')  # Slate-900 hover
-            text_color = QColor('#f8fafc')
-            preview_color = QColor('#94a3b8')
+            bg_color = QColor(theme.COLORS["card_alt"])
+            text_color = QColor(theme.COLORS["text"])
+            preview_color = QColor(theme.COLORS["muted"])
         else:
-            bg_color = QColor('#0d1117')  # Obsidian dark background
-            text_color = QColor('#cbd5e1')
-            preview_color = QColor('#64748b')
+            bg_color = QColor(theme.COLORS["panel"])
+            text_color = QColor(theme.COLORS["text"])
+            preview_color = QColor(theme.COLORS["muted"])
             
         painter.fillRect(option.rect, bg_color)
         
@@ -251,7 +251,7 @@ class FontDelegate(QStyledItemDelegate):
             pass
             
         # Draw a very subtle bottom border separator
-        painter.setPen(QColor('#1e293b'))
+        painter.setPen(QColor(theme.COLORS["border"]))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         
         painter.restore()
@@ -657,4 +657,3 @@ class CurvesGraphWidget(QWidget):
             self.points.pop(target_idx)
             self.active_point_idx = None
             self.recompute_spline()
-
