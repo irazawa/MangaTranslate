@@ -11,10 +11,11 @@ MangaTranslate dirancang dengan pendekatan arsitektur modular yang memisahkan an
 ```mermaid
 graph TD
     A[launcher.bat] -->|1. Setup Env| B(Local Venv Python)
-    A -->|2. Setup Binaries| C(FFmpeg & Deno)
+    A -->|2. Install Core Packages| C(requirements.txt)
     A -->|3. Boot Menu| D[Pilih Menu]
     D -->|Opsi 1 / 3| E[main.py - PyQt5 App]
     D -->|Opsi 2 / 3| F[IOPaint Server - Port 8080]
+    E -->|Optional Settings > Media Tools| K(yt-dlp / FFmpeg / Deno)
     
     E -->|Interact| G[canvas.py]
     E -->|Background Thread| H[workers.py]
@@ -25,11 +26,10 @@ graph TD
 ```
 
 ### 1. Bootloader & Zero-Configuration Environment (`launcher.bat`)
-Pengguna tidak perlu melakukan instalasi dependensi runtime secara manual. File [launcher.bat](file:///e:/Project/MangaTranslate/launcher.bat) bertindak sebagai bootstrapper otomatis dengan langkah-langkah berikut:
+Pengguna tidak perlu melakukan instalasi dependensi inti secara manual saat virtual environment belum tersedia. File [launcher.bat](file:///e:/Project/MangaTranslate/launcher.bat) bertindak sebagai bootstrapper otomatis dengan langkah-langkah berikut:
 * **Deteksi Python & Virtual Environment**: Memastikan Python terpasang di system PATH, lalu membuat folder `venv` jika belum ada.
 * **Auto-upgrade & Dependency Installation**: Meng-upgrade `pip` secara otomatis, kemudian memasang dependensi dari [requirements.txt](file:///e:/Project/MangaTranslate/requirements.txt).
-* **Unduh Otomatis Dependensi YouTube**: Memeriksa dan memasang library `yt-dlp` dan `yt-dlp-ejs` yang diperlukan untuk media player.
-* **Instalasi Mandiri FFmpeg & Deno**: Jika sistem mendeteksi `ffmpeg` atau `deno` tidak terinstal, script PowerShell `bin\install_ffmpeg.ps1` akan dijalankan otomatis untuk mengunduh dan menyimpannya langsung di folder `./bin`.
+* **Media Tools Opsional**: Dependensi YouTube/Media (`yt-dlp`, `yt-dlp-ejs`, FFmpeg, dan Deno) tidak dipasang saat startup. Jika dibutuhkan, pasang dari **Settings > Media Tools** di dalam aplikasi.
 * **Parallel Process Launching**: Menyediakan menu interaktif untuk meluncurkan GUI aplikasi utama, server inpainting mandiri, atau menjalankan keduanya secara paralel.
 
 ### 2. Integrasi Server Inpainting (IOPaint - LaMa)
@@ -176,8 +176,9 @@ Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi 
 
 ### Tab 2 — 💰 Pricing Editor
 * Tabel lengkap semua model AI yang tersedia (Gemini, OpenAI, OpenRouter) beserta harga per 1M token (input & output), sementara kalkulasi internal tetap memakai harga per token.
-* **Harga dapat diedit langsung** melalui `QDoubleSpinBox` di setiap sel — tidak perlu membuka file konfigurasi apapun.
-* Tombol **💾 Simpan Perubahan** untuk menerapkan harga baru ke sesi yang berjalan.
+* **Harga dan limit dapat diedit langsung** melalui kontrol tabel — tidak perlu membuka file konfigurasi apapun.
+* Kolom **RPM** dan **RPD** dapat diisi sebagai override lokal; nilai `0` kembali ke mode Auto.
+* Tombol **💾 Simpan Perubahan** untuk menerapkan harga dan limit baru ke sesi yang berjalan.
 * Tombol **🔄 Refresh dari OpenRouter** untuk mengambil harga model OpenRouter terbaru secara langsung.
 * Tombol **↩ Reset ke Default** untuk mengembalikan harga ke nilai awal sesi.
 
@@ -186,6 +187,16 @@ Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi 
 * Progress bar rate limit per model dengan color-coding: 🟢 < 60%, 🟡 60-89%, 🔴 ≥ 90%.
 * Tombol **⬇ Export CSV** untuk menyimpan laporan analitik lengkap ke file `.csv`.
 * Tombol **🗑 Reset Usage** untuk mereset counter penggunaan harian.
+
+---
+
+## ⚙️ Settings Workspace & Optional Tools
+
+Settings kini menjadi pusat konfigurasi yang lebih lengkap untuk profil, engine OCR, API, dan tool opsional:
+
+* **Profile Activity Heatmap**: Menampilkan aktivitas token dalam mode daily, weekly, atau cumulative, lengkap dengan rentang waktu aktif terakhir agar riwayat penggunaan lama tetap terlihat.
+* **Media Tools Installer**: Tab **Media Tools** menyediakan installer opsional untuk `yt-dlp`, `yt-dlp-ejs`, FFmpeg, dan Deno. Ini hanya dijalankan saat pengguna memilihnya dari Settings.
+* **OCR & Local Tools**: Pengaturan Tesseract, model bahasa lokal, dan dependensi engine tetap dikelola dari Settings agar startup aplikasi lebih ringan dan tidak melakukan instalasi yang tidak diminta.
 
 ---
 
@@ -219,7 +230,7 @@ MangaTranslate menghadirkan panel hiburan dan bantuan interaktif di dalam satu w
 ### 2. Pusat Media (🎬 Video Player)
 Membuka pemutar media internal ([VideoPlayerWidget](file:///e:/Project/MangaTranslate/src/ui/video_player_widget.py)) agar Anda dapat menyunting manga sembari mendengarkan musik atau menonton referensi video:
 * **Pemutar Musik & Video Lokal**: Memindai folder `./src/data/video/` dan `./src/data/music/` secara otomatis untuk memuat file audio/video.
-* **YouTube Playlist Streamer**: Cukup tempel tautan video/playlist YouTube ke dalam input. Aplikasi menggunakan library `yt-dlp` di background thread untuk mengekstrak alamat streaming langsung dari YouTube.
+* **YouTube Playlist Streamer**: Cukup tempel tautan video/playlist YouTube ke dalam input. Fitur ini menggunakan `yt-dlp`; jika belum tersedia, buka **Settings > Media Tools** lalu jalankan installer opsional.
 
 ---
 
@@ -284,7 +295,7 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
    ```
 2. **Jalankan Bootstrapper**:
    * Cukup lakukan double-click pada file **`launcher.bat`** di dalam folder utama proyek.
-   * Bootstrapper akan mendeteksi virtual environment, memasang dependensi dari `requirements.txt`, mengunduh *system binaries* (FFmpeg dan Deno) secara otomatis jika belum tersedia, dan menampilkan menu peluncur.
+   * Bootstrapper akan mendeteksi virtual environment, memasang dependensi inti dari `requirements.txt` saat diperlukan, lalu menampilkan menu peluncur. Dependensi YouTube/Media tetap opsional dan dapat dipasang dari **Settings > Media Tools**.
 3. **Pilih Opsi Jalankan**:
    * Pilih opsi **`[3] Jalankan KEDUANYA (Inpainting + main.py)`** pada jendela launcher untuk memulai server inpainting LaMa secara asinkron sekaligus membuka antarmuka utama editor manga MangaTranslate.
    * Masukkan API Key Anda pada pengaturan API (jika menggunakan penerjemah cloud). Anda siap memulai proyek scanlation modern yang efisien!

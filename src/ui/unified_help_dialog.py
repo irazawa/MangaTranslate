@@ -11,8 +11,8 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QLabel,
     QPushButton, QScrollArea, QFrame, QGridLayout, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox, QSpinBox,
-    QMessageBox, QFileDialog, QLineEdit, QSizePolicy, QSpacerItem,
-    QListWidgetItem, QApplication
+    QAbstractSpinBox, QMessageBox, QFileDialog, QLineEdit, QSizePolicy,
+    QSpacerItem, QListWidgetItem, QApplication
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QColor, QFont, QBrush
@@ -103,10 +103,19 @@ QDoubleSpinBox {{
     color: {text};
     border: 1px solid {border};
     border-radius: 4px;
-    padding: 2px 4px;
+    padding: 2px 6px;
     font-size: 8pt;
 }}
 QDoubleSpinBox:focus {{ border-color: {accent}; }}
+QSpinBox {{
+    background: {panel};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 8pt;
+}}
+QSpinBox:focus {{ border-color: {accent}; }}
 QScrollBar:vertical {{
     background: {panel};
     width: 6px;
@@ -364,16 +373,17 @@ class UnifiedHelpDialog(QDialog):
         outer_v.addWidget(info)
 
         # Tabel
-        headers = ["Provider", "Model ID", "Display Name", "Input $/1M tok", "Output $/1M tok", "RPM", "RPD"]
+        headers = ["Provider", "Model ID", "Display Name", "Input $/1M", "Output $/1M", "RPM", "RPD"]
         self._pricing_table = QTableWidget()
         self._pricing_table.setColumnCount(len(headers))
         self._pricing_table.setHorizontalHeaderLabels(headers)
-        self._pricing_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self._pricing_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._pricing_table.horizontalHeader().setMinimumSectionSize(76)
+        self._pricing_table.horizontalHeader().setStretchLastSection(False)
         self._pricing_table.setAlternatingRowColors(False)
         self._pricing_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._pricing_table.verticalHeader().setVisible(False)
         self._pricing_table.setEditTriggers(QTableWidget.NoEditTriggers)  # spin box handles edit
+        self._pricing_table.setWordWrap(False)
         self._pricing_table.setMinimumHeight(300)
         outer_v.addWidget(self._pricing_table, 1)
 
@@ -402,13 +412,30 @@ class UnifiedHelpDialog(QDialog):
         outer_v.addLayout(btn_row)
 
         note = QLabel(
-            f"<span style='color:{theme.COLORS['muted']}; font-size:8pt;'>* Perubahan harga hanya berlaku untuk sesi ini "
+            f"<span style='color:{theme.COLORS['muted']}; font-size:8pt;'>* Perubahan harga dan limit disimpan sebagai override lokal "
             "dan tidak mempengaruhi data usage yang sudah tersimpan.</span>"
         )
         note.setTextFormat(Qt.RichText)
         outer_v.addWidget(note)
 
         return outer_w
+
+    def _apply_pricing_table_layout(self):
+        tbl = self._pricing_table
+        header = tbl.horizontalHeader()
+        for column in range(tbl.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        widths = {
+            0: 96,
+            1: 430,
+            3: 134,
+            4: 142,
+            5: 98,
+            6: 108,
+        }
+        for column, width in widths.items():
+            tbl.setColumnWidth(column, width)
 
     def _populate_pricing_table(self):
         tbl = self._pricing_table
@@ -454,6 +481,9 @@ class UnifiedHelpDialog(QDialog):
             spin_in.setDecimals(6)
             spin_in.setSingleStep(0.01)
             spin_in.setValue(float(pricing.get('input', 0.0)) * PRICE_DISPLAY_MULTIPLIER)
+            spin_in.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            spin_in.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            spin_in.setMinimumWidth(116)
             spin_in.setProperty('_provider', provider)
             spin_in.setProperty('_model', model_id)
             spin_in.setProperty('_field', 'input')
@@ -468,6 +498,9 @@ class UnifiedHelpDialog(QDialog):
             spin_out.setDecimals(6)
             spin_out.setSingleStep(0.01)
             spin_out.setValue(float(pricing.get('output', 0.0)) * PRICE_DISPLAY_MULTIPLIER)
+            spin_out.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            spin_out.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            spin_out.setMinimumWidth(116)
             spin_out.setProperty('_provider', provider)
             spin_out.setProperty('_model', model_id)
             spin_out.setProperty('_field', 'output')
@@ -481,11 +514,15 @@ class UnifiedHelpDialog(QDialog):
             rpm_spin.setSingleStep(10)
             rpm_spin.setValue(int(limits.get('rpm', 0) or 0))
             rpm_spin.setSpecialValueText("Auto")
+            rpm_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            rpm_spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            rpm_spin.setMinimumWidth(82)
+            rpm_spin.setToolTip("Requests per minute. Isi 0 untuk Auto.")
             rpm_spin.setProperty('_provider', provider)
             rpm_spin.setProperty('_model', model_id)
             rpm_spin.setProperty('_field', 'rpm')
             rpm_spin.setStyleSheet(
-                f"QSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['text']}; border: none; }}"
+                f"QSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['text']}; border: none; padding: 2px 6px; }}"
             )
             tbl.setCellWidget(row, 5, rpm_spin)
 
@@ -494,15 +531,19 @@ class UnifiedHelpDialog(QDialog):
             rpd_spin.setSingleStep(100)
             rpd_spin.setValue(int(limits.get('rpd', 0) or 0))
             rpd_spin.setSpecialValueText("Auto")
+            rpd_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            rpd_spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            rpd_spin.setMinimumWidth(92)
+            rpd_spin.setToolTip("Requests per day. Isi 0 untuk Auto.")
             rpd_spin.setProperty('_provider', provider)
             rpd_spin.setProperty('_model', model_id)
             rpd_spin.setProperty('_field', 'rpd')
             rpd_spin.setStyleSheet(
-                f"QSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['text']}; border: none; }}"
+                f"QSpinBox {{ background: {theme.COLORS['panel']}; color: {theme.COLORS['text']}; border: none; padding: 2px 6px; }}"
             )
             tbl.setCellWidget(row, 6, rpd_spin)
 
-        tbl.resizeColumnsToContents()
+        self._apply_pricing_table_layout()
 
     def _save_pricing(self):
         """Baca nilai dari semua spinbox, update self.ai_providers, panggil callback."""
@@ -528,8 +569,12 @@ class UnifiedHelpDialog(QDialog):
                 limits = self.ai_providers[provider][model_id].setdefault('limits', {})
                 if val_rpm > 0:
                     limits['rpm'] = val_rpm
+                else:
+                    limits.pop('rpm', None)
                 if val_rpd > 0:
                     limits['rpd'] = val_rpd
+                else:
+                    limits.pop('rpd', None)
             else:
                 # Model dari openrouter_pricing_db
                 if model_id in self.openrouter_pricing_db:
@@ -538,8 +583,12 @@ class UnifiedHelpDialog(QDialog):
                     limits = self.openrouter_pricing_db[model_id].setdefault('limits', {})
                     if val_rpm > 0:
                         limits['rpm'] = val_rpm
+                    else:
+                        limits.pop('rpm', None)
                     if val_rpd > 0:
                         limits['rpd'] = val_rpd
+                    else:
+                        limits.pop('rpd', None)
 
         # Panggil callback agar parent bisa simpan ke AI_PROVIDERS
         if callable(self.on_pricing_saved):

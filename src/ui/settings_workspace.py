@@ -107,6 +107,9 @@ class TokenHeatmapWidget(QWidget):
         super().__init__(parent)
         self._activity = {}
         self._mode = "daily"
+        self._range_start = None
+        self._range_end = None
+        self._latest_active_date = None
         self.setMinimumHeight(154)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -116,7 +119,47 @@ class TokenHeatmapWidget(QWidget):
     def set_activity(self, activity: dict, mode: str = "daily"):
         self._activity = activity or {}
         self._mode = mode or "daily"
+        self._latest_active_date = self._latest_activity_date()
+        self._range_start, self._range_end = self._grid_range()
         self.update()
+
+    def _tokens_for_day(self, current: date) -> float:
+        data = self._activity.get(current.isoformat(), {})
+        if not isinstance(data, dict):
+            return 0.0
+        return float(data.get("input_tokens", 0) or 0) + float(data.get("output_tokens", 0) or 0)
+
+    def _latest_activity_date(self):
+        latest = None
+        for key, data in (self._activity or {}).items():
+            current = _safe_date(key)
+            if current is None or not isinstance(data, dict):
+                continue
+            has_activity = False
+            for field in ("input_tokens", "output_tokens", "cost_usd", "translated_count", "requests", "active_seconds"):
+                try:
+                    if float(data.get(field, 0) or 0) > 0:
+                        has_activity = True
+                        break
+                except Exception:
+                    continue
+            if has_activity and (latest is None or current > latest):
+                latest = current
+        return latest
+
+    def _grid_range(self):
+        weeks = 53
+        today = date.today()
+        latest = self._latest_active_date or self._latest_activity_date()
+        end = max(today, latest) if latest is not None else today
+        start = end - timedelta(days=((weeks - 1) * 7) + end.weekday())
+        return start, end
+
+    def range_summary(self) -> str:
+        start, end = self._range_start, self._range_end
+        if start is None or end is None:
+            start, end = self._grid_range()
+        return f"Through {end.strftime('%b')} {end.day}"
 
     def _day_value(self, current: date, weekly_cache: dict, cumulative_cache: dict) -> float:
         key = current.isoformat()
@@ -125,18 +168,18 @@ class TokenHeatmapWidget(QWidget):
             return weekly_cache.get(week_key, 0.0)
         if self._mode == "cumulative":
             return cumulative_cache.get(key, 0.0)
-        data = self._activity.get(key, {})
-        return float(data.get("input_tokens", 0) or 0) + float(data.get("output_tokens", 0) or 0)
+        return self._tokens_for_day(current)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.fillRect(self.rect(), QColor("transparent"))
 
-        today = date.today()
-        start = today - timedelta(days=364)
-        start = start - timedelta(days=start.weekday())
         weeks = 53
+        latest_activity = self._latest_active_date or self._latest_activity_date()
+        start, end = self._range_start, self._range_end
+        if start is None or end is None:
+            start, end = self._grid_range()
         square = 11
         gap = 4
         grid_width = weeks * square + (weeks - 1) * gap
@@ -149,8 +192,7 @@ class TokenHeatmapWidget(QWidget):
         for day_offset in range(weeks * 7):
             current = start + timedelta(days=day_offset)
             key = current.isoformat()
-            data = self._activity.get(key, {})
-            day_tokens = float(data.get("input_tokens", 0) or 0) + float(data.get("output_tokens", 0) or 0)
+            day_tokens = self._tokens_for_day(current)
             week_key = f"{current.isocalendar()[0]}-{current.isocalendar()[1]}"
             weekly_cache[week_key] = weekly_cache.get(week_key, 0.0) + day_tokens
             running_total += day_tokens
@@ -159,7 +201,7 @@ class TokenHeatmapWidget(QWidget):
         values = []
         for day_offset in range(weeks * 7):
             current = start + timedelta(days=day_offset)
-            if current > today:
+            if current > end:
                 continue
             values.append(self._day_value(current, weekly_cache, cumulative_cache))
         max_value = max(values) if values else 1.0
@@ -167,28 +209,41 @@ class TokenHeatmapWidget(QWidget):
             max_value = 1.0
 
         colors = [
-            QColor(theme.COLORS.get("card_alt", "#111827")),
-            QColor("#123245"),
-            QColor("#1d4d66"),
-            QColor("#23779c"),
+            QColor("#1f232b"),
+            QColor("#1f5f7f"),
+            QColor("#2788b2"),
+            QColor("#32a6d4"),
             QColor(theme.COLORS.get("accent", "#38bdf8")),
         ]
 
         month_pen = QPen(QColor(theme.COLORS.get("muted", "#64748b")))
         painter.setPen(month_pen)
-        month_marks = {}
+        month_marks = []
+        previous_month = None
         for day_offset in range(weeks * 7):
             current = start + timedelta(days=day_offset)
-            if current.day <= 7 and current <= today:
-                month_marks.setdefault(current.strftime("%b"), day_offset // 7)
-        for label, column in month_marks.items():
+            if current > end:
+                continue
+            month_key = (current.year, current.month)
+            if month_key != previous_month:
+                month_marks.append((current.strftime("%b"), day_offset // 7))
+                previous_month = month_key
+        for label, column in month_marks:
             x = left + column * (square + gap)
             painter.drawText(QRect(x, 4, 40, 18), Qt.AlignLeft | Qt.AlignVCenter, label)
+
+        painter.setPen(QPen(QColor(theme.COLORS.get("muted", "#64748b"))))
+        range_label = f"Through {end.strftime('%b')} {end.day}"
+        painter.drawText(
+            QRect(left + grid_width - 120, 4, 120, 18),
+            Qt.AlignRight | Qt.AlignVCenter,
+            range_label,
+        )
 
         painter.setPen(Qt.NoPen)
         for day_offset in range(weeks * 7):
             current = start + timedelta(days=day_offset)
-            if current > today:
+            if current > end:
                 continue
             column = day_offset // 7
             row = current.weekday()
@@ -199,6 +254,11 @@ class TokenHeatmapWidget(QWidget):
             x = left + column * (square + gap)
             y = top + row * (square + gap)
             painter.drawRoundedRect(x, y, square, square, 3, 3)
+            if latest_activity is not None and current == latest_activity:
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor(theme.COLORS.get("accent", "#38bdf8")), 1))
+                painter.drawRoundedRect(x, y, square, square, 3, 3)
+                painter.setPen(Qt.NoPen)
 
         painter.setPen(QPen(QColor(theme.COLORS.get("muted", "#64748b"))))
         painter.drawText(QRect(0, top + 2, 34, 18), Qt.AlignRight | Qt.AlignVCenter, "Mon")
@@ -296,7 +356,7 @@ class SettingsWorkspace(QWidget):
             self._nav_rows.append(header)
             for entry in entries:
                 key, label, desc = entry[:3]
-                icon = entry[3] if len(entry) > 3 else "•"
+                icon = entry[3] if len(entry) > 3 else "*"
                 item = QListWidgetItem(f"{icon}  {label}\n    {desc}")
                 item.setData(Qt.UserRole, {"key": key, "text": f"{label} {desc} {section}".lower()})
                 item.setSizeHint(QSize(240, 50))
@@ -388,6 +448,9 @@ class SettingsWorkspace(QWidget):
         activity_title = QLabel(SettingsWorkspaceText.PROFILE_ACTIVITY)
         activity_title.setObjectName("sw-section-title")
         activity_header.addWidget(activity_title)
+        self.heatmap_range_label = QLabel("")
+        self.heatmap_range_label.setObjectName("sw-range-label")
+        activity_header.addWidget(self.heatmap_range_label)
         activity_header.addStretch(1)
         for key, label in (
             ("daily", SettingsWorkspaceText.PROFILE_MODE_DAILY),
@@ -654,6 +717,8 @@ class SettingsWorkspace(QWidget):
             btn.setChecked(key == mode)
         snapshot = self._profile_snapshot()
         self.heatmap.set_activity(snapshot.get("activity_by_date", {}), mode=mode)
+        if hasattr(self, "heatmap_range_label"):
+            self.heatmap_range_label.setText(self.heatmap.range_summary())
 
     def set_active_section(self, key: str):
         key = key or "profile"
@@ -898,6 +963,12 @@ def _settings_workspace_qss() -> str:
         color: {c["text"]};
         font-size: 10.5pt;
         font-weight: 800;
+    }}
+    QLabel#sw-range-label {{
+        color: {c["muted"]};
+        font-size: 9pt;
+        font-weight: 600;
+        padding-left: 10px;
     }}
     QFrame#sw-info-card {{
         background: transparent;
