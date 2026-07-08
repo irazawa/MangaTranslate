@@ -6,7 +6,7 @@ import copy
 import os
 from datetime import date, timedelta
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QRect
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QRect, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -103,6 +103,24 @@ def _safe_date(value: str):
 class TokenHeatmapWidget(QWidget):
     """Compact GitHub-style activity grid for token usage."""
 
+    # Grid geometry — kept in sync with the values used in paintEvent so the
+    # widget can size itself to fit the full grid (preventing the rightmost
+    # weeks — the ones that actually carry recent activity — from being
+    # clipped off the visible edge of the widget).
+    WEEKS = 53
+    SQUARE = 11
+    GAP = 4
+    LEFT_MARGIN = 42  # room for the Mon/Wed/Fri row labels
+    RIGHT_PAD = 24
+
+    @classmethod
+    def _grid_width(cls) -> int:
+        return cls.WEEKS * cls.SQUARE + (cls.WEEKS - 1) * cls.GAP
+
+    @classmethod
+    def _min_width(cls) -> int:
+        return cls.LEFT_MARGIN + cls._grid_width() + cls.RIGHT_PAD
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._activity = {}
@@ -111,10 +129,11 @@ class TokenHeatmapWidget(QWidget):
         self._range_end = None
         self._latest_active_date = None
         self.setMinimumHeight(154)
+        self.setMinimumWidth(self._min_width())
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     def sizeHint(self):
-        return QSize(760, 154)
+        return QSize(self._min_width(), 154)
 
     def set_activity(self, activity: dict, mode: str = "daily"):
         self._activity = activity or {}
@@ -148,7 +167,7 @@ class TokenHeatmapWidget(QWidget):
         return latest
 
     def _grid_range(self):
-        weeks = 53
+        weeks = self.WEEKS
         today = date.today()
         latest = self._latest_active_date or self._latest_activity_date()
         end = max(today, latest) if latest is not None else today
@@ -175,15 +194,17 @@ class TokenHeatmapWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.fillRect(self.rect(), QColor("transparent"))
 
-        weeks = 53
+        weeks = self.WEEKS
         latest_activity = self._latest_active_date or self._latest_activity_date()
         start, end = self._range_start, self._range_end
         if start is None or end is None:
             start, end = self._grid_range()
-        square = 11
-        gap = 4
-        grid_width = weeks * square + (weeks - 1) * gap
-        left = max(42, (self.width() - grid_width) // 2)
+        square = self.SQUARE
+        gap = self.GAP
+        grid_width = self._grid_width()
+        # Anchor to the left label gutter so the full grid is always painted
+        # within the widget's minimum width (no clipping of recent weeks).
+        left = self.LEFT_MARGIN if self.width() >= self._min_width() else max(0, (self.width() - grid_width) // 2)
         top = 28
 
         weekly_cache = {}
@@ -278,6 +299,9 @@ class SettingsWorkspace(QWidget):
         self._nav_rows = []
         self._active_key = "profile"
         self._settings_dialog = None
+        self._settings_loading = None
+        self._settings_host_layout = None
+        self._pending_settings_key = None
         self._help_dialog = None
         self._help_host_layout = None
         self._profile_labels = {}
@@ -486,8 +510,8 @@ class SettingsWorkspace(QWidget):
         card = QFrame()
         card.setObjectName("sw-info-card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
         title = QLabel(SettingsWorkspaceText.PROFILE_INSIGHTS)
         title.setObjectName("sw-section-title")
         layout.addWidget(title)
@@ -507,8 +531,8 @@ class SettingsWorkspace(QWidget):
         card = QFrame()
         card.setObjectName("sw-info-card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
         title = QLabel("Model usage")
         title.setObjectName("sw-section-title")
         layout.addWidget(title)
@@ -545,22 +569,44 @@ class SettingsWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._settings_dialog = SettingsCenterDialog(self.main_window)
-        self._settings_dialog.setWindowFlags(Qt.Widget)
-        self._settings_dialog.setModal(False)
-        self._settings_dialog.setMinimumSize(0, 0)
-        self._settings_dialog.setMaximumHeight(16777215)
-        self._settings_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Lightweight placeholder shown until the (heavy) SettingsCenterDialog
+        # is materialized. Building the dialog eagerly blocks the UI thread for
+        # the duration of all 9 tab constructions; deferring it lets the
+        # workspace chrome and the default Profile page paint instantly.
+        self._settings_loading = QLabel(SettingsWorkspaceText.LOADING_SETTINGS)
+        self._settings_loading.setObjectName("sw-loading")
+        self._settings_loading.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._settings_loading)
 
-        nav_panel = self._settings_dialog.findChild(QWidget, "settings-nav-panel")
+        self._settings_host_layout = layout
+        self._settings_dialog = None
+        self._pending_settings_key = None
+        return host
+
+    def _ensure_settings_dialog(self):
+        """Build the embedded SettingsCenterDialog on demand, off the open path.
+
+        Safe to call multiple times; only the first call does the heavy work.
+        """
+        if self._settings_dialog is not None:
+            return self._settings_dialog
+
+        dialog = SettingsCenterDialog(self.main_window)
+        dialog.setWindowFlags(Qt.Widget)
+        dialog.setModal(False)
+        dialog.setMinimumSize(0, 0)
+        dialog.setMaximumHeight(16777215)
+        dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        nav_panel = dialog.findChild(QWidget, "settings-nav-panel")
         if nav_panel is not None:
             nav_panel.hide()
             nav_panel.setMaximumWidth(0)
-        splitter = self._settings_dialog.findChild(QSplitter, "settings-splitter")
+        splitter = dialog.findChild(QSplitter, "settings-splitter")
         if splitter is not None:
             splitter.setSizes([0, 1200])
 
-        cancel_btn = getattr(self._settings_dialog, "_cancel_btn", None)
+        cancel_btn = getattr(dialog, "_cancel_btn", None)
         if cancel_btn is not None:
             try:
                 cancel_btn.clicked.disconnect()
@@ -569,7 +615,7 @@ class SettingsWorkspace(QWidget):
             cancel_btn.setText(SettingsWorkspaceText.BACK_TO_APP)
             cancel_btn.clicked.connect(self.back_requested.emit)
 
-        save_btn = getattr(self._settings_dialog, "_save_btn", None)
+        save_btn = getattr(dialog, "_save_btn", None)
         if save_btn is not None:
             try:
                 save_btn.clicked.disconnect()
@@ -577,8 +623,23 @@ class SettingsWorkspace(QWidget):
                 pass
             save_btn.clicked.connect(self._save_embedded_settings)
 
-        layout.addWidget(self._settings_dialog)
-        return host
+        if self._settings_loading is not None:
+            self._settings_host_layout.removeWidget(self._settings_loading)
+            self._settings_loading.deleteLater()
+            self._settings_loading = None
+        self._settings_host_layout.addWidget(dialog)
+        self._settings_dialog = dialog
+
+        try:
+            dialog._apply_settings_styles()
+        except Exception:
+            pass
+
+        pending = self._pending_settings_key
+        self._pending_settings_key = None
+        if pending:
+            dialog.set_active_tab(pending)
+        return dialog
 
     def _build_help_page(self):
         host = QWidget()
@@ -739,6 +800,11 @@ class SettingsWorkspace(QWidget):
             self.stack.setCurrentWidget(self.settings_page)
             if self._settings_dialog is not None:
                 self._settings_dialog.set_active_tab(key)
+            else:
+                # Dialog not yet built — materialize it now so the requested
+                # tab is shown. Building happens once; subsequent opens reuse it.
+                self._pending_settings_key = key
+                QTimer.singleShot(0, self._ensure_settings_dialog)
         elif key == "help_overview":
             self.stack.setCurrentWidget(self.about_page)
         elif key in HELP_TAB_KEYS:
@@ -858,6 +924,9 @@ class SettingsWorkspace(QWidget):
 def _settings_workspace_qss() -> str:
     c = theme.COLORS
     radius = theme.RADIUS
+    # Accent-tinted backgrounds derived from the active palette so every dark
+    # theme preset (codex, catppuccin, nord, …) picks up the same soft glow.
+    accent_soft = c["accent"]
     return f"""
     QWidget#settings-workspace {{
         background: {c["bg"]};
@@ -871,22 +940,29 @@ def _settings_workspace_qss() -> str:
     QPushButton#sw-back-btn {{
         background: transparent;
         border: none;
+        border-left: 3px solid transparent;
         color: {c["muted"]};
         text-align: left;
-        padding: 8px 10px;
+        padding: 9px 12px 9px 13px;
         font-weight: 600;
     }}
     QPushButton#sw-back-btn:hover {{
         color: {c["text"]};
         background: {c["card_alt"]};
-        border-radius: {radius["sm"]}px;
+        border-left: 3px solid {c["muted"]};
+        border-top-right-radius: {radius["sm"]}px;
+        border-bottom-right-radius: {radius["sm"]}px;
     }}
     QLineEdit#sw-search {{
         background: {c["card_alt"]};
         border: 1px solid {c["border"]};
         border-radius: {radius["md"]}px;
         color: {c["text"]};
-        padding: 8px 12px;
+        padding: 9px 12px;
+        selection-background-color: {c["accent"]};
+    }}
+    QLineEdit#sw-search:focus {{
+        border: 1px solid {c["accent"]};
     }}
     QListWidget#sw-nav-list {{
         background: transparent;
@@ -896,19 +972,23 @@ def _settings_workspace_qss() -> str:
     }}
     QListWidget#sw-nav-list::item {{
         color: {c["text"]};
-        padding: 8px 10px;
+        padding: 9px 12px;
         border-radius: {radius["md"]}px;
+        border-left: 3px solid transparent;
     }}
     QListWidget#sw-nav-list::item:selected {{
-        background: {c["border"]};
-        color: #ffffff;
+        background: {c["card_alt"]};
+        color: {c["accent"]};
+        border-left: 3px solid {c["accent"]};
+        font-weight: 600;
     }}
     QListWidget#sw-nav-list::item:hover:!selected {{
         background: {c["card_alt"]};
+        color: {c["text"]};
     }}
     QLabel#sw-version {{
         color: {c["muted"]};
-        padding: 8px 10px;
+        padding: 8px 12px;
         font-size: 8.5pt;
     }}
     QStackedWidget#sw-stack,
@@ -923,6 +1003,12 @@ def _settings_workspace_qss() -> str:
         color: {c["text"]};
         font-size: 11pt;
         font-weight: 800;
+        letter-spacing: 0.2px;
+    }}
+    QLabel#sw-loading {{
+        color: {c["muted"]};
+        font-size: 11pt;
+        padding: 48px;
     }}
     QLabel#sw-avatar {{
         background: {c["accent"]};
@@ -951,7 +1037,7 @@ def _settings_workspace_qss() -> str:
     }}
     QLabel#sw-stat-value {{
         color: {c["text"]};
-        font-size: 10.5pt;
+        font-size: 11pt;
         font-weight: 800;
     }}
     QLabel#sw-stat-label,
@@ -971,8 +1057,9 @@ def _settings_workspace_qss() -> str:
         padding-left: 10px;
     }}
     QFrame#sw-info-card {{
-        background: transparent;
-        border: none;
+        background: {c["panel"]};
+        border: 1px solid {c["border"]};
+        border-radius: {radius["lg"]}px;
     }}
     QFrame#sw-content-card {{
         background: {c["panel"]};
@@ -995,20 +1082,20 @@ def _settings_workspace_qss() -> str:
     QPushButton#sw-secondary-btn {{
         background: transparent;
         color: {c["muted"]};
-        border: 1px solid transparent;
+        border: 1px solid {c["border"]};
         border-radius: {radius["sm"]}px;
-        padding: 6px 10px;
+        padding: 6px 12px;
         font-weight: 700;
     }}
     QPushButton#sw-mode-btn:hover,
     QPushButton#sw-secondary-btn:hover {{
         color: {c["text"]};
         background: {c["card_alt"]};
-        border-color: {c["border"]};
+        border-color: {c["accent"]};
     }}
     QPushButton#sw-mode-btn:checked {{
-        color: {c["text"]};
-        background: {c["border"]};
-        border-color: {c["border"]};
+        color: #020617;
+        background: {c["accent"]};
+        border-color: {c["accent"]};
     }}
     """

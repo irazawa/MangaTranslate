@@ -1276,7 +1276,11 @@ class SettingsCenterDialog(QDialog):
 
         layout.addWidget(card)
         layout.addStretch(1)
-        self._refresh_media_dependency_status()
+        # Defer the yt-dlp/ffmpeg detection probe so it does not block dialog
+        # construction. get_media_dependency_status() runs importlib + PATH
+        # scans that can take ~100ms; running them on idle keeps Settings open
+        # instant while the status labels populate a moment later.
+        QTimer.singleShot(0, self._refresh_media_dependency_status)
         return page
 
     def _refresh_media_dependency_status(self):

@@ -1,7 +1,7 @@
 """Application identity and version metadata."""
 
 APP_NAME = "Manga OCR & Typeset Tool"
-APP_VERSION = "14.9.0"
+APP_VERSION = "14.9.2"
 APP_COPYRIGHT = "Copyright © 2024"
 
 

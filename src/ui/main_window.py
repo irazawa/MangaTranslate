@@ -7937,7 +7937,11 @@ class MangaOCRApp(QMainWindow):
             print(f"Could not record profile session data: {exc}")
 
     def get_profile_usage_snapshot(self):
-        self._record_profile_session_snapshot()
+        # NOTE: read-only by design. Do NOT call _record_profile_session_snapshot()
+        # here — that mutates persisted state (advances last_active_date and can
+        # inflate current_streak) merely from viewing the profile. Session
+        # snapshots are recorded at genuine lifecycle points (startup, periodic
+        # save, close) via save_usage_data().
         profile = copy.deepcopy(self._ensure_profile_usage_state())
         provider_usage = self.usage_data.get('provider_usage', {}) if isinstance(self.usage_data, dict) else {}
 

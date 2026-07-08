@@ -120,6 +120,7 @@ class SettingsWorkspaceText:
     PROFILE_MODE_WEEKLY = "Weekly"
     PROFILE_MODE_CUMULATIVE = "Cumulative"
     REFRESH = "Refresh"
+    LOADING_SETTINGS = "Loading settings…"
 
     NAV_SECTIONS = [
         (

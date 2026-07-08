@@ -307,4 +307,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 Setelah perubahan coding selesai dan sebelum commit/push, naikkan versi aplikasi sesuai scope perubahan. Mulai dari `src/core/app_info.py` (`APP_VERSION`), lalu sinkronkan teks versi yang terlihat di program, header file, README, dan `.agents/code.md` bila relevan. Jangan ubah `schema_version` kecuali format file proyek ikut berubah.
 
 ---
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.9.0*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.9.2*
