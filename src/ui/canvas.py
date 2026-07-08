@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QColor, QFont, QPolygon, QPainterPath, QPolygonF,
-    QBrush, QTransform
+    QBrush, QTransform, QImage
 )
 from PyQt5.QtCore import (
     Qt, QRect, QPoint, pyqtSignal, QTimer, QRectF, QPointF, QSize
@@ -755,6 +755,7 @@ class SelectableImageLabel(QLabel):
         super().__init__(parent)
         self.main_window = parent
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.selection_start = None
         self.selection_end = None
         self.selection_rect = QRect()
@@ -796,6 +797,12 @@ class SelectableImageLabel(QLabel):
         self.panning = False
         self.pan_last_mouse_pos = QPoint()
 
+        # --- Variabel untuk Smart Brush Inpainting ---
+        self.inpaint_mask = None  # QImage berskala gambar asli (grayscale)
+        self.inpaint_brush_size = 25  # diameter dalam piksel gambar asli
+        self.painting_mask = False  # status apakah sedang mendrag kuas
+        self._last_paint_pos = None  # posisi terakhir saat stroke
+
     def sizeHint(self):
         return QSize(0, 0)
 
@@ -816,10 +823,35 @@ class SelectableImageLabel(QLabel):
                 self.setCursor(self.main_window.pen_cursor)
             elif transform_mode:
                 self.setCursor(Qt.OpenHandCursor)
+            elif self._is_inpaint_brush_mode(mode):
+                self.setCursor(Qt.CrossCursor)
             else:
                 self.setCursor(Qt.CrossCursor if rect_mode else Qt.PointingHandCursor)
         except Exception:
             self.setCursor(Qt.CrossCursor)
+
+    def get_inpaint_mask(self):
+        return getattr(self, 'inpaint_mask', None)
+
+    def clear_inpaint_mask(self):
+        if getattr(self, 'inpaint_mask', None) is not None:
+            self.inpaint_mask.fill(0)
+            self.update()
+
+    def set_inpaint_brush_size(self, size):
+        self.inpaint_brush_size = max(1, int(size))
+        self.update()
+
+    def _paint_mask_stroke(self, p1, p2):
+        if self.inpaint_mask is None:
+            return
+        p = QPainter(self.inpaint_mask)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(Qt.white, float(getattr(self, 'inpaint_brush_size', 25)),
+                   Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawLine(p1, p2)
+        p.end()
 
     def _set_active_transform(self, transform_data):
         self.active_transform = transform_data
@@ -866,6 +898,14 @@ class SelectableImageLabel(QLabel):
 
     def get_selection_mode(self):
         return self.main_window.selection_mode_combo.currentText()
+
+    def _is_inpaint_brush_mode(self, mode=None):
+        mode = mode if mode is not None else self.get_selection_mode()
+        return mode in ("Inpaint Brush", "Inpaint Brush + OCR Translate")
+
+    def _is_inpaint_ocr_mode(self, mode=None):
+        mode = mode if mode is not None else self.get_selection_mode()
+        return mode == "Inpaint Brush + OCR Translate"
 
     def get_polygon_points(self):
         return self.polygon_points
@@ -1483,6 +1523,7 @@ class SelectableImageLabel(QLabel):
 
     def mousePressEvent(self, event):
         if not self.main_window or not getattr(self.main_window, 'original_pixmap', None): return
+        self.setFocus()
 
         # 1. Ctrl + Middle Click -> Save typeset image
         if event.button() == Qt.MiddleButton and event.modifiers() == Qt.ControlModifier:
@@ -1542,6 +1583,25 @@ class SelectableImageLabel(QLabel):
                     self.main_window.trigger_click_to_translate(unzoomed_pos.toPoint())
                 return
 
+        if self._is_inpaint_brush_mode(mode):
+            if getattr(self.main_window, 'original_pixmap', None) is None:
+                return
+            if event.button() == Qt.LeftButton:
+                img_pt = self._widget_point_to_image(event.pos())
+                if img_pt:
+                    if self.inpaint_mask is None or self.inpaint_mask.size() != self.main_window.original_pixmap.size():
+                        self.inpaint_mask = QImage(self.main_window.original_pixmap.size(), QImage.Format_Grayscale8)
+                        self.inpaint_mask.fill(0)
+                    self.painting_mask = True
+                    self._last_paint_pos = img_pt.toPoint()
+                    self._paint_mask_stroke(self._last_paint_pos, self._last_paint_pos)
+                    self.update()
+                return
+            elif event.button() == Qt.RightButton:
+                if getattr(self, 'inpaint_mask', None) is not None:
+                    self.main_window.apply_inpaint_brush_selection(run_ocr_translate=self._is_inpaint_ocr_mode(mode))
+                return
+
         manual_rect = "Manual Text (Rect)" in mode
         manual_polygon = "Manual Text (Pen)" in mode
         pen_mode = (mode == "Pen Tool")
@@ -1552,7 +1612,7 @@ class SelectableImageLabel(QLabel):
                 return
 
         # If hovering over an existing area, allow area-level actions unless we're in pen/manual-pen mode
-        if self.hovered_area and not (pen_mode or manual_polygon or transform_mode):
+        if self.hovered_area and not (pen_mode or manual_polygon or transform_mode or self._is_inpaint_brush_mode(mode)):
             if self.trash_icon_rect.contains(event.pos()):
                 if self.main_window.is_in_confirmation_mode: return
                 if getattr(self.hovered_area, 'locked', False): return # Block delete for locked layers!
@@ -1669,6 +1729,15 @@ class SelectableImageLabel(QLabel):
                         pass
                 self.main_window.update_pen_tool_buttons_visibility(True)
             self.update()
+
+    def keyPressEvent(self, event):
+        if self._is_inpaint_brush_mode() and event.text() in ("[", "]"):
+            delta = -5 if event.text() == "[" else 5
+            self.main_window.adjust_inpaint_brush_size(delta)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def mouseMoveEvent(self, event):
         self.current_mouse_pos = event.pos()
         
@@ -1715,8 +1784,8 @@ class SelectableImageLabel(QLabel):
             manual_polygon = "Manual Text (Pen)" in mode
             pen_mode = (mode == "Pen Tool")
 
-            if pen_mode or manual_polygon:
-                # In pen drawing modes we avoid changing hovered_area to prevent interference
+            if pen_mode or manual_polygon or self._is_inpaint_brush_mode(mode):
+                # In pen/brush drawing modes we avoid changing hovered_area to prevent interference
                 new_hover_area = self.hovered_area
             else:
                 unzoomed_pos = self.main_window.unzoom_coords(self.current_mouse_pos, as_point=True)
@@ -1763,6 +1832,14 @@ class SelectableImageLabel(QLabel):
                                 self.hovered_handle_index = i
                                 break
                 self.update()
+        elif self._is_inpaint_brush_mode(mode):
+            if getattr(self, 'painting_mask', False):
+                img_pt = self._widget_point_to_image(event.pos())
+                if img_pt and self._last_paint_pos:
+                    curr_pos = img_pt.toPoint()
+                    self._paint_mask_stroke(self._last_paint_pos, curr_pos)
+                    self._last_paint_pos = curr_pos
+            self.update()
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton and getattr(self, 'panning', False):
             self.panning = False
@@ -1792,6 +1869,12 @@ class SelectableImageLabel(QLabel):
             return
 
         if event.button() == Qt.LeftButton:
+            if getattr(self, 'painting_mask', False):
+                self.painting_mask = False
+                self._last_paint_pos = None
+                self.update()
+                return
+
             if ("Bubble Finder" in mode or "Direct OCR" in mode or manual_rect) and not manual_polygon:
                 if self.dragging:
                     self.dragging = False
@@ -2121,6 +2204,34 @@ class SelectableImageLabel(QLabel):
                     painter.drawText(hint_rect, Qt.AlignCenter, hint)
             except Exception:
                 pass
+
+        if self._is_inpaint_brush_mode():
+            if getattr(self, 'inpaint_mask', None) is not None and not self.inpaint_mask.isNull():
+                painter.save()
+                scale = getattr(self.main_window, 'zoom_factor', 1.0)
+                pixmap = self.pixmap()
+                if pixmap and not pixmap.isNull():
+                    label_size = self.size()
+                    pixmap_size = pixmap.size()
+                    offset_x = max(0, (label_size.width() - pixmap_size.width()) // 2)
+                    offset_y = max(0, (label_size.height() - pixmap_size.height()) // 2)
+                    painter.translate(offset_x, offset_y)
+                    painter.scale(scale, scale)
+
+                color_overlay = QImage(self.inpaint_mask.size(), QImage.Format_ARGB32_Premultiplied)
+                color_overlay.fill(QColor(56, 189, 248, 160)) # accent cyan
+                color_overlay.setAlphaChannel(self.inpaint_mask)
+                painter.drawImage(0, 0, color_overlay)
+                painter.restore()
+
+            if self.current_mouse_pos:
+                painter.save()
+                painter.setPen(QPen(QColor(56, 189, 248), 1.5, Qt.SolidLine))
+                painter.setBrush(Qt.NoBrush)
+                scale = getattr(self.main_window, 'zoom_factor', 1.0)
+                radius = (getattr(self, 'inpaint_brush_size', 25) * scale) / 2.0
+                painter.drawEllipse(QPointF(self.current_mouse_pos), radius, radius)
+                painter.restore()
 
 
     def clear_selection(self):

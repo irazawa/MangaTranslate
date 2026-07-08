@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ============================================================
 # UnifiedHelpDialog — menggabungkan About, Project Stats,
 # Pricing Editor, dan Session Analytics dalam satu dialog tab.

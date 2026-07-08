@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -69,6 +69,8 @@ openai = check_dependency("openai", "openai")
 # Menentukan ROOT direktori aplikasi agar settings.json diakses secara seragam
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SETTINGS_PATH = os.path.join(ROOT_DIR, 'settings.json')
+DEFAULT_INPAINT_SERVER_URL = "http://127.0.0.1:8080"
+DEFAULT_INPAINT_SERVER_TIMEOUT = 30
 
 
 def default_settings() -> dict:
@@ -98,6 +100,8 @@ def default_settings() -> dict:
         "cleanup": {
             "use_background_box": True,
             "use_inpaint": True,
+            "inpaint_server_url": DEFAULT_INPAINT_SERVER_URL,
+            "inpaint_server_timeout": DEFAULT_INPAINT_SERVER_TIMEOUT,
             "apply_mode": "selected",
             "text_color_threshold": 128,
             "auto_text_color": True,   # <— BARU: bisa dimatikan dari Settings
@@ -501,10 +505,12 @@ SELECTION_MODE_LABELS = [
     "Manual Text (Pen)",
     "Pen Tool",
     "Transform (Hand)",
-    "Click-to-Translate"
+    "Click-to-Translate",
+    "Inpaint Brush",
+    "Inpaint Brush + OCR Translate"
 ]
 
-SELECTION_MODE_SHORTCUT_KEYS = ["7", "8", "3", "4", "5", "6", "2", "1", "9"]
+SELECTION_MODE_SHORTCUT_KEYS = ["7", "8", "3", "4", "5", "6", "2", "1", "9", "0", ""]
 
 DEFAULT_SHORTCUTS = {
     'save_project': 'Ctrl+S',

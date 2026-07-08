@@ -36,7 +36,7 @@ Pengguna tidak perlu melakukan instalasi dependensi inti secara manual saat virt
 Untuk memastikan penghapusan teks manga (clean-up) berjalan secara mulus dan presisi tanpa merusak visual latar belakang, MangaTranslate mengintegrasikan server inpainting terpisah:
 * **Engine & Model**: Menggunakan **IOPaint** dengan model neural network **LaMa (big-lama)** (~196MB) yang diunduh otomatis pada eksekusi pertama.
 * **Stabilitas Eksekusi**: Dikonfigurasi dalam mode CPU (dioptimalkan untuk Windows tanpa ROCm) untuk memberikan kestabilan 100% dengan waktu respon ultra-cepat (< 300ms per crop).
-* **Komunikasi Restful**: Aplikasi utama berkomunikasi dengan server inpainting (`http://127.0.0.1:8080`) menggunakan Rest API `POST /api/v1/inpaint` dengan parameter file gambar asli dan masking area teks hitam-putih.
+* **Komunikasi Restful**: Aplikasi utama berkomunikasi dengan server inpainting (`http://127.0.0.1:8080`) menggunakan Rest API `POST /api/v1/inpaint` dengan body JSON base64 untuk gambar asli dan masking area teks hitam-putih.
 
 ### 3. Antarmuka Awal & Recent Projects (Welcome Screen)
 Untuk meningkatkan pengalaman pengguna baru, aplikasi mengimplementasikan layar pembuka interaktif:
@@ -128,7 +128,7 @@ Setiap kotak dialog manga yang terjemahannya dibuat akan dikelola sebagai layer 
 
 ---
 
-## ↩️ Undo/Redo Visual Timeline (Baru di v14.8.8)
+## ↩️ Undo/Redo Visual Timeline (Baru di v14.9.0)
 
 MangaTranslate kini menghadirkan sistem **Undo/Redo berbasis snapshot** yang dilengkapi tampilan timeline visual interaktif di panel kanan, memberikan kendali penuh atas sejarah penyuntingan Anda:
 
@@ -165,7 +165,7 @@ Saat menerjemahkan satu halaman manga yang berisi banyak gelembung percakapan:
 
 ---
 
-## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.8.8)
+## 💰 Help & Usage Terpadu (Unified Help Dialog — Baru di v14.9.0)
 
 Dialog "📖 Help & Usage" yang baru menggabungkan tiga fungsi terpisah menjadi satu window bertab yang elegan ([UnifiedHelpDialog](file:///e:/Project/MangaTranslate/src/ui/unified_help_dialog.py)):
 
@@ -302,4 +302,4 @@ Tekan tombol angka berikut untuk beralih mode seleksi kanvas secara instan:
 
 ---
 
-*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.8.8*
+*MangaTranslate — Premium Manga Translation & Typesetting Workbench v14.9.0*

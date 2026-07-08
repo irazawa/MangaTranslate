@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -593,6 +593,7 @@ class MangaOCRApp(QMainWindow):
         # --- [BARU] Inpainting Engine Instances ---
         self.inpaint_model = None
         self.current_inpaint_model_key = None # Untuk melacak model mana yang sedang dimuat
+        self._inpaint_brush_worker = None # Worker aktif untuk fitur Inpaint Brush di canvas
 
         self.current_project_path = None
         self.current_theme = 'dark'
@@ -2364,6 +2365,34 @@ class MangaOCRApp(QMainWindow):
         self.confirm_button = QPushButton("Confirm"); self.confirm_button.clicked.connect(self.confirm_pen_selection); self.confirm_button.setVisible(False)
         self.cancel_button = QPushButton("Cancel"); self.cancel_button.clicked.connect(self.cancel_pen_selection); self.cancel_button.setVisible(False)
         pen_buttons_layout.addWidget(self.confirm_button); pen_buttons_layout.addWidget(self.cancel_button)
+
+        self.brush_controls_widget = QWidget()
+        brush_layout = QHBoxLayout(self.brush_controls_widget)
+        brush_layout.setContentsMargins(0, 0, 0, 0)
+        brush_layout.addWidget(QLabel("Brush Size:"))
+        self.brush_size_spinbox = QSpinBox()
+        self.brush_size_spinbox.setRange(5, 200)
+        self.brush_size_spinbox.setValue(25)
+        self.brush_size_spinbox.valueChanged.connect(lambda val: self.image_label.set_inpaint_brush_size(val) if hasattr(self, 'image_label') else None)
+        brush_layout.addWidget(self.brush_size_spinbox)
+        self.inpaint_confirm_button = QPushButton("Confirm Clean")
+        self.inpaint_confirm_button.clicked.connect(lambda: self.apply_inpaint_brush_selection(run_ocr_translate=self._is_inpaint_ocr_mode()))
+        brush_layout.addWidget(self.inpaint_confirm_button)
+        self.inpaint_clear_button = QPushButton("Clear Brush")
+        self.inpaint_clear_button.clicked.connect(lambda: self.image_label.clear_inpaint_mask() if hasattr(self, 'image_label') else None)
+        brush_layout.addWidget(self.inpaint_clear_button)
+        self.inpaint_compare_button = QPushButton("Compare")
+        self.inpaint_compare_button.setCheckable(True)
+        self.inpaint_compare_button.setToolTip("Show the page before inpainting so OCR can read the original text.")
+        self.inpaint_compare_button.toggled.connect(lambda checked: self.compare_mode_btn.setChecked(checked) if hasattr(self, 'compare_mode_btn') else None)
+        brush_layout.addWidget(self.inpaint_compare_button)
+        self.inpaint_cancel_button = QPushButton("X")
+        self.inpaint_cancel_button.setToolTip("Cancel the saved inpainting result for this page.")
+        self.inpaint_cancel_button.clicked.connect(self.cancel_inpaint_result)
+        brush_layout.addWidget(self.inpaint_cancel_button)
+        self.brush_controls_widget.setVisible(False)
+        pen_buttons_layout.addWidget(self.brush_controls_widget)
+
         selection_layout.addLayout(pen_buttons_layout, 1, 0, 1, 2)
 
         self.create_bubble_checkbox = QCheckBox("Create white bubble with black outline")
@@ -2508,7 +2537,7 @@ class MangaOCRApp(QMainWindow):
         self.inpaint_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('use_inpaint', True)))
         inpaint_layout.addWidget(self.inpaint_checkbox, 0, 0, 1, 2)
 
-        inpaint_models = ["OpenCV-NS", "OpenCV-Telea"]
+        inpaint_models = ["IOPaint Server", "OpenCV-NS", "OpenCV-Telea"]
         if self.is_lama_available:
             if os.path.exists(self.dl_models['big_lama']['path']):
                 inpaint_models.append("Big-LaMa")
@@ -5158,7 +5187,7 @@ class MangaOCRApp(QMainWindow):
                 # Commit active typeset areas to in-memory dictionary
                 if getattr(self, 'current_image_path', None):
                     key = self.get_current_data_key()
-                    self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+                    self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
                 if not getattr(self, 'current_project_path', None):
                     self.current_project_path, _ = self._make_project_file_path()
@@ -5176,6 +5205,9 @@ class MangaOCRApp(QMainWindow):
                                     'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
                                     'redo': [r.to_payload() if isinstance(r, TypesetArea) else r for r in redo],
                                 }
+                                for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
+                                    if rec.get(image_state_key):
+                                        serialized_typeset[k][image_state_key] = rec.get(image_state_key)
                             except Exception:
                                 serialized_typeset[k] = {'areas': [], 'redo': []}
 
@@ -7575,6 +7607,8 @@ class MangaOCRApp(QMainWindow):
             'use_inpaint': use_inpaint_value,
             'inpaint_model_name': inpaint_model_text,
             'inpaint_model_key': inpaint_model_key,
+            'inpaint_server_url': SETTINGS.get('cleanup', {}).get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL),
+            'inpaint_server_timeout': SETTINGS.get('cleanup', {}).get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT),
             'inpaint_padding': self.inpaint_padding_spinbox.value(),
             # Optimasi CPU
             'cpu_threads': 4,  # Sesuaikan dengan jumlah core CPU Anda
@@ -8340,7 +8374,7 @@ class MangaOCRApp(QMainWindow):
 
         if previous_item and self.current_image_path:
             key = self.get_current_data_key(path=self.current_image_path, page=self.current_pdf_page if self.pdf_document else -1)
-            self.all_typeset_data[key] = {'areas': self.typeset_areas, 'redo': self.redo_stack}
+            self._update_typeset_record(key, areas=self.typeset_areas, redo=self.redo_stack)
 
         row = self.file_list_widget.row(current_item)
         if 0 <= row < len(self.image_files):
@@ -8355,7 +8389,7 @@ class MangaOCRApp(QMainWindow):
         # Save previous typeset areas before changing image path!
         if self.current_image_path:
             old_key = self.get_current_data_key(path=self.current_image_path, page=self.current_pdf_page if self.pdf_document else -1)
-            self.all_typeset_data[old_key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+            self._update_typeset_record(old_key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         # Clear old confirmation state
         self.image_label.clear_detected_items()
@@ -8377,40 +8411,24 @@ class MangaOCRApp(QMainWindow):
 
     def load_image(self, file_path):
         try:
-            self.current_image_pil = Image.open(file_path).convert('RGB')
-            # Assign original_pixmap under paint mutex to avoid concurrent painting/destroy races
-            qpix_temp = QPixmap(file_path)
-            self.paint_mutex.lock()
-            try:
-                self.original_pixmap = qpix_temp
-            finally:
-                self.paint_mutex.unlock()
             # Use robust opener to handle truncated/corrupt JPEGs
             self.current_image_pil = self.safe_open_image(file_path)
 
-            # Create QPixmap from PIL image (safer than loading directly from a possibly corrupted file)
-            pil_img = self.current_image_pil
-            data = pil_img.tobytes('raw', 'RGB')
-            qimage = QImage(data, pil_img.width, pil_img.height, pil_img.width * 3, QImage.Format_RGB888)
-            # Replace original_pixmap safely while holding the paint mutex
-            self.paint_mutex.lock()
-            try:
-                self.original_pixmap = QPixmap.fromImage(qimage)
-            finally:
-                self.paint_mutex.unlock()
-
-            # Save raw unmodified backups for non-destructive Curves
-            self.unmodified_image_pil = self.current_image_pil.copy()
-            self.unmodified_original_pixmap = self.original_pixmap.copy()
-            self.active_curves_points = None
-
             key = self.get_current_data_key()
             img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
+            cleaned_image = self._decode_cleaned_image(img_data)
+            self._apply_base_image(cleaned_image or self.current_image_pil)
             self.typeset_areas = img_data['areas']
             self.redo_stack = img_data['redo']
             self.set_selected_area(None, notify=True)
 
             self.rebuild_history_for_image(key, self.typeset_areas)
+            # Buang mask kuas inpaint halaman sebelumnya agar tidak diterapkan ke halaman baru
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_inpaint_mask()
+            self._set_compare_controls_checked(False)
+            self._compare_mode_active = False
+            self._refresh_inpaint_result_controls()
             # Reset undo timeline saat ganti halaman (Feature #1)
             self._undo_history.clear()
             self._undo_history_idx = -1
@@ -8487,27 +8505,28 @@ class MangaOCRApp(QMainWindow):
 
         if self.current_pdf_page != -1 and self.current_pdf_page != page_number:
             key = self.get_current_data_key(page=self.current_pdf_page)
-            self.all_typeset_data[key] = {'areas': self.typeset_areas, 'redo': self.redo_stack}
+            self._update_typeset_record(key, areas=self.typeset_areas, redo=self.redo_stack)
 
         self.current_pdf_page = page_number
         page = self.pdf_document.load_page(page_number)
         pix = page.get_pixmap(dpi=150)
-        q_image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-        # Replace original_pixmap safely while holding the paint mutex
-        self.paint_mutex.lock()
-        try:
-            self.original_pixmap = QPixmap.fromImage(q_image)
-        finally:
-            self.paint_mutex.unlock()
         self.current_image_pil = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
         key = self.get_current_data_key()
         img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
+        cleaned_image = self._decode_cleaned_image(img_data)
+        self._apply_base_image(cleaned_image or self.current_image_pil)
         self.typeset_areas = img_data['areas']
         self.redo_stack = img_data['redo']
         self.set_selected_area(None, notify=True)
 
         self.rebuild_history_for_image(key, self.typeset_areas)
+        # Buang mask kuas inpaint halaman sebelumnya agar tidak diterapkan ke halaman baru
+        if hasattr(self, 'image_label'):
+            self.image_label.clear_inpaint_mask()
+        self._set_compare_controls_checked(False)
+        self._compare_mode_active = False
+        self._refresh_inpaint_result_controls()
         self.redraw_all_typeset_areas()
         self.update_undo_redo_buttons_state()
         self._refresh_detection_overlay()
@@ -8522,6 +8541,74 @@ class MangaOCRApp(QMainWindow):
         if path_to_use and path_to_use.lower().endswith('.pdf') and page_to_use != -1:
             return f"{path_to_use}::page::{page_to_use}"
         return path_to_use
+
+    def _encode_cleaned_image(self, pil_image):
+        if pil_image is None:
+            return None
+        buf = io.BytesIO()
+        pil_image.convert('RGB').save(buf, format='PNG')
+        return base64.b64encode(buf.getvalue()).decode('ascii')
+
+    def _decode_cleaned_image(self, record):
+        data = record.get('cleaned_image_png') if isinstance(record, dict) else None
+        return self._decode_image_png(data)
+
+    def _decode_image_png(self, data):
+        if not data:
+            return None
+        try:
+            return Image.open(io.BytesIO(base64.b64decode(data))).convert('RGB')
+        except Exception as exc:
+            print(f"Failed to decode image state: {exc}")
+            return None
+
+    def _apply_base_image(self, pil_image):
+        self.current_image_pil = pil_image.convert('RGB')
+        data = self.current_image_pil.tobytes('raw', 'RGB')
+        qimage = QImage(data, self.current_image_pil.width, self.current_image_pil.height, self.current_image_pil.width * 3, QImage.Format_RGB888)
+        self.paint_mutex.lock()
+        try:
+            self.original_pixmap = QPixmap.fromImage(qimage)
+        finally:
+            self.paint_mutex.unlock()
+        self.unmodified_image_pil = self.current_image_pil.copy()
+        self.unmodified_original_pixmap = self.original_pixmap.copy()
+        self.active_curves_points = None
+
+    def _update_typeset_record(
+        self,
+        key,
+        *,
+        areas=None,
+        redo=None,
+        cleaned_image_png=None,
+        remove_cleaned_image=False,
+        pre_inpaint_image_png=None,
+        remove_pre_inpaint_image=False,
+    ):
+        if not key:
+            return {}
+        record = self.all_typeset_data.get(key)
+        if not isinstance(record, dict):
+            record = {}
+        if areas is not None:
+            record['areas'] = areas
+        else:
+            record.setdefault('areas', [])
+        if redo is not None:
+            record['redo'] = redo
+        else:
+            record.setdefault('redo', [])
+        if remove_cleaned_image:
+            record.pop('cleaned_image_png', None)
+        elif cleaned_image_png is not None:
+            record['cleaned_image_png'] = cleaned_image_png
+        if remove_pre_inpaint_image:
+            record.pop('pre_inpaint_image_png', None)
+        elif pre_inpaint_image_png is not None:
+            record['pre_inpaint_image_png'] = pre_inpaint_image_png
+        self.all_typeset_data[key] = record
+        return record
 
     def clear_view(self):
         # Clear pixmaps and data safely while preventing concurrent painting
@@ -9600,23 +9687,36 @@ class MangaOCRApp(QMainWindow):
                 self.start_manual_input(rect=unzoomed_rect)
                 return
 
-            cropped_img = self.current_image_pil.crop((unzoomed_rect.x(), unzoomed_rect.y(), unzoomed_rect.right(), unzoomed_rect.bottom()))
-            cropped_cv_img = cv2.cvtColor(np.array(cropped_img), cv2.COLOR_RGB2BGR)
-
-            job = {
-                'image_path': self.get_current_data_key(),
-                'rect': unzoomed_rect,
-                'polygon': None,
-                'cropped_cv_img': cropped_cv_img,
-                'settings': self.get_current_settings()
-            }
-
-            if self.batch_mode_checkbox.isChecked():
-                self.add_to_batch_queue(job)
-            else:
-                self.add_job_to_queue(job)
+            self._queue_ocr_translate_rect(unzoomed_rect)
         finally:
             self.is_processing_selection = False
+
+    def _queue_ocr_translate_rect(self, unzoomed_rect, source_pil_image=None):
+        source = source_pil_image or self.current_image_pil
+        if source is None or not unzoomed_rect:
+            return False
+        left = max(0, int(unzoomed_rect.x()))
+        top = max(0, int(unzoomed_rect.y()))
+        right = min(source.width, int(unzoomed_rect.x() + unzoomed_rect.width()))
+        bottom = min(source.height, int(unzoomed_rect.y() + unzoomed_rect.height()))
+        if right <= left or bottom <= top:
+            return False
+
+        safe_rect = QRect(left, top, right - left, bottom - top)
+        cropped_img = source.crop((left, top, right, bottom))
+        cropped_cv_img = cv2.cvtColor(np.array(cropped_img), cv2.COLOR_RGB2BGR)
+        job = {
+            'image_path': self.get_current_data_key(),
+            'rect': safe_rect,
+            'polygon': None,
+            'cropped_cv_img': cropped_cv_img,
+            'settings': self.get_current_settings()
+        }
+        if self.batch_mode_checkbox.isChecked():
+            self.add_to_batch_queue(job)
+        else:
+            self.add_job_to_queue(job)
+        return True
 
     def process_polygon_area(self, scaled_points):
         if self.is_in_confirmation_mode:
@@ -9773,6 +9873,14 @@ class MangaOCRApp(QMainWindow):
                 self.deferred_typeset_timer.stop()
             except Exception:
                 pass
+        if getattr(self, '_compare_mode_active', False):
+            self.paint_mutex.lock()
+            try:
+                self.typeset_pixmap = self.original_pixmap.copy()
+            finally:
+                self.paint_mutex.unlock()
+            self.update_display()
+            return
         self.paint_mutex.lock()
         try:
             settings = self.get_current_settings()
@@ -11403,6 +11511,7 @@ class MangaOCRApp(QMainWindow):
         self.image_label.cancel_pending_item()
         manual_polygon = "Manual Text (Pen)" in mode
         pen_mode = (mode == "Pen Tool") or manual_polygon
+        inpaint_brush_mode = self._is_inpaint_brush_mode(mode)
         rect_mode = ("Rect" in mode or "Oval" in mode) and not manual_polygon
         transform_mode = (mode == "Transform (Hand)")
         self.image_label.set_transform_mode(transform_mode)
@@ -11413,12 +11522,27 @@ class MangaOCRApp(QMainWindow):
             self.image_label.setCursor(self.pen_cursor)
         elif transform_mode:
             self.image_label.setCursor(Qt.OpenHandCursor)
+        elif inpaint_brush_mode:
+            self.image_label.setCursor(Qt.CrossCursor)
         else:
             self.image_label.setCursor(Qt.CrossCursor if rect_mode else Qt.PointingHandCursor)
         self.update_pen_tool_buttons_visibility(pen_mode)
+        if hasattr(self, 'brush_controls_widget'):
+            self.brush_controls_widget.setVisible(inpaint_brush_mode)
+            if hasattr(self, 'inpaint_confirm_button'):
+                self.inpaint_confirm_button.setText("Confirm Clean + OCR" if self._is_inpaint_ocr_mode(mode) else "Confirm Clean")
+            self._refresh_inpaint_result_controls()
         if not pen_mode:
             self.image_label.polygon_points.clear()
             self.image_label.update()
+
+    def _is_inpaint_brush_mode(self, mode=None):
+        mode = mode if mode is not None else self.selection_mode_combo.currentText()
+        return mode in ("Inpaint Brush", "Inpaint Brush + OCR Translate")
+
+    def _is_inpaint_ocr_mode(self, mode=None):
+        mode = mode if mode is not None else self.selection_mode_combo.currentText()
+        return mode == "Inpaint Brush + OCR Translate"
 
     def create_pen_cursor(self):
         """Create a small stylized pen/pencil QCursor to differentiate pen mode."""
@@ -11490,6 +11614,187 @@ class MangaOCRApp(QMainWindow):
     def cancel_pen_selection(self):
         self.image_label.clear_selection()
         self.update_pen_tool_buttons_visibility(False)
+
+    def _get_inpaint_brush_mask_and_rect(self):
+        mask_img = self.image_label.get_inpaint_mask() if hasattr(self, 'image_label') else None
+        if mask_img is None or mask_img.isNull():
+            self.show_toast("No Mask", "Please paint an area on the canvas first.", kind="warning")
+            return None, None
+        if mask_img.size() != self.original_pixmap.size():
+            self.image_label.clear_inpaint_mask()
+            self.show_toast("Mask Reset", "The mask did not match the current image. Please paint again.", kind="warning")
+            return None, None
+
+        qimg_mask = mask_img.convertToFormat(QImage.Format_Grayscale8)
+        w, h = qimg_mask.width(), qimg_mask.height()
+        ptr = qimg_mask.bits()
+        ptr.setsize(h * qimg_mask.bytesPerLine())
+        arr = np.ascontiguousarray(np.array(ptr).reshape((h, qimg_mask.bytesPerLine()))[:, :w])
+        ys, xs = np.where(arr > 0)
+        if xs.size == 0 or ys.size == 0:
+            self.show_toast("No Mask", "Please paint an area on the canvas first.", kind="warning")
+            return None, None
+        rect = QRect(int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+        return Image.fromarray(arr), rect
+
+    def _current_clean_base_image(self, fallback_pil):
+        _, record = self._current_inpaint_record()
+        cleaned_image = self._decode_cleaned_image(record)
+        if cleaned_image is not None:
+            return cleaned_image
+        return fallback_pil
+
+    def _current_pre_inpaint_image(self, fallback_pil):
+        _, record = self._current_inpaint_record()
+        pre_image = self._decode_image_png(record.get('pre_inpaint_image_png')) if record else None
+        if pre_image is not None:
+            return pre_image
+        return fallback_pil
+
+    def apply_inpaint_brush_selection(self, run_ocr_translate=False):
+        if getattr(self, 'original_pixmap', None) is None:
+            self.show_toast("No Image", "Please load an image first.", kind="warning")
+            return
+        existing = getattr(self, '_inpaint_brush_worker', None)
+        if existing is not None and existing.isRunning():
+            return
+        pil_mask, mask_rect = self._get_inpaint_brush_mask_and_rect()
+        if pil_mask is None:
+            return
+
+        if getattr(self, 'current_image_pil', None) is not None and self.current_image_pil.size == (self.original_pixmap.width(), self.original_pixmap.height()):
+            pil_image = self.current_image_pil.convert('RGB')
+        else:
+            qimg = self.original_pixmap.toImage().convertToFormat(QImage.Format_RGB888)
+            w, h = qimg.width(), qimg.height()
+            ptr = qimg.bits()
+            ptr.setsize(h * qimg.bytesPerLine())
+            arr_img = np.ascontiguousarray(np.array(ptr).reshape((h, qimg.bytesPerLine()))[:, :w * 3].reshape((h, w, 3)))
+            pil_image = Image.fromarray(arr_img)
+
+        clean_base = self._current_clean_base_image(pil_image)
+        if run_ocr_translate:
+            ocr_source = self._current_pre_inpaint_image(pil_image)
+            if self._queue_ocr_translate_rect(mask_rect, source_pil_image=ocr_source):
+                self.show_toast("OCR Queued", "OCR and translation queued for the painted area.", kind="info")
+
+        self.show_toast("Inpainting...", "Running AI Inpainting on painted area...", kind="info")
+        if hasattr(self, 'inpaint_confirm_button'):
+            self.inpaint_confirm_button.setEnabled(False)
+
+        from src.core.workers import InpaintBrushWorker
+        worker = InpaintBrushWorker(self, clean_base, pil_mask, self.get_current_settings())
+        worker.signals.progress.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
+        worker.signals.error.connect(self._on_inpaint_brush_error)
+        worker.signals.finished.connect(self._on_inpaint_brush_finished)
+        worker.finished.connect(self._on_inpaint_brush_thread_finished)
+        self._inpaint_brush_worker = worker
+        worker.start()
+
+    def _on_inpaint_brush_thread_finished(self):
+        # Lepas referensi hanya setelah QThread benar-benar selesai (aturan thread safety repo)
+        self._inpaint_brush_worker = None
+
+    def _on_inpaint_brush_error(self, err_msg):
+        if hasattr(self, 'inpaint_confirm_button'):
+            self.inpaint_confirm_button.setEnabled(True)
+        self.show_banner("inpaint-brush-err", "Inpainting Failed", f"Error: {err_msg}", kind="error")
+
+    def _current_inpaint_record(self):
+        key = self.get_current_data_key()
+        record = self.all_typeset_data.get(key, {}) if key else {}
+        return key, record if isinstance(record, dict) else {}
+
+    def _set_compare_controls_checked(self, checked):
+        for button_name in ('compare_mode_btn', 'inpaint_compare_button'):
+            button = getattr(self, button_name, None)
+            if button is None:
+                continue
+            with QSignalBlocker(button):
+                button.setChecked(bool(checked))
+        compare_button = getattr(self, 'inpaint_compare_button', None)
+        if compare_button is not None:
+            compare_button.setText("Show Clean" if checked else "Compare")
+
+    def _refresh_inpaint_result_controls(self):
+        _, record = self._current_inpaint_record()
+        has_inpaint_state = bool(record.get('cleaned_image_png') and record.get('pre_inpaint_image_png'))
+        for button_name in ('inpaint_compare_button', 'inpaint_cancel_button'):
+            button = getattr(self, button_name, None)
+            if button is not None:
+                button.setEnabled(has_inpaint_state)
+        if not has_inpaint_state and getattr(self, 'inpaint_compare_button', None) is not None:
+            self._set_compare_controls_checked(False)
+
+    def adjust_inpaint_brush_size(self, delta):
+        spinbox = getattr(self, 'brush_size_spinbox', None)
+        if spinbox is None:
+            return
+        value = max(spinbox.minimum(), min(spinbox.maximum(), spinbox.value() + int(delta)))
+        spinbox.setValue(value)
+        self.statusBar().showMessage(f"Inpaint brush size: {value}px", 1200)
+
+    def cancel_inpaint_result(self):
+        key, record = self._current_inpaint_record()
+        pre_inpaint_png = record.get('pre_inpaint_image_png')
+        if not key or not pre_inpaint_png:
+            self.show_toast("No Inpaint Result", "No saved inpainting result to cancel on this page.", kind="info")
+            return
+        pre_image = self._decode_image_png(pre_inpaint_png)
+        if pre_image is None:
+            self.show_banner("inpaint-cancel-error", "Cancel Inpainting Failed", "The saved before-inpaint image could not be restored.", kind="error")
+            return
+
+        cleaned_image = self._decode_cleaned_image(record)
+        if cleaned_image is not None:
+            self._apply_base_image(cleaned_image)
+        self._push_undo_snapshot("Cancel Inpaint Clean")
+        self._set_compare_controls_checked(False)
+        self._compare_mode_active = False
+        self._apply_base_image(pre_image)
+        self._update_typeset_record(
+            key,
+            areas=list(self.typeset_areas),
+            redo=list(self.redo_stack),
+            remove_cleaned_image=True,
+            remove_pre_inpaint_image=True,
+        )
+        if hasattr(self, 'image_label'):
+            self.image_label.clear_inpaint_mask()
+        self.redraw_all_typeset_areas()
+        self._refresh_inpaint_result_controls()
+        self.show_toast("Inpainting Cancelled", "Restored the page before inpainting.", kind="success")
+
+    def _on_inpaint_brush_finished(self, result_pil):
+        if hasattr(self, 'inpaint_confirm_button'):
+            self.inpaint_confirm_button.setEnabled(True)
+        try:
+            key = self.get_current_data_key()
+            record = self.all_typeset_data.get(key, {}) if key else {}
+            pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
+            if not pre_inpaint_png:
+                pre_inpaint_png = self._encode_cleaned_image(self.current_image_pil)
+
+            self._push_undo_snapshot("Inpaint Brush Clean")
+            self._set_compare_controls_checked(False)
+            self._compare_mode_active = False
+            self._apply_base_image(result_pil)
+            self._update_typeset_record(
+                key,
+                areas=list(self.typeset_areas),
+                redo=list(self.redo_stack),
+                cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
+                pre_inpaint_image_png=pre_inpaint_png,
+            )
+
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_inpaint_mask()
+
+            self.redraw_all_typeset_areas()
+            self._refresh_inpaint_result_controls()
+            self.show_toast("Inpaint Cleaned", "Background area cleaned successfully.", kind="success")
+        except Exception as e:
+            self._on_inpaint_brush_error(str(e))
 
     def save_image(self):
         if not self.typeset_pixmap:
@@ -11584,14 +11889,10 @@ class MangaOCRApp(QMainWindow):
 
     def undo_last_action(self):
         """Navigasi mundur satu langkah di undo history timeline."""
-        if self._undo_history_idx > 0:
-            self._restore_snapshot(self._undo_history_idx - 1)
-        elif self._undo_history_idx == 0:
-            # Kembali ke state kosong (sebelum snapshot pertama)
-            self._undo_history_idx = -1
-            self.typeset_areas.clear()
-            self.clear_selected_area()
-            self.redraw_all_typeset_areas()
+        if self._undo_history_idx >= 0:
+            restore_idx = self._undo_history_idx
+            self._restore_snapshot(restore_idx)
+            self._undo_history_idx = restore_idx - 1
             self.update_undo_redo_buttons_state()
             self._refresh_undo_timeline()
             if hasattr(self, 'image_label'):
@@ -11645,12 +11946,22 @@ class MangaOCRApp(QMainWindow):
                     snapshot.append(area.to_payload())
                 else:
                     snapshot.append(_copy.deepcopy(area))
+            current_key = self.get_current_data_key() if self.current_image_path else None
+            current_record = self.all_typeset_data.get(current_key, {}) if current_key else {}
+            image_png = self._encode_cleaned_image(self.current_image_pil) if self.current_image_pil is not None else None
+            pre_inpaint_png = current_record.get('pre_inpaint_image_png') if isinstance(current_record, dict) else None
+            snapshot_payload = {
+                'areas': snapshot,
+                'image_png': image_png,
+                'had_cleaned_image': bool(isinstance(current_record, dict) and current_record.get('cleaned_image_png')),
+                'pre_inpaint_image_png': pre_inpaint_png,
+            }
 
             # Potong redo branch (state setelah posisi aktif)
             if self._undo_history_idx < len(self._undo_history) - 1:
                 self._undo_history = self._undo_history[:self._undo_history_idx + 1]
 
-            self._undo_history.append({'label': label, 'snapshot': snapshot})
+            self._undo_history.append({'label': label, 'snapshot': snapshot_payload})
 
             # Cap ke max history
             if len(self._undo_history) > self._MAX_UNDO_HISTORY:
@@ -11670,7 +11981,11 @@ class MangaOCRApp(QMainWindow):
             entry = self._undo_history[idx]
             self._undo_history_idx = idx
 
-            payloads = entry['snapshot']
+            snapshot = entry['snapshot']
+            payloads = snapshot.get('areas', []) if isinstance(snapshot, dict) else snapshot
+            image_png = snapshot.get('image_png') if isinstance(snapshot, dict) else None
+            had_cleaned_image = bool(snapshot.get('had_cleaned_image')) if isinstance(snapshot, dict) else False
+            pre_inpaint_png = snapshot.get('pre_inpaint_image_png') if isinstance(snapshot, dict) else None
             self.typeset_areas.clear()
             for payload in payloads:
                 if isinstance(payload, dict):
@@ -11680,12 +11995,39 @@ class MangaOCRApp(QMainWindow):
                     except Exception as e:
                         print(f"[UndoTimeline] Restore area failed: {e}")
 
+            if image_png:
+                try:
+                    restored_image = Image.open(io.BytesIO(base64.b64decode(image_png))).convert('RGB')
+                    self._apply_base_image(restored_image)
+                    key = self.get_current_data_key()
+                    if had_cleaned_image:
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            cleaned_image_png=image_png,
+                            pre_inpaint_image_png=pre_inpaint_png,
+                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
+                        )
+                    else:
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            remove_cleaned_image=True,
+                            pre_inpaint_image_png=pre_inpaint_png,
+                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
+                        )
+                except Exception as exc:
+                    print(f"[UndoTimeline] Restore image failed: {exc}")
+
             self.clear_selected_area()
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
             self._refresh_undo_timeline()
             if hasattr(self, 'image_label'):
                 self.image_label.clear_selection()
+            self._refresh_inpaint_result_controls()
             self._refresh_layers_list()
         except Exception as e:
             print(f"[UndoTimeline] Restore snapshot failed: {e}")
@@ -11753,10 +12095,7 @@ class MangaOCRApp(QMainWindow):
         if not self.current_image_path:
             return
         current_key = self.get_current_data_key()
-        self.all_typeset_data[current_key] = {
-            'areas': list(self.typeset_areas),
-            'redo': list(self.redo_stack),
-        }
+        self._update_typeset_record(current_key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
     
     def _serialize_typeset_map(self):
         serialized = {}
@@ -11765,10 +12104,14 @@ class MangaOCRApp(QMainWindow):
                 continue
             areas = payload.get('areas') or []
             redo = payload.get('redo') or []
-            serialized[key] = {
+            record = {
                 'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
                 'redo': [area.to_payload() if isinstance(area, TypesetArea) else area for area in redo],
             }
+            for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
+                if payload.get(image_state_key):
+                    record[image_state_key] = payload.get(image_state_key)
+            serialized[key] = record
         return serialized
     
     def _collect_project_settings(self):
@@ -11876,7 +12219,11 @@ class MangaOCRApp(QMainWindow):
                     redo_items.append(redo_obj)
                 except Exception as exc:
                     warnings.append(f"Failed to load redo entry in {key}: {exc}")
-            result[resolved_key] = {'areas': areas, 'redo': redo_items}
+            record = {'areas': areas, 'redo': redo_items}
+            for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
+                if payload.get(image_state_key):
+                    record[image_state_key] = payload.get(image_state_key)
+            result[resolved_key] = record
         return result, warnings
 
     def _sanitize_history_entries(self, history_data, area_lookup, warnings):
@@ -12263,7 +12610,7 @@ class MangaOCRApp(QMainWindow):
         # Commit active typeset areas to in-memory dictionary first to avoid copy-paste loss
         if self.current_image_path:
             key = self.get_current_data_key()
-            self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+            self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
     
         if not self.current_project_path:
             if is_auto:
@@ -12314,6 +12661,9 @@ class MangaOCRApp(QMainWindow):
                             'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
                             'redo': [r.to_payload() if isinstance(r, TypesetArea) else r for r in redo],
                         }
+                        for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
+                            if rec.get(image_state_key):
+                                serialized_typeset[k][image_state_key] = rec.get(image_state_key)
                     except Exception:
                         serialized_typeset[k] = {'areas': [], 'redo': []}
 
@@ -13312,7 +13662,7 @@ class MangaOCRApp(QMainWindow):
         # Commit area aktif agar tersinkronisasi ke all_typeset_data
         if self.current_image_path:
             key = self.get_current_data_key()
-            self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+            self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         dlg = QDialog(self)
         dlg.setWindowTitle("🔍 Find & Replace")
@@ -14052,10 +14402,11 @@ class MangaOCRApp(QMainWindow):
                             # Simpan data halaman saat ini
                             current_key = self.get_current_data_key()
                             if current_key:
-                                self.all_typeset_data[current_key] = {
-                                    'areas': self.typeset_areas[:], 
-                                    'redo': self.redo_stack[:]
-                                }
+                                self._update_typeset_record(
+                                    current_key,
+                                    areas=list(self.typeset_areas),
+                                    redo=list(self.redo_stack),
+                                )
                             
                             # Muat gambar baru
                             self.current_image_path = image_path
@@ -14198,9 +14549,12 @@ class MangaOCRApp(QMainWindow):
         for path in files_to_save:
             key = self.get_current_data_key(path=path)
             if key in self.all_typeset_data:
+                record = self.all_typeset_data[key]
                 typeset_data_snapshot[key] = {
-                    'areas': list(self.all_typeset_data[key].get('areas', []))
+                    'areas': list(record.get('areas', []))
                 }
+                if record.get('cleaned_image_png'):
+                    typeset_data_snapshot[key]['cleaned_image_png'] = record.get('cleaned_image_png')
 
         self.batch_save_thread = QThread()
         self.batch_save_worker = BatchSaveWorker(
@@ -14392,6 +14746,19 @@ class MangaOCRApp(QMainWindow):
                         self.batch_save_thread.quit(); self.batch_save_thread.wait()
                 except RuntimeError:
                     # QThread wrapper was already deleted; ignore
+                    pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Tunggu worker Inpaint Brush selesai agar tidak crash saat aplikasi ditutup
+        try:
+            if getattr(self, '_inpaint_brush_worker', None):
+                try:
+                    if getattr(self._inpaint_brush_worker, 'isRunning', lambda: False)():
+                        self._inpaint_brush_worker.wait()
+                except RuntimeError:
                     pass
                 except Exception:
                     pass
@@ -14599,7 +14966,7 @@ class MangaOCRApp(QMainWindow):
             # Commit to cache immediately to prevent copy-paste loss
             if self.current_image_path:
                 key = self.get_current_data_key()
-                self.all_typeset_data[key] = {'areas': list(self.typeset_areas), 'redo': list(self.redo_stack)}
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
             self.show_toast("Pasted", "Typeset area pasted.", kind="success", timeout_ms=2200)
 
@@ -16005,25 +16372,27 @@ class MangaOCRApp(QMainWindow):
     def _on_compare_mode_toggled(self, checked: bool):
         """Aktifkan/nonaktifkan Quick Compare mode (tampilkan gambar asli tanpa typeset)."""
         self._compare_mode_active = checked
+        self._set_compare_controls_checked(checked)
+        key, record = self._current_inpaint_record()
         if checked:
-            # Tampilkan gambar asli tanpa typeset overlay
-            if self.unmodified_original_pixmap and not self.unmodified_original_pixmap.isNull():
-                self.paint_mutex.lock()
-                try:
-                    local_pix = self.unmodified_original_pixmap.copy()
-                finally:
-                    self.paint_mutex.unlock()
-                scaled = local_pix.scaled(
-                    self.image_label.size(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                self.image_label.setPixmap(scaled)
-                self.statusBar().showMessage("Compare Mode: Menampilkan gambar asli (klik lagi untuk kembali)", 0)
+            pre_inpaint_image = self._decode_image_png(record.get('pre_inpaint_image_png')) if record else None
+            if pre_inpaint_image is not None:
+                self._apply_base_image(pre_inpaint_image)
+                self.typeset_pixmap = self.original_pixmap.copy()
+                self.update_display()
+                self.statusBar().showMessage("Compare Mode: Menampilkan gambar sebelum inpainting", 0)
+            elif self.unmodified_original_pixmap and not self.unmodified_original_pixmap.isNull():
+                self.typeset_pixmap = self.unmodified_original_pixmap.copy()
+                self.update_display()
+                self.statusBar().showMessage("Compare Mode: Menampilkan gambar asli tanpa typeset", 0)
             else:
-                self.compare_mode_btn.setChecked(False)
+                self._set_compare_controls_checked(False)
+                self._compare_mode_active = False
                 self.statusBar().showMessage("Tidak ada gambar yang dimuat.", 2000)
         else:
+            cleaned_image = self._decode_cleaned_image(record) if record else None
+            if cleaned_image is not None:
+                self._apply_base_image(cleaned_image)
             # Kembalikan ke tampilan typeset normal
             self.redraw_all_typeset_areas()
             self.statusBar().showMessage("Compare Mode: Nonaktif", 2000)
@@ -16736,26 +17105,23 @@ JSON format example:
             h, w = cv_image.shape[:2]
             mask = np.zeros((h, w), dtype=np.uint8)
             cv2.rectangle(mask, (rect.x(), rect.y()), (rect.x() + rect.width(), rect.y() + rect.height()), 255, -1)
-            
-            url = "http://127.0.0.1:8080/api/v1/inpaint"
-            _, img_encoded = cv2.imencode('.png', cv_image)
-            _, mask_encoded = cv2.imencode('.png', mask)
-            
-            files = {
-                'image': ('image.png', img_encoded.tobytes(), 'image/png'),
-                'mask': ('mask.png', mask_encoded.tobytes(), 'image/png')
-            }
-            data = {'ldm_steps': 20}
-            
-            response = requests.post(url, files=files, data=data, timeout=10)
-            if response.status_code == 200:
-                nparr = np.frombuffer(response.content, np.uint8)
-                inpainted_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
+            if model_name.startswith("IOPaint"):
+                pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
+                pil_mask = Image.fromarray(mask).convert("L")
+                server_result = run_iopaint_inpaint(
+                    pil_image,
+                    pil_mask,
+                    self.settings.get('inpaint_server_url'),
+                    self.settings.get('inpaint_server_timeout'),
+                )
+                inpainted_img = cv2.cvtColor(np.array(server_result), cv2.COLOR_RGB2BGR) if server_result is not None else None
                 if inpainted_img is not None and inpainted_img.shape == cv_image.shape:
                     cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted_img[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
                     return inpainted_img
             
-            flags = cv2.INPAINT_TELEA
+            flags = cv2.INPAINT_NS if "NS" in model_name else cv2.INPAINT_TELEA
             inpainted = cv2.inpaint(cv_image, mask, 3, flags)
             cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
             return inpainted

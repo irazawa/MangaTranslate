@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.8.8
+# Manga OCR & Typeset Tool v14.9.0
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -8,6 +8,8 @@ import time
 import json
 import re
 import copy
+import base64
+from io import BytesIO
 
 # ==============================
 # ?? Library pihak ketiga (hanya yang digunakan)
@@ -18,6 +20,7 @@ warnings.filterwarnings("ignore", message=r".*You are using `torch.load` with `w
 
 import numpy as np
 import cv2
+import requests
 from PIL import Image
 
 # ==============================
@@ -779,17 +782,23 @@ class BatchSaveWorker(QObject):
                 path_part, ext = os.path.splitext(file_path)
                 save_path = f"{path_part}_typeset{out_ext}"
 
-                # Muat gambar asli
-                pil_image = Image.open(file_path).convert('RGB')
-
-                # Konversi PIL.Image ke QImage (lebih aman untuk digunakan dari thread)
-                data = pil_image.tobytes('raw', 'RGB')
-                qimage = QImage(data, pil_image.width, pil_image.height, pil_image.width * 3, QImage.Format_RGB888).copy()
-
                 # Dapatkan data typeset untuk gambar ini
                 data_key = self.main_app.get_current_data_key(path=file_path)
                 typeset_data = self.typeset_data.get(data_key, {'areas': []})
                 areas = typeset_data['areas']
+
+                cleaned_png = typeset_data.get('cleaned_image_png') if isinstance(typeset_data, dict) else None
+                if cleaned_png:
+                    try:
+                        pil_image = Image.open(BytesIO(base64.b64decode(cleaned_png))).convert('RGB')
+                    except Exception:
+                        pil_image = Image.open(file_path).convert('RGB')
+                else:
+                    pil_image = Image.open(file_path).convert('RGB')
+
+                # Konversi PIL.Image ke QImage (lebih aman untuk digunakan dari thread)
+                data = pil_image.tobytes('raw', 'RGB')
+                qimage = QImage(data, pil_image.width, pil_image.height, pil_image.width * 3, QImage.Format_RGB888).copy()
 
                 if not areas:
                     continue # Lewati jika tidak ada yang perlu di-typeset
@@ -821,3 +830,117 @@ class BatchSaveWorker(QObject):
 
     def cancel(self):
         self.is_cancelled = True
+
+
+def run_iopaint_inpaint(pil_image, pil_mask, server_url=None, timeout=None, ldm_steps=20):
+    """Call the local IOPaint server used by the Inpainting/ module."""
+    cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS, dict) else {}
+    server_url = (server_url or cleanup_cfg.get('inpaint_server_url') or DEFAULT_INPAINT_SERVER_URL).rstrip("/")
+    timeout = int(timeout or cleanup_cfg.get('inpaint_server_timeout') or DEFAULT_INPAINT_SERVER_TIMEOUT)
+
+    try:
+        image_buf = BytesIO()
+        mask_buf = BytesIO()
+        pil_image.convert("RGB").save(image_buf, format="PNG")
+        pil_mask.convert("L").save(mask_buf, format="PNG")
+
+        payload = {
+            "image": base64.b64encode(image_buf.getvalue()).decode("ascii"),
+            "mask": base64.b64encode(mask_buf.getvalue()).decode("ascii"),
+            "ldm_steps": int(ldm_steps),
+        }
+        response = requests.post(
+            f"{server_url}/api/v1/inpaint",
+            json=payload,
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            return None
+        with Image.open(BytesIO(response.content)) as result:
+            return result.convert("RGB")
+    except Exception as exc:
+        print(f"IOPaint server unavailable: {exc}")
+        return None
+
+
+class InpaintBrushSignals(QObject):
+    finished = pyqtSignal(object)  # Mengembalikan PIL.Image hasil bersih
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+
+class InpaintBrushWorker(QThread):
+    def __init__(self, main_app, pil_image, pil_mask, settings):
+        super().__init__()
+        self.main_app = main_app
+        self.pil_image = pil_image
+        self.pil_mask = pil_mask
+        self.settings = settings
+        self.signals = InpaintBrushSignals()
+
+    def run(self):
+        try:
+            self.signals.progress.emit("Running AI Inpainting...")
+            cv_original = cv2.cvtColor(np.array(self.pil_image), cv2.COLOR_RGB2BGR)
+            mask_arr = np.array(self.pil_mask)
+            if len(mask_arr.shape) > 2:
+                mask_arr = mask_arr[:, :, 0]
+            final_inpaint_mask = (mask_arr > 0).astype(np.uint8) * 255
+
+            inpainted_cv = None
+            model_name = self.settings.get('inpaint_model_name', 'IOPaint Server') if self.settings else 'IOPaint Server'
+            if str(model_name).startswith("IOPaint"):
+                self.signals.progress.emit("Running IOPaint server...")
+                server_result = run_iopaint_inpaint(
+                    self.pil_image,
+                    Image.fromarray(final_inpaint_mask).convert("L"),
+                    self.settings.get('inpaint_server_url') if self.settings else None,
+                    self.settings.get('inpaint_server_timeout') if self.settings else None,
+                )
+                if server_result is not None:
+                    inpainted_cv = cv2.cvtColor(np.array(server_result), cv2.COLOR_RGB2BGR)
+
+            model_key = self.settings.get('inpaint_model_key') if self.settings else None
+            if inpainted_cv is None and model_key:
+                try:
+                    if (self.main_app.inpaint_model is None or
+                        self.main_app.current_inpaint_model_key != model_key):
+                        self.main_app.initialize_inpaint_engine(self.settings)
+
+                    if self.main_app.inpaint_model:
+                        pil_orig = Image.fromarray(cv2.cvtColor(cv_original, cv2.COLOR_BGR2RGB))
+                        pil_msk = Image.fromarray(final_inpaint_mask).convert("L")
+                        out_arr = self.main_app.inpaint_model(pil_orig, pil_msk)
+                        if out_arr is not None:
+                            if isinstance(out_arr, np.ndarray):
+                                if out_arr.shape[2] == 3:
+                                    inpainted_cv = cv2.cvtColor(out_arr, cv2.COLOR_BGR2RGB)
+                                    inpainted_cv = cv2.cvtColor(inpainted_cv, cv2.COLOR_RGB2BGR)
+                                else:
+                                    inpainted_cv = out_arr
+                            else:
+                                try:
+                                    inpainted_cv = cv2.cvtColor(np.array(out_arr.convert("RGB")), cv2.COLOR_RGB2BGR)
+                                except Exception:
+                                    inpainted_cv = None
+                except Exception as e:
+                    print(f"Advanced inpainting failed in worker: {e}")
+                    inpainted_cv = None
+
+            if inpainted_cv is None:
+                try:
+                    self.signals.progress.emit("Running OpenCV Inpainting fallback...")
+                    algo_map = {"OpenCV-NS": cv2.INPAINT_NS, "OpenCV-Telea": cv2.INPAINT_TELEA}
+                    algo = algo_map.get(self.settings.get('inpaint_model_name', 'OpenCV-NS') if self.settings else 'OpenCV-NS', cv2.INPAINT_NS)
+                    inpainted_cv = cv2.inpaint(cv_original, final_inpaint_mask, 3, algo)
+                except Exception as e:
+                    raise RuntimeError(f"Inpainting failed: {e}")
+
+            if inpainted_cv is None:
+                raise RuntimeError("Inpainting returned null result.")
+
+            rgb_result = cv2.cvtColor(inpainted_cv, cv2.COLOR_BGR2RGB)
+            result_pil = Image.fromarray(rgb_result)
+            self.signals.finished.emit(result_pil)
+        except Exception as e:
+            self.signals.error.emit(str(e))
