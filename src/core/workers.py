@@ -508,34 +508,41 @@ class QueueProcessorWorker(QObject):
         self.is_running = False
 
 class AutoDetectorWorker(QObject):
-    def __init__(self, main_app, file_paths, settings, detection_mode):
+    def __init__(self, main_app, jobs, settings, detection_mode):
         super().__init__()
         self.main_app = main_app
-        self.file_paths = file_paths
+        self.jobs = jobs # List of tuples (data_key, PIL image atau None untuk dibuka dari path)
         self.settings = settings
         self.detection_mode = detection_mode # "Bubble" atau "Text"
         self.signals = AutoDetectorSignals()
         self.is_cancelled = False
 
     def run(self):
-        total_files = len(self.file_paths)
-        for i, file_path in enumerate(self.file_paths):
+        total_jobs = len(self.jobs)
+        for i, (data_key, image_pil) in enumerate(self.jobs):
             if self.is_cancelled:
                 break
 
-            self.signals.overall_progress.emit(int((i / total_files) * 100), f"Detecting in {os.path.basename(file_path)}...")
+            display_name = os.path.basename(data_key.split('::page::')[0]) if data_key else '?'
+            self.signals.overall_progress.emit(int((i / total_jobs) * 100), f"Detecting in {display_name}...")
 
             try:
-                image_pil = Image.open(file_path).convert('RGB')
-                cv_image = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+                if image_pil is None:
+                    image_pil = Image.open(data_key)
+                cv_image = cv2.cvtColor(np.array(image_pil.convert('RGB')), cv2.COLOR_RGB2BGR)
 
                 detections = [] # List of dicts {'polygon': QPolygon, 'text': str|None}
-                
+
                 if self.detection_mode == "Bubble":
                     combined_mask = self.main_app.detect_bubble_with_dl_model(cv_image, self.settings)
                     if combined_mask is not None:
+                        img_h, img_w = cv_image.shape[:2]
                         contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                         for cnt in contours:
+                            x, y, cw, ch = cv2.boundingRect(cnt)
+                            # Mask yang menutupi hampir seluruh halaman berarti output model tidak valid
+                            if cw * ch >= 0.9 * img_w * img_h:
+                                continue
                             polygon = QPolygon([QPoint(p[0][0], p[0][1]) for p in cnt])
                             detections.append({'polygon': polygon, 'text': None})
 
@@ -545,10 +552,10 @@ class AutoDetectorWorker(QObject):
                     for text, polygon in text_results:
                         detections.append({'polygon': polygon, 'text': text})
 
-                self.signals.detection_complete.emit(file_path, detections)
+                self.signals.detection_complete.emit(data_key, detections)
 
             except Exception as e:
-                self.signals.error.emit(f"Error during {self.detection_mode} detection in {os.path.basename(file_path)}: {e}")
+                self.signals.error.emit(f"Error during {self.detection_mode} detection in {display_name}: {e}")
                 continue
 
         self.signals.finished.emit()

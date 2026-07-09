@@ -1570,7 +1570,7 @@ class MangaOCRApp(QMainWindow):
         self.batch_process_button = QPushButton("🔍 Detect All")
         self.batch_process_button.setObjectName("rp-action-btn")
         self.batch_process_button.setText("Detect All")
-        self.batch_process_button.setToolTip("Detects all bubbles/text in every file in the folder")
+        self.batch_process_button.setToolTip("Detects all bubbles/text on the current page")
         self.batch_process_button.clicked.connect(self.start_interactive_batch_detection)
         batch_row.addWidget(self.batch_process_button)
         bottom_v.addLayout(batch_row)
@@ -3591,13 +3591,6 @@ class MangaOCRApp(QMainWindow):
         ]
         for name, mid in common_models:
              combo.addItem(name, mid)
-
-    def get_selected_model_name(self):
-        """Returns (provider, model_name) from current global SETTINGS."""
-        translate_cfg = SETTINGS.get('translation', {})
-        provider = translate_cfg.get('provider', 'Google') # Defaulting to Google if missing
-        model = translate_cfg.get('model', 'gemini-1.5-flash')
-        return provider, model
 
     def _invoke_ai_review(self, provider, model_name, full_prompt):
         # 1. Logging Setup
@@ -5664,6 +5657,15 @@ class MangaOCRApp(QMainWindow):
             target_index = self.ai_model_combo.findText(previous_text)
         if target_index < 0 and default_text:
             target_index = self.ai_model_combo.findText(default_text)
+        if target_index < 0:
+            # Jangan default ke provider yang API key-nya belum dikonfigurasi
+            # (mis. Gemini di urutan pertama) — pilih model pertama dari provider
+            # yang benar-benar punya API key.
+            for idx in range(self.ai_model_combo.count()):
+                data = self.ai_model_combo.itemData(idx, Qt.UserRole)
+                if isinstance(data, tuple) and self._provider_has_api_key(data[0]):
+                    target_index = idx
+                    break
         if target_index < 0 and self.ai_model_combo.count() > 0:
             target_index = 0
         if target_index >= 0:
@@ -9754,7 +9756,7 @@ class MangaOCRApp(QMainWindow):
         self.process_confirmed_polygon(unzoomed_polygon, unzoomed_bbox)
 
 
-    def process_confirmed_polygon(self, unzoomed_polygon, unzoomed_bbox=None, pre_detected_text=None):
+    def process_confirmed_polygon(self, unzoomed_polygon, unzoomed_bbox=None, pre_detected_text=None, settings_override=None):
         """
         Memproses poligon yang koordinatnya sudah dalam sistem gambar penuh (unzoomed).
         """
@@ -9789,7 +9791,7 @@ class MangaOCRApp(QMainWindow):
                 'rect': unzoomed_bbox,
                 'polygon': unzoomed_polygon,
                 'cropped_cv_img': img_for_ocr,
-                'settings': self.get_current_settings(),
+                'settings': settings_override if settings_override is not None else self.get_current_settings(),
                 'text': pre_detected_text # Tambahkan teks yang sudah di-OCR jika ada
             }
 
@@ -10117,7 +10119,13 @@ class MangaOCRApp(QMainWindow):
             else: raise ValueError(f"Unexpected model output dimension: {output_array.ndim}")
 
             mask = cv2.resize(mask, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
-            return (mask > 0.5).astype(np.uint8) * 255
+            binary_mask = (mask > 0.5).astype(np.uint8) * 255
+            # Output YOLO-seg mentah (tensor deteksi, bukan mask) menghasilkan mask
+            # yang hampir seluruhnya putih — anggap tidak valid.
+            if binary_mask.mean() > 0.9 * 255:
+                print("ONNX bubble mask covers nearly the whole page; output is not a raw segmentation mask. Ignoring.")
+                return None
+            return binary_mask
         except Exception as e:
             print(f"Error during ONNX inference: {e}"); return None
 
@@ -10139,15 +10147,27 @@ class MangaOCRApp(QMainWindow):
                 use_gpu = self.use_gpu_checkbox.isChecked()
             device = "cuda" if use_gpu and self.is_gpu_available else "cpu"
             results = model(full_cv_image, verbose=False, device=device)
-            if not results or not results[0].masks: return None
+            if not results: return None
 
+            result = results[0]
             final_mask = np.zeros((full_cv_image.shape[0], full_cv_image.shape[1]), dtype=np.uint8)
-            for mask_tensor in results[0].masks.data:
-                mask_np = mask_tensor.cpu().numpy().astype(np.uint8) * 255
-                if mask_np.shape != final_mask.shape:
-                    mask_np = cv2.resize(mask_np, (final_mask.shape[1], final_mask.shape[0]), interpolation=cv2.INTER_NEAREST)
-                final_mask = cv2.bitwise_or(final_mask, mask_np)
+            if result.masks is not None:
+                for mask_tensor in result.masks.data:
+                    mask_np = mask_tensor.cpu().numpy().astype(np.uint8) * 255
+                    if mask_np.shape != final_mask.shape:
+                        mask_np = cv2.resize(mask_np, (final_mask.shape[1], final_mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    final_mask = cv2.bitwise_or(final_mask, mask_np)
+            elif result.boxes is not None and len(result.boxes) > 0:
+                # Model deteksi box (mis. Ogkalu) tidak punya mask segmentasi;
+                # gunakan bounding box sebagai area bubble.
+                for xyxy in result.boxes.xyxy:
+                    coords = xyxy.cpu().numpy()
+                    x1, y1, x2, y2 = (int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3]))
+                    cv2.rectangle(final_mask, (x1, y1), (x2, y2), 255, -1)
+            else:
+                return None
 
+            if not final_mask.any(): return None
             return final_mask
         except Exception as e:
             print(f"Error during YOLO inference: {e}"); return None
@@ -10163,9 +10183,74 @@ class MangaOCRApp(QMainWindow):
         if not model_key: return None
         model_type = self.dl_models[model_key]['type']
 
-        if model_type == 'onnx': return self._run_onnx_inference(model_key, full_cv_image, settings)
+        if model_type == 'onnx':
+            # model_dynamic.onnx adalah ekspor YOLOv8-seg; output-nya tensor deteksi,
+            # bukan mask mentah. Decode lewat ultralytics bila tersedia.
+            if self.is_yolo_available:
+                return self._run_yolov8_inference(model_key, full_cv_image, settings)
+            return self._run_onnx_inference(model_key, full_cv_image, settings)
         elif model_type == 'yolo': return self._run_yolov8_inference(model_key, full_cv_image, settings)
         return None
+
+    BUBBLE_MODEL_URLS = {
+        'kitsumed_onnx': ("https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble/resolve/main/model_dynamic.onnx", "~109MB"),
+        'kitsumed_pt':   ("https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble/resolve/main/model.pt", "~55MB"),
+        'ogkalu_pt':     ("https://huggingface.co/ogkalu/comic-speech-bubble-detector-yolov8m/resolve/main/comic-speech-bubble-detector.pt", "~52MB"),
+    }
+
+    def _ensure_bubble_model_ready(self, settings):
+        """Pastikan file model bubble detector ada; tawarkan download otomatis jika hilang."""
+        provider = settings.get('dl_provider')
+        model_file = settings.get('dl_model_file')
+        if provider == "Kitsumed":
+            model_key = 'kitsumed_onnx' if model_file == 'model_dynamic.onnx' else 'kitsumed_pt'
+        elif provider == "Ogkalu":
+            model_key = 'ogkalu_pt'
+        else:
+            return True
+
+        model_path = self.dl_models[model_key]['path']
+        if os.path.exists(model_path):
+            return True
+
+        url, size_label = self.BUBBLE_MODEL_URLS[model_key]
+        reply = QMessageBox.question(
+            self,
+            "Download Model",
+            f"Model bubble detector '{os.path.basename(model_path)}' tidak ditemukan.\n"
+            f"Apakah Anda ingin mengunduhnya secara otomatis dari Hugging Face ({size_label})?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._download_model_file(url, model_path, self.start_interactive_batch_detection, "Unduh Model Bubble")
+        return False
+
+    def _download_model_file(self, url, model_path, callback=None, title="Unduh Model"):
+        progress_dlg = QProgressDialog(f"Mengunduh {os.path.basename(model_path)} dari Hugging Face...", "Batal", 0, 100, self)
+        progress_dlg.setWindowModality(Qt.WindowModal)
+        progress_dlg.setWindowTitle(title)
+        progress_dlg.setStyleSheet(theme.progress_dialog_qss())
+        progress_dlg.show()
+
+        self._downloader_worker = FileDownloadWorker(url, model_path)
+
+        def on_progress(percent, msg):
+            progress_dlg.setValue(percent)
+            progress_dlg.setLabelText(msg)
+
+        def on_finished(success, msg):
+            progress_dlg.close()
+            if success:
+                self.show_toast("Model downloaded", f"{os.path.basename(model_path)} berhasil diunduh.", kind="success")
+                if callback:
+                    callback()
+            elif msg != "Cancelled":
+                self.show_banner("model-download-error", "Model download failed", msg, kind="error")
+
+        self._downloader_worker.progress.connect(on_progress)
+        self._downloader_worker.finished.connect(on_finished)
+        progress_dlg.canceled.connect(self._downloader_worker.cancel)
+        self._downloader_worker.start()
 
     def find_speech_bubble_mask(self, full_cv_image, text_rect, settings, for_saving=False):
         if settings['use_dl_detector']:
@@ -14207,8 +14292,27 @@ class MangaOCRApp(QMainWindow):
             self.dl_model_file_combo.addItems(['comic-speech-bubble-detector.pt'])
         self.on_dl_detector_state_changed(self.dl_bubble_detector_checkbox.checkState())
 
+    def _provider_has_api_key(self, provider):
+        prov = (provider or '').lower()
+        keys = SETTINGS.get('apis', {}).get(prov, {}).get('keys', [])
+        for key in keys:
+            value = key.get('value') if isinstance(key, dict) else key
+            if value:
+                return True
+        if prov == 'openrouter' and (SETTINGS.get('translate', {}).get('openrouter', {}) or {}).get('api_key'):
+            return True
+        if prov == 'gemini' and GEMINI_API_KEY and 'your_gemini_key_here' not in GEMINI_API_KEY:
+            return True
+        return False
+
     def on_ai_model_changed(self, text):
         self.update_usage_display(); self.check_limits_and_update_ui()
+        # Ingat pilihan model agar tidak reset ke provider pertama (Gemini) di sesi berikutnya
+        if text:
+            general = SETTINGS.setdefault('general', {})
+            if general.get('default_ai_model') != text:
+                general['default_ai_model'] = text
+                save_settings(SETTINGS)
 
     # [DIUBAH] Mengambil nama model dan provider dari combo box
     def get_selected_model_name(self):
@@ -14311,32 +14415,31 @@ class MangaOCRApp(QMainWindow):
         return new_detections
 
     def start_interactive_batch_detection(self):
-        if not self.image_files:
-            self.show_banner("batch-detect-no-files", "No files loaded", "Please load a folder first to use this feature.", kind="warning")
+        # [DIUBAH] Deteksi hanya berjalan pada halaman yang sedang aktif, bukan seluruh folder
+        if self.current_image_pil is None:
+            self.show_banner("batch-detect-no-files", "No page loaded", "Buka gambar atau halaman PDF terlebih dahulu untuk menggunakan fitur ini.", kind="warning")
             return
 
         if self.detection_thread and self.detection_thread.isRunning():
             self.show_toast("Detection busy", "A detection process is already running.", kind="info")
             return
-        
+
         # [DIUBAH] Menggunakan mode deteksi yang dipilih user
         detection_mode = "Text" if self.text_detect_radio.isChecked() else "Bubble"
 
-        reply = QMessageBox.question(self, f'Confirm Full {detection_mode} Detection',
-                                       f"This will detect {detection_mode.lower()}s in all {len(self.image_files)} files in the current folder. This may take a while.\n\nDo you want to continue?",
-                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
-        if reply == QMessageBox.No: return
+        settings = self.get_current_settings()
+        if detection_mode == "Bubble" and not self._ensure_bubble_model_ready(settings):
+            return
 
         self.detected_items_map.clear()
         self.last_detection_mode = detection_mode
         self.preview_mode_active = False
         self.set_ui_for_detection(True)
 
-        settings = self.get_current_settings()
         settings['batch_text_detection_enabled'] = (detection_mode == "Text")
+        jobs = [(self.get_current_data_key(), self.current_image_pil.copy())]
         self.detection_thread = QThread()
-        self.detection_worker = AutoDetectorWorker(self, self.image_files, settings, detection_mode)
+        self.detection_worker = AutoDetectorWorker(self, jobs, settings, detection_mode)
         self.detection_worker.moveToThread(self.detection_thread)
         self.detection_worker.signals.detection_complete.connect(self.on_detection_complete)
         self.detection_worker.signals.overall_progress.connect(self.update_overall_progress)
@@ -14387,10 +14490,9 @@ class MangaOCRApp(QMainWindow):
             self.cancel_interactive_batch()
             return
 
+        # Gunakan settings user apa adanya (OCR engine, mode translate, dan model AI
+        # mengikuti pilihan di UI — tidak ada paksaan pipeline khusus untuk batch)
         settings = self.get_current_settings()
-        # Paksa AI-only untuk batch processing agar lebih cepat & murah
-        settings['use_ai_only_translate'] = True
-        settings['use_deepl_only_translate'] = False
 
         # Simpan halaman saat ini untuk kembali nanti
         current_image_path = self.current_image_path
@@ -14433,7 +14535,9 @@ class MangaOCRApp(QMainWindow):
                 for item in detections:
                     polygon = item['polygon']
                     text = item['text'] # Bisa None jika dari Bubble Detect
-                    self.process_confirmed_polygon(polygon, pre_detected_text=text)
+                    # Salin settings per job agar flag paksaan AI-only ikut terpakai
+                    # dan worker tidak saling menimpa dict yang sama
+                    self.process_confirmed_polygon(polygon, pre_detected_text=text, settings_override=dict(settings))
                     
         except Exception as e:
             self.on_worker_error(f"Error processing batch: {e}")
