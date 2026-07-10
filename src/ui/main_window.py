@@ -787,7 +787,9 @@ class MangaOCRApp(QMainWindow):
                     'limits': {'rpm': 10000, 'rpd': 1000000}
                 }
             },
-            'OpenRouter': {}
+            'OpenRouter': {},
+            '9Router': {},
+            'Ollama': {}
         }
         self._apply_ai_model_overrides_from_settings()
 
@@ -5636,7 +5638,7 @@ class MangaOCRApp(QMainWindow):
         self.ai_model_combo.clear()
         for provider, models in self.AI_PROVIDERS.items():
             for model_key, model_info in models.items():
-                if provider == 'OpenRouter' and not model_info.get('active', True):
+                if not model_info.get('active', True):
                     continue
                 display_text = f"[{provider}] {model_info.get('display', model_key)}"
                 index = self.ai_model_combo.count()
@@ -5679,42 +5681,46 @@ class MangaOCRApp(QMainWindow):
 
     def _load_openrouter_models(self):
         translate_cfg = SETTINGS.get('translate', {})
-        openrouter_cfg = translate_cfg.get('openrouter', {}) or {}
-        models = openrouter_cfg.get('models') or []
-        provider_dict = self.AI_PROVIDERS.setdefault('OpenRouter', {})
-        provider_dict.clear()
-        
         pricing_db = getattr(self, 'openrouter_pricing_db', {})
-        
-        for model in models:
-            if not isinstance(model, dict):
-                continue
-            model_id = (model.get('id') or '').strip()
-            if not model_id:
-                continue
-            name = (model.get('name') or model_id).strip()
-            description = (model.get('description') or '').strip()
-            
-            # Lookup pricing dari database real-time OpenRouter
-            db_info = pricing_db.get(model_id, {})
-            db_pricing = db_info.get('pricing', {'input': 0.0, 'output': 0.0})
-            
-            provider_dict[model_id] = {
-                'display': f"{name}",
-                'pricing': {
-                    'input': db_pricing.get('input', 0.0),
-                    'output': db_pricing.get('output', 0.0)
-                },
-                'limits': {
-                    'rpm': 300,
-                    'rpd': 20000
-                },
-                'active': bool(model.get('active', True)),
-                'description': description,
-                'id': model_id,
-                'name': name
-            }
-        self._apply_ai_model_overrides_from_settings(provider_filter='OpenRouter')
+
+        for provider_key, meta in LOCAL_TRANSLATE_PROVIDERS.items():
+            provider = meta.get('display', provider_key)
+            provider_cfg = translate_cfg.get(provider_key, {}) or {}
+            models = provider_cfg.get('models')
+            if not isinstance(models, list):
+                models = meta.get('models', []) or []
+            provider_dict = self.AI_PROVIDERS.setdefault(provider, {})
+            provider_dict.clear()
+
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                model_id = (model.get('id') or '').strip()
+                if not model_id:
+                    continue
+                name = (model.get('name') or model_id).strip()
+                description = (model.get('description') or '').strip()
+
+                db_info = pricing_db.get(model_id, {}) if provider == 'OpenRouter' else {}
+                db_pricing = db_info.get('pricing', {'input': 0.0, 'output': 0.0})
+
+                provider_dict[model_id] = {
+                    'display': f"{name}",
+                    'pricing': {
+                        'input': db_pricing.get('input', 0.0),
+                        'output': db_pricing.get('output', 0.0)
+                    },
+                    'limits': {
+                        'rpm': 300,
+                        'rpd': 20000
+                    },
+                    'active': bool(model.get('active', True)),
+                    'description': description,
+                    'id': model_id,
+                    'name': name,
+                    'provider_key': provider_key
+                }
+            self._apply_ai_model_overrides_from_settings(provider_filter=provider)
 
     def _apply_ai_model_overrides_from_settings(self, provider_filter=None):
         overrides = SETTINGS.get('ai_model_overrides', {})
@@ -6412,15 +6418,17 @@ class MangaOCRApp(QMainWindow):
                     result = self.translate_with_gemini(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
                 elif provider == 'OpenAI':
                     result = self.translate_with_openai(text_to_translate, target_lang, model_name, settings, is_enhanced, ocr_results)
-                elif provider == 'OpenRouter':
-                    model_info = self.AI_PROVIDERS.get('OpenRouter', {}).get(model_name, {})
-                    result = self.translate_with_openrouter(text_to_translate, target_lang, model_name, settings, model_info, is_enhanced, ocr_results)
+                elif get_translate_provider_key(provider) in LOCAL_TRANSLATE_PROVIDERS:
+                    model_info = self.AI_PROVIDERS.get(provider, {}).get(model_name, {})
+                    result = self.translate_with_openrouter(text_to_translate, target_lang, model_name, settings, model_info, is_enhanced, ocr_results, provider)
                 else:
                     return f"[ERROR: Unknown AI provider '{provider}']"
 
                 # Cek apakah hasil menunjukkan kegagalan/error
-                if isinstance(result, str) and any(err in result for err in ("[ERROR]", "[FAILED]", "[GEMINI ERROR]", "[GEMINI FAILED]", "[OPENAI ERROR]", "[OPENROUTER ERROR]", "[OPENROUTER REQUEST ERROR")):
-                    raise Exception(f"AI Provider error: {result}")
+                if isinstance(result, str):
+                    upper_result = result.upper()
+                    if any(err in upper_result for err in ("[ERROR", "[FAILED", "API KEY NOT CONFIGURED", "REQUEST ERROR")):
+                        raise Exception(f"AI Provider error: {result}")
                 
                 # Pasca-proses: Hapus tanda titik tunggal di akhir baris/kalimat agar tidak kelihatan seperti hasil AI kaku
                 if isinstance(result, str) and result:
@@ -6677,18 +6685,24 @@ class MangaOCRApp(QMainWindow):
         settings: dict | None = None,
         model_info: dict | None = None,
         is_enhanced: bool = False,
-        ocr_results: dict | None = None
+        ocr_results: dict | None = None,
+        provider: str = 'OpenRouter'
     ):
         if not text_to_translate.strip():
             return ""
 
-        provider_cfg = get_translate_provider_settings('openrouter')
-        api_key = provider_cfg.get('api_key', '').strip()
-        if not api_key:
-            return "[OPENROUTER API KEY NOT CONFIGURED]"
+        provider_key = get_translate_provider_key(provider)
+        provider_meta = LOCAL_TRANSLATE_PROVIDERS.get(provider_key, {})
+        provider_display = provider_meta.get('display', provider or 'OpenRouter')
+        error_prefix = provider_display.upper()
 
-        url = provider_cfg.get('url', '').strip() or "https://openrouter.ai/api/v1/chat/completions"
-        if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+        provider_cfg = get_translate_provider_settings(provider_key)
+        api_key = provider_cfg.get('api_key', '').strip()
+        if not api_key and not provider_meta.get('api_key_optional'):
+            return f"[{error_prefix} API KEY NOT CONFIGURED]"
+
+        url = provider_cfg.get('url', '').strip() or provider_meta.get('url', "https://openrouter.ai/api/v1/chat/completions")
+        if provider_key == 'openrouter' and url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
             url = "https://" + url[7:]
 
         # --- Dynamic prompt ---
@@ -6736,7 +6750,9 @@ class MangaOCRApp(QMainWindow):
             user_content = text_to_translate
         messages.append({"role": "user", "content": user_content})
 
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         payload = {
             "model": model_id,
             "messages": messages,
@@ -6753,7 +6769,7 @@ class MangaOCRApp(QMainWindow):
                                 timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
             data = response.json()
         except Exception as exc:
-            return f"[OPENROUTER REQUEST ERROR: {exc}]"
+            return f"[{error_prefix} REQUEST ERROR: {exc}]"
 
         choices = data.get('choices')
         output_text = ""
@@ -6767,13 +6783,13 @@ class MangaOCRApp(QMainWindow):
 
         if not output_text:
             if 'error' in data:
-                return f"[OPENROUTER ERROR: {data['error'].get('message', 'Unknown error')}]"
-            logger.warning(f"OpenRouter returned empty response: {response.text}")
-            return "[OPENROUTER ERROR: Empty response]"
+                return f"[{error_prefix} ERROR: {data['error'].get('message', 'Unknown error')}]"
+            logger.warning(f"{provider_display} returned empty response: {response.text}")
+            return f"[{error_prefix} ERROR: Empty response]"
 
         usage = data.get('usage') or {}
         if hasattr(self, "api_cost_signal"):
-            self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), 'OpenRouter', model_id)
+            self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), provider_display, model_id)
         return output_text.strip()
 
     def apply_safe_mode(self, text: str) -> str:
@@ -12696,11 +12712,18 @@ class MangaOCRApp(QMainWindow):
                 self.show_banner("save-project-no-folder", "No project", "Please load a folder before saving a project.", kind="warning")
             return False
 
+        # ponytail: guard must stay ABOVE the snapshot build — the snapshot serializes the
+        # whole project on the GUI thread under paint_mutex, so a rejected save must bail first.
+        if getattr(self, 'project_save_thread', None) and getattr(self, 'project_save_thread', None).isRunning():
+            if not is_auto:
+                self.show_toast("Save in progress", "A project save is already running.", kind="info")
+            return False
+
         # Commit active typeset areas to in-memory dictionary first to avoid copy-paste loss
         if self.current_image_path:
             key = self.get_current_data_key()
             self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
-    
+
         if not self.current_project_path:
             if is_auto:
                 self.current_project_path, note = self._make_project_file_path()
@@ -12782,12 +12805,6 @@ class MangaOCRApp(QMainWindow):
             os.makedirs(target_dir, exist_ok=True)
         except OSError:
             pass
-
-        # Prevent concurrent project saves
-        if getattr(self, 'project_save_thread', None) and getattr(self, 'project_save_thread', None).isRunning():
-            if not is_auto:
-                self.show_toast("Save in progress", "A project save is already running.", kind="info")
-            return False
 
         # Store save state
         self.project_save_is_auto = is_auto
@@ -14294,6 +14311,13 @@ class MangaOCRApp(QMainWindow):
 
     def _provider_has_api_key(self, provider):
         prov = (provider or '').lower()
+        provider_key = get_translate_provider_key(provider)
+        if provider_key in LOCAL_TRANSLATE_PROVIDERS:
+            provider_cfg = SETTINGS.get('translate', {}).get(provider_key, {}) or {}
+            if LOCAL_TRANSLATE_PROVIDERS[provider_key].get('api_key_optional'):
+                return True
+            if provider_cfg.get('api_key'):
+                return True
         keys = SETTINGS.get('apis', {}).get(prov, {}).get('keys', [])
         for key in keys:
             value = key.get('value') if isinstance(key, dict) else key

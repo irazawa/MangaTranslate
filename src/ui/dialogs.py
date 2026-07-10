@@ -186,7 +186,7 @@ class OpenRouterSettingsDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("OpenRouter Translate Settings")
+        self.setWindowTitle("Translation Provider Settings")
         self.setModal(True)
         self.resize(640, 480)
 
@@ -238,7 +238,7 @@ class SettingsCenterDialog(QDialog):
             'ocr': copy.deepcopy(SETTINGS.get('ocr', {})),
             'tesseract': copy.deepcopy(SETTINGS.get('tesseract', {})),
         }
-        self._initial_translate = copy.deepcopy(SETTINGS.get('translate', {}).get('openrouter', {}))
+        self._initial_translate = self._translation_settings_snapshot()
         self._initial_shortcuts = copy.deepcopy(SETTINGS.get('shortcuts', {}))
         self._initial_appearance = normalize_appearance_settings(SETTINGS.get('appearance', {}))
         self.shortcut_editors = {}
@@ -246,6 +246,13 @@ class SettingsCenterDialog(QDialog):
         self.appearance_color_buttons = {}
 
         self._build_ui()
+
+    def _translation_settings_snapshot(self):
+        translate = SETTINGS.get('translate', {})
+        return {
+            key: copy.deepcopy(translate.get(key, {}))
+            for key in LOCAL_TRANSLATE_PROVIDERS
+        }
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1455,7 +1462,7 @@ class SettingsCenterDialog(QDialog):
             self.set_active_tab("api")
             return False
 
-        openrouter_settings = self.openrouter_panel.export_settings()
+        translation_settings = self.openrouter_panel.export_settings()
         appearance_cfg = self._collect_appearance_settings()
         appearance_changed = appearance_cfg != self._initial_appearance
 
@@ -1525,7 +1532,7 @@ class SettingsCenterDialog(QDialog):
         shortcuts_changed = shortcut_settings != self._initial_shortcuts
 
         SETTINGS.setdefault('translate', {})
-        SETTINGS['translate']['openrouter'] = copy.deepcopy(openrouter_settings)
+        SETTINGS['translate'].update(copy.deepcopy(translation_settings))
         SETTINGS['apis'] = copy.deepcopy(api_export.get('apis', {}))
         SETTINGS['ocr'] = copy.deepcopy(api_export.get('ocr', {}))
         SETTINGS['tesseract'] = copy.deepcopy(api_export.get('tesseract', {}))
@@ -1599,7 +1606,7 @@ class SettingsCenterDialog(QDialog):
             or (cleanup_cfg.get('constrain_text') != prev_constrain_text)
         ):
             status_parts.append("Cleanup defaults updated")
-        if openrouter_settings != self._initial_translate:
+        if translation_settings != self._initial_translate:
             status_parts.append("Translation settings updated")
         if any(api_export.get(key, {}) != self._initial_api.get(key, {}) for key in ('apis', 'ocr', 'tesseract')):
             status_parts.append("API settings updated")
@@ -1624,7 +1631,7 @@ class SettingsCenterDialog(QDialog):
             'ocr': copy.deepcopy(SETTINGS.get('ocr', {})),
             'tesseract': copy.deepcopy(SETTINGS.get('tesseract', {})),
         }
-        self._initial_translate = copy.deepcopy(SETTINGS.get('translate', {}).get('openrouter', {}))
+        self._initial_translate = self._translation_settings_snapshot()
         self._initial_shortcuts = copy.deepcopy(shortcut_settings)
         self._initial_appearance = copy.deepcopy(appearance_cfg)
 

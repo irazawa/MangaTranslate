@@ -72,6 +72,35 @@ SETTINGS_PATH = os.path.join(ROOT_DIR, 'settings.json')
 DEFAULT_INPAINT_SERVER_URL = "http://127.0.0.1:8080"
 DEFAULT_INPAINT_SERVER_TIMEOUT = 30
 
+LOCAL_TRANSLATE_PROVIDERS = {
+    "openrouter": {
+        "display": "OpenRouter",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "api_key_optional": False,
+        "models": [],
+    },
+    "9router": {
+        "display": "9Router",
+        "url": "http://127.0.0.1:20128/v1/chat/completions",
+        "api_key_optional": False,
+        "models": [
+            {
+                "name": "opencode",
+                "id": "opencode",
+                "description": "Local opencode model via 9Router",
+                "active": True,
+            }
+        ],
+    },
+    "ollama": {
+        "display": "Ollama",
+        "url": "http://127.0.0.1:11434/v1/chat/completions",
+        "api_key": "ollama",
+        "api_key_optional": True,
+        "models": [],
+    },
+}
+
 
 def default_settings() -> dict:
     if sys.platform.startswith('win'):
@@ -90,7 +119,8 @@ def default_settings() -> dict:
             "openai": {"keys": []},
             "deepl": {"keys": []},
             "google": {"keys": []},
-            "openrouter": {"keys": []}
+            "openrouter": {"keys": []},
+            "9router": {"keys": []}
         },
         "tesseract": {
             "path": default_tess,
@@ -139,6 +169,29 @@ def default_settings() -> dict:
                 "url": "https://openrouter.ai/api/v1/chat/completions",
                 "api_key": "",
                 "models": []
+            },
+            "9router": {
+                "url": "http://127.0.0.1:20128/v1/chat/completions",
+                "api_key": "",
+                "models": [
+                    {
+                        "name": "opencode",
+                        "id": "opencode",
+                        "description": "Local opencode model via 9Router",
+                        "active": True,
+                    }
+                ],
+                "timeout": 60,
+                "retries": 3,
+                "backoff": 1.5
+            },
+            "ollama": {
+                "url": "http://127.0.0.1:11434/v1/chat/completions",
+                "api_key": "ollama",
+                "models": [],
+                "timeout": 120,
+                "retries": 1,
+                "backoff": 1.5
             },
             "other": {
                 "url": "",
@@ -316,6 +369,9 @@ def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
             provider_cfg = translate_settings.setdefault(provider, {})
             provider_cfg.setdefault('url', defaults.get('url', ''))
             provider_cfg.setdefault('api_key', defaults.get('api_key', ''))
+            provider_cfg.setdefault('timeout', defaults.get('timeout', 60))
+            provider_cfg.setdefault('retries', defaults.get('retries', 3))
+            provider_cfg.setdefault('backoff', defaults.get('backoff', 1.5))
             models = provider_cfg.get('models')
             if not isinstance(models, list):
                 provider_cfg['models'] = []
@@ -400,20 +456,60 @@ def get_openrouter_api_key() -> str:
     return ''
 
 
+def get_translate_provider_key(provider_name: str) -> str:
+    raw = (provider_name or '').strip()
+    normalized = raw.lower()
+    for key, meta in LOCAL_TRANSLATE_PROVIDERS.items():
+        if normalized in (key, meta.get('display', '').lower()):
+            return key
+    return normalized
+
+
+def _active_key_from_settings(settings: dict, provider_key: str) -> str:
+    try:
+        prov = settings.get('apis', {}).get(provider_key, {})
+        for key in prov.get('keys', []) or []:
+            if isinstance(key, dict) and key.get('active'):
+                return key.get('value') or ''
+    except Exception:
+        pass
+    return ''
+
+
+def get_translate_provider_settings_from(settings: dict, provider_name: str) -> dict:
+    provider_key = get_translate_provider_key(provider_name)
+    meta = LOCAL_TRANSLATE_PROVIDERS.get(provider_key, {})
+    try:
+        cfg = copy.deepcopy((settings.get('translate', {}) or {}).get(provider_key, {}) or {})
+    except Exception:
+        cfg = {}
+
+    cfg.setdefault('url', meta.get('url', ''))
+    cfg.setdefault('api_key', meta.get('api_key', ''))
+    cfg.setdefault('models', copy.deepcopy(meta.get('models', [])))
+    cfg.setdefault('timeout', meta.get('timeout', 60))
+    cfg.setdefault('retries', meta.get('retries', 3))
+    cfg.setdefault('backoff', meta.get('backoff', 1.5))
+
+    if not cfg.get('api_key', '').strip():
+        key = _active_key_from_settings(settings, provider_key)
+        if key:
+            cfg['api_key'] = key
+    if provider_key == 'openrouter' and not cfg.get('api_key', '').strip():
+        cfg['api_key'] = get_openrouter_api_key()
+    if meta.get('api_key_optional') and not cfg.get('api_key', '').strip():
+        cfg['api_key'] = meta.get('api_key', '')
+    return cfg
+
+
 def get_translate_provider_settings(provider_name: str) -> dict:
     """Return provider settings from the translate section.
 
-    For OpenRouter, also injects the centralized API key if the per-section
-    key is empty (backward compatibility during migration).
+    OpenAI-compatible providers are stored under settings.translate.<provider>.
+    OpenRouter also injects the centralized key for backward compatibility.
     """
     try:
-        translate_cfg = SETTINGS.get('translate', {})
-        cfg = translate_cfg.get(provider_name.lower(), {}) or {}
-        # Inject centralized key for openrouter if not set locally
-        if provider_name.lower() == 'openrouter' and not cfg.get('api_key', '').strip():
-            cfg = dict(cfg)  # shallow copy to avoid mutation
-            cfg['api_key'] = get_openrouter_api_key()
-        return cfg
+        return get_translate_provider_settings_from(SETTINGS, provider_name)
     except Exception:
         return {}
 

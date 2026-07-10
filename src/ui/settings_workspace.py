@@ -251,15 +251,7 @@ class TokenHeatmapWidget(QWidget):
                 previous_month = month_key
         for label, column in month_marks:
             x = left + column * (square + gap)
-            painter.drawText(QRect(x, 4, 40, 18), Qt.AlignLeft | Qt.AlignVCenter, label)
-
-        painter.setPen(QPen(QColor(theme.COLORS.get("muted", "#64748b"))))
-        range_label = f"Through {end.strftime('%b')} {end.day}"
-        painter.drawText(
-            QRect(left + grid_width - 120, 4, 120, 18),
-            Qt.AlignRight | Qt.AlignVCenter,
-            range_label,
-        )
+            painter.drawText(QRect(x, 4, 45, 18), Qt.AlignLeft | Qt.AlignVCenter, label)
 
         painter.setPen(Qt.NoPen)
         for day_offset in range(weeks * 7):

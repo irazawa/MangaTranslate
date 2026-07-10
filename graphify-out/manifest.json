@@ -1,0 +1,182 @@
+{
+  "bin/install_ffmpeg.ps1": {
+    "mtime": 1781748650.8423057,
+    "ast_hash": "436339f590dd99b274ec933d6516b2c5",
+    "semantic_hash": ""
+  },
+  "launcher_app.py": {
+    "mtime": 1781748652.23613,
+    "ast_hash": "66d12f3391f966f2f66cba1a9df09ae2",
+    "semantic_hash": ""
+  },
+  "main.py": {
+    "mtime": 1781858019.643083,
+    "ast_hash": "aa1477bc0310c90d60edd5c73dcffd08",
+    "semantic_hash": ""
+  },
+  "src/__init__.py": {
+    "mtime": 1781797396.1701233,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "src/core/__init__.py": {
+    "mtime": 1781797396.198785,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "src/core/app_info.py": {
+    "mtime": 1781797396.2047951,
+    "ast_hash": "5216fd34fefc94238f6de23879608a86",
+    "semantic_hash": ""
+  },
+  "src/core/cache.py": {
+    "mtime": 1781797396.2118757,
+    "ast_hash": "365ff6f402cf5ce399e528cf19243459",
+    "semantic_hash": ""
+  },
+  "src/core/config.py": {
+    "mtime": 1781839945.4933472,
+    "ast_hash": "7acc3dc072d6d392e0d9d4e8a3bf812a",
+    "semantic_hash": ""
+  },
+  "src/core/fonts.py": {
+    "mtime": 1781797396.2285,
+    "ast_hash": "27a70663dfff34d3b513b8547fccd363",
+    "semantic_hash": ""
+  },
+  "src/core/models.py": {
+    "mtime": 1781797396.2358532,
+    "ast_hash": "59041d7da82a434cd77308f7b8f90998",
+    "semantic_hash": ""
+  },
+  "src/core/workers.py": {
+    "mtime": 1781797396.2428532,
+    "ast_hash": "54c13133aa915a5d5c18dc4d6b8931f1",
+    "semantic_hash": ""
+  },
+  "src/ui/__init__.py": {
+    "mtime": 1781797397.3367448,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "src/ui/bootstrap_setup.py": {
+    "mtime": 1781841494.2797756,
+    "ast_hash": "91679adb5e20f52417208d0baed88a98",
+    "semantic_hash": ""
+  },
+  "src/ui/canvas.py": {
+    "mtime": 1781797397.3512695,
+    "ast_hash": "9fee5035b57f5e34a44d888daae2a311",
+    "semantic_hash": ""
+  },
+  "src/ui/chat_widget.py": {
+    "mtime": 1781855664.9137676,
+    "ast_hash": "25ffe1799dd6f93a504e86b6918827e2",
+    "semantic_hash": ""
+  },
+  "src/ui/dialogs.py": {
+    "mtime": 1781856575.1177404,
+    "ast_hash": "38a2f65727e665f5a484e3015edaf76d",
+    "semantic_hash": ""
+  },
+  "src/ui/main_window.py": {
+    "mtime": 1781860504.7165918,
+    "ast_hash": "6d76ab83f59ee1f2a1c6291899eff522",
+    "semantic_hash": ""
+  },
+  "src/ui/notifications.py": {
+    "mtime": 1781840992.86274,
+    "ast_hash": "8dbeca44f3d057b5047ac3ccabcb5177",
+    "semantic_hash": ""
+  },
+  "src/ui/panels.py": {
+    "mtime": 1781841013.3199863,
+    "ast_hash": "22a214477631767c2ed87b6cbbfc0c80",
+    "semantic_hash": ""
+  },
+  "src/ui/settings_workspace.py": {
+    "mtime": 1781879510.630157,
+    "ast_hash": "a7d2431ddcd81a57c4c0711d3285eb75",
+    "semantic_hash": ""
+  },
+  "src/ui/startup_splash.py": {
+    "mtime": 1781840970.9863763,
+    "ast_hash": "840bd6324f7fdb20e41b35b78910adc6",
+    "semantic_hash": ""
+  },
+  "src/ui/texts.py": {
+    "mtime": 1781860319.551316,
+    "ast_hash": "7292c32e6bbce6a5c58910c9ffeb77e1",
+    "semantic_hash": ""
+  },
+  "src/ui/theme.py": {
+    "mtime": 1781855641.037071,
+    "ast_hash": "296bcd223d28cb6149f9a74d83c01b34",
+    "semantic_hash": ""
+  },
+  "src/ui/unified_help_dialog.py": {
+    "mtime": 1781878876.8962164,
+    "ast_hash": "c6afbdf8b0095db53c472df2087be831",
+    "semantic_hash": ""
+  },
+  "src/ui/video_player_widget.py": {
+    "mtime": 1781855603.5642776,
+    "ast_hash": "08c65fc1348a74a0067c2115711e4fed",
+    "semantic_hash": ""
+  },
+  "src/ui/widgets.py": {
+    "mtime": 1781843047.2536256,
+    "ast_hash": "f2137c55091b01513102b8fd4b61f5f0",
+    "semantic_hash": ""
+  },
+  "src/utils/__init__.py": {
+    "mtime": 1781797397.448112,
+    "ast_hash": "2b52819dacf63a409ec3671f5b9fc72f",
+    "semantic_hash": ""
+  },
+  "src/utils/crypto.py": {
+    "mtime": 1781797397.4549866,
+    "ast_hash": "7bdfeedf85886bfbc4f7aa13354ea2f4",
+    "semantic_hash": ""
+  },
+  "src/utils/dafont.py": {
+    "mtime": 1781797397.4619853,
+    "ast_hash": "5b9778e7b1de2ee226d0f63dd852191e",
+    "semantic_hash": ""
+  },
+  "src/utils/geometry.py": {
+    "mtime": 1781797397.4685204,
+    "ast_hash": "39c344bcd5004b4a09fbbf8398d63fe4",
+    "semantic_hash": ""
+  },
+  "src/utils/helpers.py": {
+    "mtime": 1781797397.476483,
+    "ast_hash": "20e96dcf1ade77cb287e284da7944f32",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1783431372.7493186,
+    "ast_hash": "723c99533d509a4a3e14f402bcbf7a7f",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1781881855.1958277,
+    "ast_hash": "5b45b3b8eb46a1724b69b172bf0fa362",
+    "semantic_hash": ""
+  },
+  "claude-fable-5.md": {
+    "mtime": 1783411152.4847412,
+    "ast_hash": "5d7f1081c0fe82c05e39b2f83da86a59",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1781748650.8378503,
+    "ast_hash": "5c6c442c75d90de4ed3014c4179ec9ab",
+    "semantic_hash": ""
+  },
+  "src/icon.png": {
+    "mtime": 1781797396.1917765,
+    "ast_hash": "b9ea2eab5ef11db662b09d20c3596cce",
+    "semantic_hash": ""
+  }
+}

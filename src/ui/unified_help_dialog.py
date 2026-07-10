@@ -145,6 +145,8 @@ PROVIDER_COLORS = {
     'Gemini': '#4ade80',
     'OpenAI': '#60a5fa',
     'OpenRouter': '#f472b6',
+    '9Router': '#38bdf8',
+    'Ollama': '#facc15',
 }
 DEFAULT_COLOR = '#94a3b8'
 PRICE_DISPLAY_MULTIPLIER = 1_000_000.0

@@ -3,7 +3,7 @@ AI Chat Widget — MangaTranslate
 Provides a fully-featured chatbot tab inside the Tools & Workflows panel.
 
 Features:
-  - Multi-provider support: Gemini, OpenAI, OpenRouter
+  - Multi-provider support: Gemini, OpenAI, OpenRouter, and local OpenAI-compatible providers
   - Conversation history stored under src/data/chat_history/ (JSON)
   - Multi-session: new / switch / delete chats
   - Background-thread streaming (non-blocking UI)
@@ -154,7 +154,7 @@ class ChatHistoryManager:
 class ChatStreamWorker(QObject):
     """
     Background worker that calls an AI API and emits text chunks.
-    Supports: Gemini, OpenAI (with streaming), OpenRouter (with streaming).
+    Supports: Gemini, OpenAI, OpenRouter, and local OpenAI-compatible providers.
     """
     chunk_received = pyqtSignal(str)   # incremental text chunk
     finished = pyqtSignal()            # all done
@@ -185,7 +185,7 @@ class ChatStreamWorker(QObject):
                 self._call_gemini()
             elif self.provider == "OpenAI":
                 self._call_openai()
-            elif self.provider == "OpenRouter":
+            elif self.provider in ("OpenRouter", "9Router", "Ollama"):
                 self._call_openrouter()
             else:
                 self.error.emit(f"Unknown provider: {self.provider}")
@@ -271,37 +271,43 @@ class ChatStreamWorker(QObject):
     def _call_openrouter(self):
         try:
             import requests as req_lib
-            from src.core.config import get_translate_provider_settings, get_openrouter_api_key, SETTINGS
+            from src.core.config import (
+                LOCAL_TRANSLATE_PROVIDERS,
+                get_translate_provider_key,
+                get_translate_provider_settings,
+                get_openrouter_api_key,
+            )
         except ImportError as e:
-            self.error.emit(f"OpenRouter import error: {e}")
+            self.error.emit(f"{self.provider} import error: {e}")
             return
 
-        # Use the same key-resolution logic as the working translate_with_openrouter method:
-        # get_translate_provider_settings injects the centralized key if translate.openrouter.api_key is empty
-        provider_cfg = get_translate_provider_settings('openrouter')
+        provider_key = get_translate_provider_key(self.provider)
+        provider_meta = LOCAL_TRANSLATE_PROVIDERS.get(provider_key, {})
+        provider_label = provider_meta.get('display', self.provider)
+        provider_cfg = get_translate_provider_settings(provider_key)
         api_key = provider_cfg.get('api_key', '').strip()
 
         # Extra fallback: try centralized apis.openrouter.keys directly
-        if not api_key:
+        if provider_key == 'openrouter' and not api_key:
             api_key = get_openrouter_api_key()
 
-        if not api_key:
-            self.error.emit("OpenRouter API key tidak dikonfigurasi. Silakan tambahkan di Settings → APIs → OpenRouter.")
+        if not api_key and not provider_meta.get('api_key_optional'):
+            self.error.emit(f"{provider_label} API key tidak dikonfigurasi. Silakan tambahkan di Settings > Translation.")
             return
 
         # Build URL the same way as translate_with_openrouter
-        url = provider_cfg.get('url', '').strip() or "https://openrouter.ai/api/v1/chat/completions"
-        if url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+        url = provider_cfg.get('url', '').strip() or provider_meta.get('url', "https://openrouter.ai/api/v1/chat/completions")
+        if provider_key == 'openrouter' and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
             url = "https://" + url[7:]
 
         full_messages = [{"role": "system", "content": self.system_prompt}] + self.messages
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/MangaTranslate",
-            "X-Title": "MangaTranslate",
-        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if provider_key == 'openrouter':
+            headers["HTTP-Referer"] = "https://github.com/MangaTranslate"
+            headers["X-Title"] = "MangaTranslate"
         payload = {
             "model": self.model_id,
             "messages": full_messages,
@@ -331,7 +337,7 @@ class ChatStreamWorker(QObject):
                     except Exception:
                         continue
         except Exception as e:
-            self.error.emit(f"OpenRouter error: {e}")
+            self.error.emit(f"{provider_label} error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1130,7 +1136,7 @@ class AIChatWidgetContent(QWidget):
         if self.main_app and hasattr(self.main_app, "AI_PROVIDERS"):
             for provider, models in self.main_app.AI_PROVIDERS.items():
                 for model_key, model_info in models.items():
-                    if provider == "OpenRouter" and not model_info.get("active", True):
+                    if not model_info.get("active", True):
                         continue
                     display = f"[{provider}] {model_info.get('display', model_key)}"
                     idx = self._model_combo.count()

@@ -56,7 +56,7 @@ class _NotificationFrame(QFrame):
         self.kind = (kind or "info").lower()
         self.setObjectName("appNotification")
         self.setProperty("kind", self.kind)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         accent = _kind_color(self.kind)
         radius = 7 if compact else 8
@@ -139,7 +139,7 @@ class NotificationCenter(QObject):
         host.setObjectName(object_name)
         host.setAttribute(Qt.WA_StyledBackground, False)
         host.setStyleSheet("background: transparent;")
-        host.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+        host.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
 
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -189,7 +189,7 @@ class NotificationCenter(QObject):
         toast_width = max(280, min(380, width - (margin * 2)))
         toast_height = min(
             max(1, self._toast_host.sizeHint().height()),
-            max(56, height - toast_top - 48),
+            max(56, height - toast_top - margin),
         )
         self._toast_host.setGeometry(
             max(margin, width - toast_width - margin),

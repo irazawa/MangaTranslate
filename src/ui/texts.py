@@ -63,9 +63,9 @@ class SettingsText:
         {
             "key": "translation",
             "label": "Translation",
-            "description": "OpenRouter models",
+            "description": "Local and cloud models",
             "title": "Translation",
-            "subtitle": "Configure OpenRouter translation endpoints and model lists.",
+            "subtitle": "Configure OpenRouter, 9Router, Ollama, and other OpenAI-compatible translation models.",
         },
         {
             "key": "shortcuts",
@@ -135,7 +135,7 @@ class SettingsWorkspaceText:
             [
                 ("general", "General", "Export, autosave, defaults", "⚙"),
                 ("appearance", "Appearance", "Theme, fonts, motion", "◐"),
-                ("translation", "Translation", "OpenRouter models", "⇄"),
+                ("translation", "Translation", "Local/cloud models", "⇄"),
                 ("api", "API Keys", "Providers and tokens", "◇"),
                 ("ocr_plugins", "OCR Plugins", "Engines and languages", "▣"),
                 ("shortcuts", "Shortcuts", "Keyboard and mouse", "⌘"),

@@ -17,7 +17,8 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog,
     QMessageBox, QListWidget, QListWidgetItem, QLineEdit, QDialog, QCheckBox,
     QAbstractItemView, QSpinBox, QInputDialog, QTabWidget, QGroupBox, QGridLayout,
-    QRadioButton, QToolButton, QButtonGroup, QFormLayout, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView
+    QRadioButton, QToolButton, QButtonGroup, QFormLayout, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox
 )
 from PyQt5.QtGui import (
     QColor
@@ -499,18 +500,96 @@ class OpenRouterSettingsPanel(QWidget):
         super().__init__(parent)
 
         translate_cfg = (initial_settings or SETTINGS).get('translate', {})
-        self.data = copy.deepcopy(translate_cfg.get('openrouter', {}))
-        self.data.setdefault('url', "https://openrouter.ai/api/v1/chat/completions")
-        self.data.setdefault('api_key', "")
-        self.data.setdefault('models', [])
+        self.provider_keys = list(LOCAL_TRANSLATE_PROVIDERS.keys())
+        self.provider_configs = {}
+        for key in self.provider_keys:
+            meta = LOCAL_TRANSLATE_PROVIDERS.get(key, {})
+            cfg = copy.deepcopy(translate_cfg.get(key, {}) or {})
+            cfg.setdefault('url', meta.get('url', ''))
+            cfg.setdefault('api_key', meta.get('api_key', ''))
+            cfg.setdefault('models', copy.deepcopy(meta.get('models', [])))
+            cfg.setdefault('timeout', meta.get('timeout', 60))
+            cfg.setdefault('retries', meta.get('retries', 3))
+            cfg.setdefault('backoff', meta.get('backoff', 1.5))
+            self.provider_configs[key] = cfg
+        self.current_provider_key = 'openrouter'
+        self.data = self.provider_configs[self.current_provider_key]
         self.models = copy.deepcopy(self.data.get('models', []))
 
         layout = QVBoxLayout(self)
+        provider_row = QHBoxLayout()
+        provider_row.addWidget(QLabel("Provider"))
+        self.provider_combo = QComboBox(self)
+        for key in self.provider_keys:
+            self.provider_combo.addItem(self._provider_label(key), key)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        provider_row.addWidget(self.provider_combo, 1)
+        layout.addLayout(provider_row)
+
         self.tabs = QTabWidget(self)
         layout.addWidget(self.tabs, 1)
 
         self._build_api_tab()
         self._build_models_tab()
+        self._load_provider(self.current_provider_key)
+
+    def _provider_label(self, key):
+        return LOCAL_TRANSLATE_PROVIDERS.get(key, {}).get('display', key)
+
+    def _provider_defaults(self, key):
+        meta = LOCAL_TRANSLATE_PROVIDERS.get(key, {})
+        return {
+            'url': meta.get('url', ''),
+            'api_key': meta.get('api_key', ''),
+            'models': copy.deepcopy(meta.get('models', [])),
+            'timeout': meta.get('timeout', 60),
+            'retries': meta.get('retries', 3),
+            'backoff': meta.get('backoff', 1.5),
+        }
+
+    def _save_current_provider(self):
+        if not hasattr(self, 'url_edit'):
+            return
+        cfg = self.provider_configs.setdefault(self.current_provider_key, self._provider_defaults(self.current_provider_key))
+        url = self.url_edit.text().strip() or self._provider_defaults(self.current_provider_key).get('url', '')
+        if self.current_provider_key == 'openrouter' and url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
+            url = "https://" + url[7:]
+            self.url_edit.setText(url)
+        cfg['url'] = url
+        cfg['api_key'] = self.api_key_edit.text().strip()
+        cfg['timeout'] = int(self.timeout_spin.value())
+        cfg['retries'] = int(self.retries_spin.value())
+        cfg['backoff'] = float(self.backoff_spin.value())
+        cfg['models'] = copy.deepcopy(self.models)
+
+    def _load_provider(self, key):
+        cfg = self.provider_configs.setdefault(key, self._provider_defaults(key))
+        self.current_provider_key = key
+        self.data = cfg
+        self.models = copy.deepcopy(cfg.get('models', []))
+        if not hasattr(self, 'url_edit'):
+            return
+        self.url_edit.setText(cfg.get('url', ''))
+        self.api_key_edit.setText(cfg.get('api_key', ''))
+        self.timeout_spin.setValue(int(cfg.get('timeout', 60) or 60))
+        self.retries_spin.setValue(int(cfg.get('retries', 3) or 3))
+        self.backoff_spin.setValue(float(cfg.get('backoff', 1.5) or 1.5))
+        label = self._provider_label(key)
+        if key == 'ollama':
+            tip = "Ollama uses http://127.0.0.1:11434/v1/chat/completions. API key is optional."
+        elif key == '9router':
+            tip = "9Router local endpoint defaults to http://127.0.0.1:20128/v1/chat/completions."
+        else:
+            tip = "Find your OpenRouter API key at https://openrouter.ai/account."
+        self.help_label.setText(tip)
+        self.tabs.setTabText(0, f"{label} API")
+        self._refresh_models_table()
+
+    def _on_provider_changed(self, index):
+        self._save_current_provider()
+        key = self.provider_combo.itemData(index)
+        if key:
+            self._load_provider(key)
 
     def _build_api_tab(self):
         api_widget = QWidget()
@@ -544,16 +623,16 @@ class OpenRouterSettingsPanel(QWidget):
         self.backoff_spin.setSingleStep(0.1)
         self.backoff_spin.setValue(float(self.data.get('backoff', 1.5) or 1.5))
         form.addRow("Backoff factor", self.backoff_spin)
-        help_label = QLabel("Tip: Find your OpenRouter API key at https://openrouter.ai/account")
-        help_label.setStyleSheet(f"color: {COLORS['muted']};")
-        help_label.setWordWrap(True)
-        form.addRow(help_label)
+        self.help_label = QLabel("")
+        self.help_label.setStyleSheet(f"color: {COLORS['muted']};")
+        self.help_label.setWordWrap(True)
+        form.addRow(self.help_label)
         self.tabs.addTab(api_widget, "API Configuration")
 
     def _build_models_tab(self):
         models_widget = QWidget()
         vbox = QVBoxLayout(models_widget)
-        info = QLabel("Add translation models to call via OpenRouter. Multiple models can be active at the same time.")
+        info = QLabel("Add translation models for the selected OpenAI-compatible provider. Multiple models can be active at the same time.")
         info.setWordWrap(True)
         info.setStyleSheet(f"color: {COLORS['muted']};")
         vbox.addWidget(info)
@@ -678,20 +757,8 @@ class OpenRouterSettingsPanel(QWidget):
         save_settings(SETTINGS)
 
     def export_settings(self):
-        url = self.url_edit.text().strip() or "https://openrouter.ai/api/v1/chat/completions"
-        if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
-            url = "https://" + url[7:]
-            self.url_edit.setText(url)
-        self.data['url'] = url
-        self.data['api_key'] = self.api_key_edit.text().strip()
-        try:
-            self.data['timeout'] = int(self.timeout_spin.value())
-            self.data['retries'] = int(self.retries_spin.value())
-            self.data['backoff'] = float(self.backoff_spin.value())
-        except Exception:
-            pass
-        self.data['models'] = copy.deepcopy(self.models)
-        return copy.deepcopy(self.data)
+        self._save_current_provider()
+        return copy.deepcopy(self.provider_configs)
 
     def get_settings(self):
         return self.export_settings()
