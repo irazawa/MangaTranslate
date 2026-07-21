@@ -10,6 +10,11 @@ bin_dir = os.path.join(root_dir, "bin")
 if os.path.exists(bin_dir) and bin_dir not in os.environ.get("PATH", ""):
     os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
+# Sedini mungkin: di bawah pythonw.exe sys.stdout adalah None, jadi tanpa ini
+# semua print() dan traceback hilang tanpa jejak.
+from src.core.logging_setup import setup as _setup_logging
+_setup_logging()
+
 warnings.filterwarnings("ignore")
 
 # CRITICAL: Import torch BEFORE cv2/PyQt5/anything else that loads DLLs.
