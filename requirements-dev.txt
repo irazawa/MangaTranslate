@@ -1,0 +1,7 @@
+# Dependensi pengembangan saja -- tidak dibutuhkan untuk menjalankan aplikasi.
+#   venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#   venv\Scripts\python.exe -m pytest tests/ -q
+pytest>=8.0
+
+# Sengaja TIDAK memakai pytest-qt: fixture qapp 6 baris di tests/conftest.py
+# sudah cukup. Pasang bila nanti perlu qtbot untuk mensimulasikan klik/keyboard.
