@@ -101,7 +101,7 @@ from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
 from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
-from src.ui.main_window_mixins import FontMixin
+from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
@@ -147,7 +147,7 @@ class FindReplaceWorker(QObject):
             self.error.emit(str(exc))
 
 
-class MangaOCRApp(FontMixin, QMainWindow):
+class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
     api_cost_signal = pyqtSignal(int, int, str, str)
     snippet_translated_signal = pyqtSignal()
     DARK_THEME_STYLESHEET = """
@@ -2119,53 +2119,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
             """
         )
 
-    def _layers_list_qss(self) -> str:
-        return (
-            f"""
-            QListWidget#layers-list {{
-                background-color: {theme.COLORS["panel"]};
-                border: 1px solid {theme.COLORS["border"]};
-                border-radius: 8px;
-                padding: 4px;
-                color: {theme.COLORS["text"]};
-                outline: none;
-            }}
-            QListWidget#layers-list::item {{
-                background-color: {theme.COLORS["card_alt"]};
-                border: 1px solid {theme.COLORS["border"]};
-                border-radius: 6px;
-                margin-bottom: 4px;
-                padding: 4px;
-            }}
-            QListWidget#layers-list::item:hover {{
-                background-color: {theme.COLORS["border"]};
-                color: {theme.COLORS["text"]};
-            }}
-            QListWidget#layers-list::item:selected {{
-                background-color: {theme.COLORS["border"]};
-                border: 1px solid {theme.COLORS["accent"]};
-                color: {theme.COLORS["accent"]};
-            }}
-            """
-        )
-
-    def _small_layer_button_qss(self, danger: bool = False, active: bool = False) -> str:
-        if danger:
-            return (
-                f"background-color: {theme.COLORS['danger']};"
-                f"border: 1px solid {theme.COLORS['danger']};"
-                f"color: {theme.COLORS['bg']};"
-                "border-radius: 5px;"
-            )
-        border = theme.COLORS["accent"] if active else theme.COLORS["border"]
-        color = theme.COLORS["accent"] if active else theme.COLORS["muted"]
-        return (
-            f"background-color: {theme.COLORS['card_alt']};"
-            f"border: 1px solid {border};"
-            f"color: {color};"
-            "border-radius: 5px;"
-        )
-
     def _refresh_workspace_surface_theme(self):
         for attr in ('undo_timeline_list',):
             widget = getattr(self, attr, None)
@@ -2604,198 +2557,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         layout.addStretch()
         return tab
 
-    def _create_layers_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-        layout.setSpacing(14)
-
-        # Title/desc
-        desc = QLabel("Canvas Layers Manager")
-        desc.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {theme.COLORS['accent']};")
-        layout.addWidget(desc)
-
-        help_lbl = QLabel("Right-Click: Rename / Fast Opacity  |  Double-Click: Edit Text")
-        help_lbl.setStyleSheet(f"font-size: 9pt; color: {theme.COLORS['muted']};")
-        layout.addWidget(help_lbl)
-
-        # Opacity Slider section
-        opacity_layout = QHBoxLayout()
-        opacity_layout.addWidget(QLabel("Opacity:"))
-        self.layer_opacity_slider = QSlider(Qt.Horizontal)
-        self.layer_opacity_slider.setRange(0, 100)
-        self.layer_opacity_slider.setValue(100)
-        self.layer_opacity_slider.setSingleStep(5)
-        self.layer_opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
-        opacity_layout.addWidget(self.layer_opacity_slider)
-        self.layer_opacity_label = QLabel("100%")
-        self.layer_opacity_label.setMinimumWidth(35)
-        self.layer_opacity_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        opacity_layout.addWidget(self.layer_opacity_label)
-        layout.addLayout(opacity_layout)
-
-        # List Widget
-        self.layers_list_widget = QListWidget()
-        self.layers_list_widget.setObjectName("layers-list")
-        self.layers_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.layers_list_widget.customContextMenuRequested.connect(self._show_layer_context_menu)
-        self.layers_list_widget.setStyleSheet(self._layers_list_qss())
-        self.layers_list_widget.itemSelectionChanged.connect(self._on_layer_selection_changed)
-        layout.addWidget(self.layers_list_widget, 1)
-
-        # Control row
-        btn_row = QHBoxLayout()
-        add_layer_btn = QPushButton("+ Add Layer")
-        add_layer_btn.clicked.connect(self._add_new_manual_layer)
-        add_layer_btn.setStyleSheet(theme.secondary_button_qss())
-        
-        clear_all_btn = QPushButton("Clear All")
-        clear_all_btn.clicked.connect(self._clear_all_layers)
-        clear_all_btn.setStyleSheet(theme.danger_button_qss())
-        
-        btn_row.addWidget(add_layer_btn)
-        btn_row.addWidget(clear_all_btn)
-        layout.addLayout(btn_row)
-
-        return tab
-
-    def _refresh_layers_list(self):
-        if not hasattr(self, 'layers_list_widget'):
-            return
-        if getattr(self, 'is_transform_preview', False):
-            return
-            
-        # Block signals to prevent infinite loop
-        self.layers_list_widget.blockSignals(True)
-        self.layers_list_widget.clear()
-        
-        for idx, area in enumerate(list(self.typeset_areas)):
-            # Create a list item
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(100, 48))
-            item.setData(Qt.UserRole, area)
-            self.layers_list_widget.addItem(item)
-            
-            # Create custom widget
-            w = QWidget()
-            layout = QHBoxLayout(w)
-            layout.setContentsMargins(6, 4, 6, 4)
-            layout.setSpacing(8)
-            
-            # 1. Eye button (Visibility)
-            visible = getattr(area, 'visible', True)
-            eye_btn = QPushButton()
-            eye_btn.setIcon(self._make_eye_icon(visible))
-            eye_btn.setIconSize(QSize(20, 20))
-            eye_btn.setFixedSize(28, 28)
-            eye_btn.setToolTip("Toggle Visibility")
-            eye_btn.setStyleSheet(self._small_layer_button_qss(active=visible))
-            eye_btn.clicked.connect(partial(self._toggle_layer_visibility, area, eye_btn))
-            layout.addWidget(eye_btn)
-            
-            # 2. Lock button (Lock)
-            locked = getattr(area, 'locked', False)
-            lock_btn = QPushButton()
-            lock_btn.setIcon(self._make_lock_icon(locked))
-            lock_btn.setIconSize(QSize(20, 20))
-            lock_btn.setFixedSize(28, 28)
-            lock_btn.setToolTip("Toggle Lock")
-            lock_btn.setStyleSheet(self._small_layer_button_qss(danger=locked))
-            lock_btn.clicked.connect(partial(self._toggle_layer_lock, area, lock_btn))
-            layout.addWidget(lock_btn)
-            
-            # 3. Label text
-            text_preview = getattr(area, 'layer_name', '')
-            if not text_preview:
-                text_preview = (area.text or "").strip()
-                if len(text_preview) > 18:
-                    text_preview = text_preview[:15] + "..."
-                if not text_preview:
-                    text_preview = f"Text Block #{idx+1}"
-            
-            label = QLabel(text_preview)
-            label.setStyleSheet(
-                f"color: {theme.COLORS['text']}; font-weight: bold;"
-                if visible else
-                f"color: {theme.COLORS['muted']}; text-decoration: line-through;"
-            )
-            layout.addWidget(label, 1)
-            
-            # 4. Reorder Buttons
-            up_btn = QPushButton("▲")
-            up_btn.setFixedSize(20, 20)
-            up_btn.setStyleSheet(
-                self._small_layer_button_qss()
-                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
-            )
-            up_btn.clicked.connect(partial(self._move_layer_up, area))
-            layout.addWidget(up_btn)
-            
-            down_btn = QPushButton("▼")
-            down_btn.setFixedSize(20, 20)
-            down_btn.setStyleSheet(
-                self._small_layer_button_qss()
-                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
-            )
-            down_btn.clicked.connect(partial(self._move_layer_down, area))
-            layout.addWidget(down_btn)
-            
-            # 5. Delete Button
-            del_btn = QPushButton()
-            del_btn.setIcon(self._make_trash_icon())
-            del_btn.setIconSize(QSize(16, 16))
-            del_btn.setFixedSize(24, 24)
-            del_btn.setStyleSheet(self._small_layer_button_qss(danger=True))
-            del_btn.clicked.connect(partial(self._delete_layer, area))
-            layout.addWidget(del_btn)
-            
-            self.layers_list_widget.setItemWidget(item, w)
-            
-            # Select the item if it matches the current active area
-            if area is self.selected_typeset_area:
-                item.setSelected(True)
-                
-        self.layers_list_widget.blockSignals(False)
-
-    def _toggle_layer_visibility(self, area, btn):
-        area.visible = not getattr(area, 'visible', True)
-        self.redraw_all_typeset_areas()
-        self.image_label.update()
-        self._refresh_layers_list()
-
-    def _toggle_layer_lock(self, area, btn):
-        area.locked = not getattr(area, 'locked', False)
-        self.image_label.update()
-        self._refresh_layers_list()
-
-    def _on_layer_selection_changed(self):
-        selected_items = self.layers_list_widget.selectedItems()
-        if selected_items:
-            area = selected_items[0].data(Qt.UserRole)
-            self.set_selected_area(area)
-
-    def _move_layer_up(self, area):
-        if area in self.typeset_areas:
-            idx = self.typeset_areas.index(area)
-            if idx > 0:
-                self.typeset_areas.remove(area)
-                self.typeset_areas.insert(idx - 1, area)
-                self.redraw_all_typeset_areas()
-                self._refresh_layers_list()
-
-    def _move_layer_down(self, area):
-        if area in self.typeset_areas:
-            idx = self.typeset_areas.index(area)
-            if idx < len(self.typeset_areas) - 1:
-                self.typeset_areas.remove(area)
-                self.typeset_areas.insert(idx + 1, area)
-                self.redraw_all_typeset_areas()
-                self._refresh_layers_list()
-
-    def _delete_layer(self, area):
-        self.delete_typeset_area(area)
-        self._refresh_layers_list()
-
     def _apply_manual_text_color_to_area(self, area, color):
         color_obj = QColor(color) if not isinstance(color, QColor) else QColor(color)
         if area is None or not color_obj.isValid():
@@ -2827,33 +2588,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         except Exception:
             return False
         return len(colors) > 1
-
-    def _add_new_manual_layer(self):
-        self.ocr_lang_combo.setCurrentText("Manual Text (Rect)")
-        from src.ui.canvas import TypesetArea
-        rect = QRect(100, 100, 200, 80)
-        from PyQt5.QtGui import QFont, QColor
-        font = self._build_current_font()
-        color = self.typeset_color if hasattr(self, 'typeset_color') and self.typeset_color else QColor("#000000")
-        new_area = TypesetArea(rect, "SFX Text", font, color)
-        self._push_undo_snapshot("New Layer")
-        self.typeset_areas.append(new_area)
-        self.set_selected_area(new_area)
-        self.redraw_all_typeset_areas()
-        self._refresh_layers_list()
-
-    def _clear_all_layers(self):
-        reply = QMessageBox.question(
-            self, "Clear All Layers",
-            "Are you sure you want to delete all text/typeset layers for this image?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self._push_undo_snapshot("Clear All Areas")
-            self.typeset_areas.clear()
-            self.clear_selected_area()
-            self.redraw_all_typeset_areas()
-            self._refresh_layers_list()
 
     def _apply_active_typeset_to_selected(self):
         area = self.selected_typeset_area
@@ -3519,59 +3253,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         self.refresh_history_views()
         return tab
 
-    def batch_pf_contextual_translate(self):
-        """
-        Batch send all PF entries (original text only) to AI for contextual translation.
-        Result: Each bubble gets updated with contextual translation.
-        """
-        if not self.proofreader_entries:
-            self.show_toast("No PF entries", "Tidak ada entry PF yang bisa diproses.", kind="info")
-            return
-        provider, model_name = self.get_selected_model_name()
-        if not model_name:
-            self.show_banner("batch-pf-no-model", "AI model missing", "Pilih AI model dulu sebelum batch PF.", kind="warning")
-            return
-        # Build prompt: send all original texts, ask AI to translate contextually so text flows naturally
-        pf_texts = [e.get('original_text', '') for e in self.proofreader_entries if e.get('original_text')]
-        if not pf_texts:
-            self.show_toast("No texts", "Tidak ada original text di PF entries.", kind="info")
-            return
-        # Request JSON array first to make parsing reliable
-        prompt = (
-            "IMPORTANT: Return ONLY a JSON array of strings. Example: [\"dialog1\", \"dialog2\"]\n"
-            "Terjemahkan dialog berikut ke bahasa Indonesia secara kontekstual sehingga hasilnya saling nyambung dan alami. "
-            "Berikan hasil terjemahan dalam urutan yang sama. Jika tidak bisa mengekspor JSON, kembalikan teks setiap dialog pada baris terpisah.\n\n" +
-            "\n".join(pf_texts)
-        )
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            temperature = 0.35
-            response_text = self._invoke_ai_review(provider, model_name, prompt, temperature=temperature)
-        finally:
-            QApplication.restoreOverrideCursor()
-        if not response_text:
-            self.show_banner("batch-pf-ai-error", "AI error", "Tidak ada respon dari AI.", kind="error")
-            return
-        # Parse response: get list of results
-        results = self._parse_ai_list_response(response_text, expected_count=len(pf_texts))
-        if len(results) != len(pf_texts):
-            resp = QMessageBox.question(self, "Mismatch",
-                                        f"AI mengembalikan {len(results)} item, tapi jumlah dialog yang dikirim {len(pf_texts)}.\n"
-                                        "Terima hasil yang dapat diambil terbaik (best-effort mapping) dan lanjutkan?",
-                                        QMessageBox.Yes | QMessageBox.No)
-            if resp != QMessageBox.Yes:
-                return
-            if len(results) > len(pf_texts):
-                results = results[:len(pf_texts)]
-            else:
-                results = results + [orig for orig in pf_texts[len(results):]]
-
-        # Stage results: set translated_text, ai_model and staged flag, but do NOT apply to bubbles yet
-        for entry, new_text in zip(self.proofreader_entries, results):
-            entry['translated_text'] = new_text
-            entry['ai_model'] = model_name
-            entry['staged'] = True
-
     def populate_ai_models_combo(self, combo: QComboBox):
         combo.clear()
         combo.addItem("Default (Main Setting)", "default")
@@ -3983,57 +3664,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
 
         self.refresh_history_views()
         self.show_toast("Batch PF selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.", kind="success", timeout_ms=5000)
-
-    def batch_qc_style_tone_check(self):
-        """
-        Batch send all QC entries (translated text) to AI for style/tone validation.
-        Result: Each bubble gets updated with validated/adjusted translation.
-        """
-        if not self.quality_entries:
-            self.show_toast("No QC entries", "Tidak ada entry QC yang bisa diproses.", kind="info")
-            return
-        provider, model_name = self.get_selected_model_name()
-        if not model_name:
-            self.show_banner("batch-qc-no-model", "AI model missing", "Pilih AI model dulu sebelum batch QC.", kind="warning")
-            return
-        qc_texts = [e.get('translated_text', '') for e in self.quality_entries if e.get('translated_text')]
-        if not qc_texts:
-            self.show_toast("No texts", "Tidak ada hasil translate di QC entries.", kind="info")
-            return
-        prompt = (
-            "IMPORTANT: Return ONLY a JSON array of strings. Example: [\"rev1\", \"rev2\"]\n"
-            "Berikut adalah hasil terjemahan dialog manga. Tolong cek gaya bahasa, suasana, dan tone agar sesuai dan alami. "
-            "Jika perlu, sesuaikan gaya bahasa agar konsisten dan cocok dengan konteks manga. Berikan hasil revisi dalam urutan yang sama.\n\n" +
-            "\n".join(qc_texts)
-        )
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            temperature = 0.3
-            response_text = self._invoke_ai_review(provider, model_name, prompt, temperature=temperature)
-        finally:
-            QApplication.restoreOverrideCursor()
-        if not response_text:
-            self.show_banner("batch-qc-ai-error", "AI error", "Tidak ada respon dari AI.", kind="error")
-            return
-        results = self._parse_ai_list_response(response_text, expected_count=len(qc_texts))
-        if len(results) != len(qc_texts):
-            resp = QMessageBox.question(self, "Mismatch",
-                                        f"AI mengembalikan {len(results)} item, tapi jumlah dialog yang dikirim {len(qc_texts)}.\n"
-                                        "Terima hasil yang dapat diambil terbaik (best-effort mapping) dan lanjutkan?",
-                                        QMessageBox.Yes | QMessageBox.No)
-            if resp != QMessageBox.Yes:
-                return
-            if len(results) > len(qc_texts):
-                results = results[:len(qc_texts)]
-            else:
-                results = results + [orig for orig in qc_texts[len(results):]]
-        for entry, new_text in zip(self.quality_entries, results):
-            entry['translated_text'] = new_text
-            entry['ai_model'] = model_name
-            entry['staged'] = True
-
-        self.refresh_history_views()
-        self.show_toast("Batch QC selesai", "Hasil telah di-stage. Tekan 'Confirm' pada baris untuk menerapkan ke bubble.", kind="success", timeout_ms=5000)
 
     def _create_result_table(self):
         table = QTableWidget()
@@ -6023,164 +5653,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
 
         worker.start()
         self._manga_ocr_installer_worker = worker
-
-    # [BARU] Inisialisasi on-demand untuk model inpainting
-    def initialize_inpaint_engine(self, settings=None):
-        """Menginisialisasi engine inpainting LaMa yang dipilih."""
-        if settings is None:
-            settings = self.get_current_settings()
-        model_key = settings.get('inpaint_model_key')
-
-        # Jika pengguna memilih mode OpenCV (atau tidak memilih model LaMa sama sekali),
-        # pastikan state lama_cleaner dilepas agar tidak dicoba lagi.
-        if not model_key:
-            self.inpaint_model = None
-            self.current_inpaint_model_key = None
-            return
-
-        if model_key == self.current_inpaint_model_key and self.inpaint_model is not None:
-            return
-
-        if not self.is_lama_available:
-            print("Lama Cleaner not available; falling back to OpenCV inpaint.")
-            self.inpaint_model = None
-            self.current_inpaint_model_key = None
-            return
-
-        model_info = self.dl_models.get(model_key)
-        if not model_info or not os.path.exists(model_info['path']):
-            print(f"Model file not found: {model_info['path'] if model_info else 'None'}")
-            self.inpaint_model = None
-            self.current_inpaint_model_key = None
-            return
-
-        is_gui_thread = (QThread.currentThread() == self.thread())
-        if is_gui_thread:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.statusBar().showMessage(f"Initializing inpainting model: {model_key}...")
-        
-        try:
-            # Tentukan device (CPU/GPU)
-            use_gpu = settings.get('use_gpu', False)
-            device = "cuda" if use_gpu and self.is_gpu_available else "cpu"
-            
-            # Inisialisasi model manager
-            from lama_cleaner.model_manager import ModelManager
-            model_manager = ModelManager()
-            
-            # Tentukan jenis model
-            model_type = "lama"  # Kedua model menggunakan arsitektur LaMa
-            
-            # Load model (try/catch karena API lama/baru bisa berbeda)
-            loaded_model = None
-            try:
-                loaded_model = model_manager.init_model(device, model_info['path'], model_type=model_type)
-            except Exception:
-                # fallback jika api berbeda
-                try:
-                    loaded_model = model_manager.load_model(model_info['path'], device=device)
-                except Exception as e:
-                    print(f"Could not load model via ModelManager: {e}")
-                    loaded_model = None
-
-            if loaded_model is None:
-                raise RuntimeError("Failed to initialize inpainting model instance.")
-
-            # Bungkus model menjadi callable yang selalu mengembalikan PIL.Image
-            self.inpaint_model = lambda pil_img, pil_mask: self._run_lama_inpaint(loaded_model, pil_img, pil_mask)
-            self.current_inpaint_model_key = model_key
-            if is_gui_thread:
-                self.statusBar().showMessage(f"Inpainting model {model_key} initialized on {device.upper()}.", 3000)
-            else:
-                print(f"Inpainting model {model_key} initialized on {device.upper()} (background thread).")
-            
-        except Exception as e:
-            print(f"Error initializing inpainting model {model_key}: {e}")
-            self.inpaint_model = None
-            self.current_inpaint_model_key = None
-            
-        finally:
-            if is_gui_thread:
-                QApplication.restoreOverrideCursor()
-
-    def _run_lama_inpaint(self, model, pil_image, pil_mask):
-        """
-        Helper untuk memanggil model lama/baru dari lama_cleaner dan
-        mengembalikan hasil sebagai numpy array (RGB).
-        Menangani beberapa varian API yang mungkin tersedia.
-        """
-        try:
-            # Pastikan mask ukuran sama dengan image
-            if pil_mask.size != pil_image.size:
-                pil_mask = pil_mask.resize(pil_image.size)
-
-            # Coba beberapa cara pemanggilan model yang umum
-            result = None
-            try:
-                # model bisa callable
-                result = model(pil_image, pil_mask)
-            except Exception:
-                pass
-
-            if result is None and hasattr(model, "process"):
-                try:
-                    result = model.process(pil_image, pil_mask)
-                except Exception:
-                    pass
-
-            if result is None and hasattr(model, "inpaint"):
-                try:
-                    result = model.inpaint(pil_image, pil_mask)
-                except Exception:
-                    pass
-
-            if result is None and hasattr(model, "run"):
-                try:
-                    # some apis expect keyword args
-                    try:
-                        result = model.run(image=pil_image, mask=pil_mask)
-                    except TypeError:
-                        result = model.run(pil_image, pil_mask)
-                except Exception:
-                    pass
-
-            if result is None:
-                raise RuntimeError("Inpainting model did not return a result (unsupported API).")
-
-            # Normalisasi hasil menjadi PIL.Image atau numpy array (RGB)
-            if isinstance(result, tuple) or isinstance(result, list):
-                # kadang model mengembalikan (image, ...)
-                candidate = result[0]
-            else:
-                candidate = result
-
-            if hasattr(candidate, "convert") and hasattr(candidate, "size"):
-                # PIL Image
-                pil_out = candidate.convert("RGB")
-                return np.array(pil_out)[:, :, ::-1]  # convert RGB->BGR for OpenCV path if necessary later
-            elif isinstance(candidate, np.ndarray):
-                # Pastikan format RGB
-                arr = candidate
-                if arr.ndim == 3 and arr.shape[2] == 3:
-                    # as-is, convert to RGB ordering expected later
-                    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.dtype == np.uint8 else arr
-                return arr
-            elif isinstance(candidate, dict):
-                # coba beberapa key umum
-                for k in ("result", "image", "output", "pred"):
-                    if k in candidate:
-                        v = candidate[k]
-                        if hasattr(v, "convert"):
-                            return np.array(v.convert("RGB"))[:, :, ::-1]
-                        if isinstance(v, np.ndarray):
-                            return v
-                raise RuntimeError("Unsupported dict result from inpaint model.")
-            else:
-                raise RuntimeError("Unsupported result type from inpaint model.")
-
-        except Exception as e:
-            print(f"Error running inpaint model: {e}")
-            return None
 
     def increment_translated_count(self):
         self.translated_count += 1
@@ -11442,14 +10914,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
             self.image_label.polygon_points.clear()
             self.image_label.update()
 
-    def _is_inpaint_brush_mode(self, mode=None):
-        mode = mode if mode is not None else self.selection_mode_combo.currentText()
-        return mode in ("Inpaint Brush", "Inpaint Brush + OCR Translate")
-
-    def _is_inpaint_ocr_mode(self, mode=None):
-        mode = mode if mode is not None else self.selection_mode_combo.currentText()
-        return mode == "Inpaint Brush + OCR Translate"
-
     def create_pen_cursor(self):
         """Create a small stylized pen/pencil QCursor to differentiate pen mode."""
         # Create a compact pencil cursor ~20x20 with the hotspot at the pencil tip
@@ -11521,95 +10985,12 @@ class MangaOCRApp(FontMixin, QMainWindow):
         self.image_label.clear_selection()
         self.update_pen_tool_buttons_visibility(False)
 
-    def _get_inpaint_brush_mask_and_rect(self):
-        mask_img = self.image_label.get_inpaint_mask() if hasattr(self, 'image_label') else None
-        if mask_img is None or mask_img.isNull():
-            self.show_toast("No Mask", "Please paint an area on the canvas first.", kind="warning")
-            return None, None
-        if mask_img.size() != self.original_pixmap.size():
-            self.image_label.clear_inpaint_mask()
-            self.show_toast("Mask Reset", "The mask did not match the current image. Please paint again.", kind="warning")
-            return None, None
-
-        qimg_mask = mask_img.convertToFormat(QImage.Format_Grayscale8)
-        w, h = qimg_mask.width(), qimg_mask.height()
-        ptr = qimg_mask.bits()
-        ptr.setsize(h * qimg_mask.bytesPerLine())
-        arr = np.ascontiguousarray(np.array(ptr).reshape((h, qimg_mask.bytesPerLine()))[:, :w])
-        ys, xs = np.where(arr > 0)
-        if xs.size == 0 or ys.size == 0:
-            self.show_toast("No Mask", "Please paint an area on the canvas first.", kind="warning")
-            return None, None
-        rect = QRect(int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
-        return Image.fromarray(arr), rect
-
     def _current_clean_base_image(self, fallback_pil):
         _, record = self._current_inpaint_record()
         cleaned_image = self._decode_cleaned_image(record)
         if cleaned_image is not None:
             return cleaned_image
         return fallback_pil
-
-    def _current_pre_inpaint_image(self, fallback_pil):
-        _, record = self._current_inpaint_record()
-        pre_image = self._decode_image_png(record.get('pre_inpaint_image_png')) if record else None
-        if pre_image is not None:
-            return pre_image
-        return fallback_pil
-
-    def apply_inpaint_brush_selection(self, run_ocr_translate=False):
-        if getattr(self, 'original_pixmap', None) is None:
-            self.show_toast("No Image", "Please load an image first.", kind="warning")
-            return
-        existing = getattr(self, '_inpaint_brush_worker', None)
-        if existing is not None and existing.isRunning():
-            return
-        pil_mask, mask_rect = self._get_inpaint_brush_mask_and_rect()
-        if pil_mask is None:
-            return
-
-        if getattr(self, 'current_image_pil', None) is not None and self.current_image_pil.size == (self.original_pixmap.width(), self.original_pixmap.height()):
-            pil_image = self.current_image_pil.convert('RGB')
-        else:
-            qimg = self.original_pixmap.toImage().convertToFormat(QImage.Format_RGB888)
-            w, h = qimg.width(), qimg.height()
-            ptr = qimg.bits()
-            ptr.setsize(h * qimg.bytesPerLine())
-            arr_img = np.ascontiguousarray(np.array(ptr).reshape((h, qimg.bytesPerLine()))[:, :w * 3].reshape((h, w, 3)))
-            pil_image = Image.fromarray(arr_img)
-
-        clean_base = self._current_clean_base_image(pil_image)
-        if run_ocr_translate:
-            ocr_source = self._current_pre_inpaint_image(pil_image)
-            if self._queue_ocr_translate_rect(mask_rect, source_pil_image=ocr_source):
-                self.show_toast("OCR Queued", "OCR and translation queued for the painted area.", kind="info")
-
-        self.show_toast("Inpainting...", "Running AI Inpainting on painted area...", kind="info")
-        if hasattr(self, 'inpaint_confirm_button'):
-            self.inpaint_confirm_button.setEnabled(False)
-
-        from src.core.workers import InpaintBrushWorker
-        worker = InpaintBrushWorker(self, clean_base, pil_mask, self.get_current_settings())
-        worker.signals.progress.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
-        worker.signals.error.connect(self._on_inpaint_brush_error)
-        worker.signals.finished.connect(self._on_inpaint_brush_finished)
-        worker.finished.connect(self._on_inpaint_brush_thread_finished)
-        self._inpaint_brush_worker = worker
-        worker.start()
-
-    def _on_inpaint_brush_thread_finished(self):
-        # Lepas referensi hanya setelah QThread benar-benar selesai (aturan thread safety repo)
-        self._inpaint_brush_worker = None
-
-    def _on_inpaint_brush_error(self, err_msg):
-        if hasattr(self, 'inpaint_confirm_button'):
-            self.inpaint_confirm_button.setEnabled(True)
-        self.show_banner("inpaint-brush-err", "Inpainting Failed", f"Error: {err_msg}", kind="error")
-
-    def _current_inpaint_record(self):
-        key = self.get_current_data_key()
-        record = self.all_typeset_data.get(key, {}) if key else {}
-        return key, record if isinstance(record, dict) else {}
 
     def _set_compare_controls_checked(self, checked):
         for button_name in ('compare_mode_btn', 'inpaint_compare_button'):
@@ -11621,86 +11002,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         compare_button = getattr(self, 'inpaint_compare_button', None)
         if compare_button is not None:
             compare_button.setText("Show Clean" if checked else "Compare")
-
-    def _refresh_inpaint_result_controls(self):
-        _, record = self._current_inpaint_record()
-        has_inpaint_state = bool(record.get('cleaned_image_png') and record.get('pre_inpaint_image_png'))
-        for button_name in ('inpaint_compare_button', 'inpaint_cancel_button'):
-            button = getattr(self, button_name, None)
-            if button is not None:
-                button.setEnabled(has_inpaint_state)
-        if not has_inpaint_state and getattr(self, 'inpaint_compare_button', None) is not None:
-            self._set_compare_controls_checked(False)
-
-    def adjust_inpaint_brush_size(self, delta):
-        spinbox = getattr(self, 'brush_size_spinbox', None)
-        if spinbox is None:
-            return
-        value = max(spinbox.minimum(), min(spinbox.maximum(), spinbox.value() + int(delta)))
-        spinbox.setValue(value)
-        self.statusBar().showMessage(f"Inpaint brush size: {value}px", 1200)
-
-    def cancel_inpaint_result(self):
-        key, record = self._current_inpaint_record()
-        pre_inpaint_png = record.get('pre_inpaint_image_png')
-        if not key or not pre_inpaint_png:
-            self.show_toast("No Inpaint Result", "No saved inpainting result to cancel on this page.", kind="info")
-            return
-        pre_image = self._decode_image_png(pre_inpaint_png)
-        if pre_image is None:
-            self.show_banner("inpaint-cancel-error", "Cancel Inpainting Failed", "The saved before-inpaint image could not be restored.", kind="error")
-            return
-
-        cleaned_image = self._decode_cleaned_image(record)
-        if cleaned_image is not None:
-            self._apply_base_image(cleaned_image)
-        self._push_undo_snapshot("Cancel Inpaint Clean")
-        self._set_compare_controls_checked(False)
-        self._compare_mode_active = False
-        self._apply_base_image(pre_image)
-        self._update_typeset_record(
-            key,
-            areas=list(self.typeset_areas),
-            redo=list(self.redo_stack),
-            remove_cleaned_image=True,
-            remove_pre_inpaint_image=True,
-        )
-        if hasattr(self, 'image_label'):
-            self.image_label.clear_inpaint_mask()
-        self.redraw_all_typeset_areas()
-        self._refresh_inpaint_result_controls()
-        self.show_toast("Inpainting Cancelled", "Restored the page before inpainting.", kind="success")
-
-    def _on_inpaint_brush_finished(self, result_pil):
-        if hasattr(self, 'inpaint_confirm_button'):
-            self.inpaint_confirm_button.setEnabled(True)
-        try:
-            key = self.get_current_data_key()
-            record = self.all_typeset_data.get(key, {}) if key else {}
-            pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
-            if not pre_inpaint_png:
-                pre_inpaint_png = self._encode_cleaned_image(self.current_image_pil)
-
-            self._push_undo_snapshot("Inpaint Brush Clean")
-            self._set_compare_controls_checked(False)
-            self._compare_mode_active = False
-            self._apply_base_image(result_pil)
-            self._update_typeset_record(
-                key,
-                areas=list(self.typeset_areas),
-                redo=list(self.redo_stack),
-                cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
-                pre_inpaint_image_png=pre_inpaint_png,
-            )
-
-            if hasattr(self, 'image_label'):
-                self.image_label.clear_inpaint_mask()
-
-            self.redraw_all_typeset_areas()
-            self._refresh_inpaint_result_controls()
-            self.show_toast("Inpaint Cleaned", "Background area cleaned successfully.", kind="success")
-        except Exception as e:
-            self._on_inpaint_brush_error(str(e))
 
     def save_image(self):
         if not self.typeset_pixmap:
@@ -14167,54 +13468,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         provider, model_id = self.get_selected_model_name()
         return self.AI_PROVIDERS.get(provider, {}).get(model_id, {})
 
-    def on_batch_mode_changed(self, state):
-        is_checked = (state == Qt.Checked)
-        self.process_batch_button.setVisible(is_checked)
-        if not is_checked and self.batch_processing_queue:
-            reply = QMessageBox.question(self, 'Clear Batch Queue?',
-                                           f"You have {len(self.batch_processing_queue)} items in the batch. Do you want to process them now? \n\nChoosing 'No' will discard them.",
-                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply == QMessageBox.Yes: self.start_batch_processing()
-            else: self.batch_processing_queue.clear(); self.update_batch_button_text()
-
-    def add_to_batch_queue(self, job):
-        self.batch_processing_queue.append(job); self.update_batch_button_text()
-        self.statusBar().showMessage(f"Added to batch. Queue has {len(self.batch_processing_queue)} items.")
-        if len(self.batch_processing_queue) >= self.BATCH_SIZE_LIMIT:
-            self.statusBar().showMessage(f"Batch limit of {self.BATCH_SIZE_LIMIT} reached. Processing automatically...")
-            self.start_batch_processing()
-
-    def update_batch_button_text(self):
-        count = len(self.batch_processing_queue)
-        self.process_batch_button.setText(f"Process Batch Now ({count} items)")
-        self.process_batch_button.setEnabled(count > 0)
-
-    def start_batch_processing(self):
-        if not self.batch_processing_queue: return
-        if self.batch_processor_thread and self.batch_processor_thread.isRunning():
-            self.show_toast("Batch busy", "A batch is already being processed.", kind="info"); return
-
-        self.statusBar().showMessage(f"Starting to process batch of {len(self.batch_processing_queue)} items...")
-
-        queue_to_process = self.batch_processing_queue[:]; self.batch_processing_queue.clear(); self.update_batch_button_text()
-
-        settings = self.get_current_settings()
-        self.batch_processor_thread = QThread()
-        self.batch_processor_worker = BatchProcessorWorker(self, queue_to_process, settings)
-        self.batch_processor_worker.moveToThread(self.batch_processor_thread)
-        self.batch_processor_worker.signals.batch_job_complete.connect(self.on_queue_job_complete) # Re-use the single job complete handler
-        self.batch_processor_worker.signals.batch_finished.connect(self.on_api_batch_finished)
-        self.batch_processor_worker.signals.error.connect(self.on_worker_error)
-        self.batch_processor_thread.started.connect(self.batch_processor_worker.run)
-        self.batch_processor_thread.finished.connect(self.batch_processor_thread.deleteLater)
-        self.batch_processor_thread.start()
-
-    def on_api_batch_finished(self):
-        self.statusBar().showMessage("Batch processing finished.", 5000)
-        self.batch_processor_thread.quit()
-        self.show_toast("Batch translate complete", "Proses batch translation untuk halaman yang dipilih telah selesai.", kind="success")
-        self.show_desktop_notification("Batch Translate Selesai", "Proses batch translation untuk halaman yang dipilih telah selesai.")
-
     def split_extended_bubbles(self, detections, split_threshold=2.5):
         new_detections = []
         for item in detections:
@@ -14238,40 +13491,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
             else:
                 new_detections.append(item)
         return new_detections
-
-    def start_interactive_batch_detection(self):
-        # [DIUBAH] Deteksi hanya berjalan pada halaman yang sedang aktif, bukan seluruh folder
-        if self.current_image_pil is None:
-            self.show_banner("batch-detect-no-files", "No page loaded", "Buka gambar atau halaman PDF terlebih dahulu untuk menggunakan fitur ini.", kind="warning")
-            return
-
-        if self.detection_thread and self.detection_thread.isRunning():
-            self.show_toast("Detection busy", "A detection process is already running.", kind="info")
-            return
-
-        # [DIUBAH] Menggunakan mode deteksi yang dipilih user
-        detection_mode = "Text" if self.text_detect_radio.isChecked() else "Bubble"
-
-        settings = self.get_current_settings()
-        if detection_mode == "Bubble" and not self._ensure_bubble_model_ready(settings):
-            return
-
-        self.detected_items_map.clear()
-        self.last_detection_mode = detection_mode
-        self.preview_mode_active = False
-        self.set_ui_for_detection(True)
-
-        settings['batch_text_detection_enabled'] = (detection_mode == "Text")
-        jobs = [(self.get_current_data_key(), self.current_image_pil.copy())]
-        self.detection_thread = QThread()
-        self.detection_worker = AutoDetectorWorker(self, jobs, settings, detection_mode)
-        self.detection_worker.moveToThread(self.detection_thread)
-        self.detection_worker.signals.detection_complete.connect(self.on_detection_complete)
-        self.detection_worker.signals.overall_progress.connect(self.update_overall_progress)
-        self.detection_worker.signals.error.connect(self.on_worker_error)
-        self.detection_worker.signals.finished.connect(self.on_detection_finished)
-        self.detection_thread.started.connect(self.detection_worker.run)
-        self.detection_thread.start()
 
     def on_detection_complete(self, image_path, detections):
         self.detected_items_map[image_path] = detections
@@ -14380,18 +13599,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
         # Worker sudah mulai dari process_confirmed_polygon, jadi kita hanya perlu membersihkan UI
         self.cancel_interactive_batch()
 
-    def cancel_interactive_batch(self):
-        if self.detection_worker: self.detection_worker.cancel()
-        if self.detection_thread: self.detection_thread.quit(); self.detection_thread.wait()
-
-        self.detection_thread = None; self.detection_worker = None
-        self.detected_items_map.clear(); self.image_label.clear_detected_items()
-        self.set_ui_for_detection(False); self.set_ui_for_confirmation(False)
-        self.preview_mode_active = False
-        self.cancel_detection_button.setText("Cancel Detection")
-        self.cancel_detection_button.setVisible(False)
-        self.statusBar().showMessage("Batch detection cancelled.", 3000)
-
     def remove_detected_item(self, index_to_remove):
         current_key = self.get_current_data_key()
         resolved_key = self._resolve_detection_key(current_key) or current_key
@@ -14447,99 +13654,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
     def update_confirmation_button_text(self):
         total_items = sum(len(items) for items in self.detected_items_map.values())
         self.confirm_items_button.setText(f"Confirm ({total_items})")
-
-    def open_batch_save_dialog(self):
-        if not self.image_files:
-            self.show_banner("batch-save-no-folder", "No folder loaded", "Please load a folder to use the batch save feature.", kind="warning")
-            return
-
-        dialog = BatchSaveDialog(self.image_files, self)
-        if dialog.exec_() == QDialog.Accepted:
-            files_to_save = dialog.get_selected_files()
-            if files_to_save: self.execute_batch_save(files_to_save)
-            else: self.show_toast("No files selected", "No files were selected to save.", kind="info")
-
-    def execute_batch_save(self, files_to_save):
-        if self.batch_save_thread and self.batch_save_thread.isRunning():
-            self.show_toast("Batch save in progress", "A batch save process is already running.", kind="info")
-            return
-
-        # Get settings
-        gen_cfg = SETTINGS.get('general', {})
-        save_fmt = gen_cfg.get('save_format', 'PNG')
-        save_qual = int(gen_cfg.get('save_quality', -1))
-
-        self.overall_progress_bar.setVisible(True); self.overall_progress_bar.setValue(0)
-        self.statusBar().showMessage("Starting batch save...")
-        self._batch_save_errors = []
-        self._batch_save_saved_count = 0
-
-        # Get current settings dictionary on the main GUI thread safely
-        current_settings = self.get_current_settings()
-
-        # Prepare a clean copy of the needed typeset data
-        typeset_data_snapshot = {}
-        for path in files_to_save:
-            key = self.get_current_data_key(path=path)
-            if key in self.all_typeset_data:
-                record = self.all_typeset_data[key]
-                typeset_data_snapshot[key] = {
-                    'areas': list(record.get('areas', []))
-                }
-                if record.get('cleaned_image_png'):
-                    typeset_data_snapshot[key]['cleaned_image_png'] = record.get('cleaned_image_png')
-
-        self.batch_save_thread = QThread()
-        self.batch_save_worker = BatchSaveWorker(
-            self,
-            files_to_save,
-            fmt=save_fmt,
-            quality=save_qual,
-            settings=current_settings,
-            typeset_data=typeset_data_snapshot
-        )
-        self.batch_save_worker.moveToThread(self.batch_save_thread)
-        self.batch_save_worker.signals.progress.connect(self.update_overall_progress)
-        self.batch_save_worker.signals.file_saved.connect(self.on_batch_file_saved)
-        self.batch_save_worker.signals.error.connect(self.on_batch_save_error)
-        self.batch_save_worker.signals.finished.connect(self.on_batch_save_finished)
-        self.batch_save_thread.started.connect(self.batch_save_worker.run)
-        self.batch_save_thread.start()
-
-    def on_batch_file_saved(self, file_path):
-        self._batch_save_saved_count += 1
-
-    def on_batch_save_error(self, error_msg):
-        self._batch_save_errors.append(error_msg)
-        self.show_banner("batch-save-error-live", "Batch save issue", error_msg, kind="warning")
-
-    def on_batch_save_finished(self):
-        errors = list(getattr(self, '_batch_save_errors', []))
-        saved_count = getattr(self, '_batch_save_saved_count', 0)
-        if errors:
-            self.statusBar().showMessage("Batch save finished with errors.", 5000)
-        else:
-            self.statusBar().showMessage("Batch save complete.", 5000)
-        self.overall_progress_bar.setVisible(False)
-        self.batch_save_thread.quit(); self.batch_save_thread.wait()
-        if errors:
-            shown_errors = "\n".join(errors[:8])
-            more = "" if len(errors) <= 8 else f"\n...and {len(errors) - 8} more error(s)."
-            self.show_banner(
-                "batch-save-errors",
-                "Batch Save Finished With Errors",
-                f"Saved {saved_count} file(s), but {len(errors)} file(s) failed:\n\n{shown_errors}{more}",
-                kind="warning",
-            )
-        else:
-            self.dismiss_banner("batch-save-error-live")
-            self.dismiss_banner("batch-save-errors")
-            self.show_toast(
-                "Batch Save Complete",
-                f"All selected files have been saved. Saved file(s): {saved_count}",
-                kind="success",
-                timeout_ms=5000,
-            )
 
     def check_if_saved(self, file_path):
         path_part, ext = os.path.splitext(file_path)
@@ -16184,40 +15298,6 @@ class MangaOCRApp(FontMixin, QMainWindow):
                 if parts:
                     return '\n'.join(parts)
         return ""
-
-    def _show_layer_context_menu(self, pos):
-        item = self.layers_list_widget.itemAt(pos)
-        if not item:
-            return
-        area = item.data(Qt.UserRole)
-        if not area:
-            return
-        
-        menu = QMenu(self)
-        rename_action = QAction("Rename Layer", self)
-        rename_action.triggered.connect(partial(self._rename_layer, area))
-        menu.addAction(rename_action)
-        
-        opacity_menu = menu.addMenu("Set Opacity")
-        for val in (100, 75, 50, 25, 0):
-            act = QAction(f"{val}%", self)
-            act.triggered.connect(partial(self._set_layer_opacity_direct, area, val))
-            opacity_menu.addAction(act)
-            
-        menu.exec_(self.layers_list_widget.mapToGlobal(pos))
-
-    def _rename_layer(self, area):
-        current_name = getattr(area, 'layer_name', '')
-        if not current_name:
-            current_name = (area.text or "")[:20]
-        new_name, ok = QInputDialog.getText(self, "Rename Layer", "Enter custom layer name:", text=current_name)
-        if ok and new_name.strip():
-            area.layer_name = new_name.strip()
-            self._refresh_layers_list()
-
-    def _set_layer_opacity_direct(self, area, val):
-        area.opacity = val / 100.0
-        self.redraw_all_typeset_areas(refresh_layers=False)
 
     def import_font(self):
         file_path, _ = QFileDialog.getOpenFileName(

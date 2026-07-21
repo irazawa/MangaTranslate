@@ -7,5 +7,8 @@ untuk navigasi, bukan modularitas.
 """
 
 from src.ui.main_window_mixins.font import FontMixin
+from src.ui.main_window_mixins.batch import BatchMixin
+from src.ui.main_window_mixins.layer import LayerMixin
+from src.ui.main_window_mixins.inpaint import InpaintMixin
 
-__all__ = ["FontMixin"]
+__all__ = ["FontMixin", "BatchMixin", "LayerMixin", "InpaintMixin"]
