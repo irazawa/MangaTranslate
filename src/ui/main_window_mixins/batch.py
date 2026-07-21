@@ -5,8 +5,7 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
-from PyQt5.QtCore import QThread, Qt
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class BatchMixin:

@@ -101,7 +101,7 @@ from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
 from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
-from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin
+from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
@@ -147,7 +147,7 @@ class FindReplaceWorker(QObject):
             self.error.emit(str(exc))
 
 
-class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
+class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, QMainWindow):
     api_cost_signal = pyqtSignal(int, int, str, str)
     snippet_translated_signal = pyqtSignal()
     DARK_THEME_STYLESHEET = """
@@ -972,87 +972,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         session_analytics_action = QAction('Session Analytics...', self)
         session_analytics_action.triggered.connect(self.show_session_analytics_dialog)
 
-
-    def open_settings_dialog(self, focus_tab: str = 'profile'):
-        self.show_settings_workspace(focus_tab)
-
-    def open_openrouter_settings_dialog(self):
-        self.show_settings_workspace('translation')
-
-    def _ensure_settings_workspace(self):
-        workspace = getattr(self, 'settings_workspace_widget', None)
-        stack = getattr(self, 'center_stack', None)
-        if workspace is not None and stack is not None and stack.indexOf(workspace) >= 0:
-            return workspace
-        if stack is None:
-            return None
-        from src.ui.settings_workspace import SettingsWorkspace
-        workspace = SettingsWorkspace(self)
-        workspace.back_requested.connect(self.hide_settings_workspace)
-        self.settings_workspace_widget = workspace
-        stack.addWidget(workspace)
-        return workspace
-
-    def show_settings_workspace(self, focus_tab: str = 'profile'):
-        stack = getattr(self, 'center_stack', None)
-        if stack is None:
-            return
-        workspace = self._ensure_settings_workspace()
-        if workspace is None:
-            return
-        try:
-            workspace.refresh()
-            workspace.set_active_section(focus_tab)
-        except Exception:
-            traceback.print_exc()
-
-        left = getattr(self, 'left_panel_widget', None)
-        right = getattr(self, 'right_panel_scroll', None)
-        nav = getattr(self, 'nav_zoom_widget', None)
-        if left is not None:
-            self._settings_left_was_visible = left.isVisible()
-            left.setVisible(False)
-        if right is not None:
-            self._settings_right_was_visible = right.isVisible()
-            right.setVisible(False)
-        if nav is not None:
-            self._settings_nav_was_visible = nav.isVisible()
-            nav.setVisible(False)
-        stack.setCurrentWidget(workspace)
-        self._update_center_panel_constraints(left_visible=False, right_visible=False)
-
-    def hide_settings_workspace(self):
-        stack = getattr(self, 'center_stack', None)
-        if stack is None:
-            return
-        has_project = bool(getattr(self, 'project_dir', None) or getattr(self, 'current_image_path', None))
-        if not has_project:
-            self.show_welcome_screen()
-            return
-
-        stack.setCurrentIndex(1)
-        nav = getattr(self, 'nav_zoom_widget', None)
-        if nav is not None:
-            nav.setVisible(bool(getattr(self, '_settings_nav_was_visible', True)))
-
-        left = getattr(self, 'left_panel_widget', None)
-        left_visible = bool(getattr(self, '_settings_left_was_visible', True))
-        if left is not None:
-            left.setVisible(left_visible)
-            toggle_btn = getattr(self, 'toggle_left_btn', None)
-            if toggle_btn is not None:
-                toggle_btn.setChecked(left_visible)
-                toggle_btn.setText(NavText.HIDE_FOLDER if left_visible else NavText.SHOW_FOLDER)
-
-        right = getattr(self, 'right_panel_scroll', None)
-        right_visible = bool(getattr(self, '_settings_right_was_visible', True))
-        if right is not None:
-            right.setVisible(right_visible)
-            toggle_btn = getattr(self, 'toggle_right_btn', None)
-            if toggle_btn is not None:
-                toggle_btn.setChecked(right_visible)
-                toggle_btn.setText(NavText.HIDE_TOOLS if right_visible else NavText.SHOW_TOOLS)
-        self._schedule_window_geometry_guard()
 
     def init_ui(self):
         main_widget = QWidget()
@@ -2101,24 +2020,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             f"color: {theme.COLORS['text']};"
         )
 
-    def _undo_timeline_qss(self) -> str:
-        return (
-            theme.list_widget_qss("QListWidget#undo-timeline", compact=True)
-            + f"""
-            QListWidget#undo-timeline {{
-                font-size: 8pt;
-            }}
-            QScrollBar:vertical {{
-                background: {theme.COLORS["panel"]};
-                width: 6px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {theme.COLORS["border"]};
-                border-radius: 3px;
-            }}
-            """
-        )
-
     def _refresh_workspace_surface_theme(self):
         for attr in ('undo_timeline_list',):
             widget = getattr(self, attr, None)
@@ -3145,31 +3046,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         self._refresh_outline_controls_enabled()
 
         return scroll
-    def _create_history_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-
-        description = QLabel("Review the latest translation results. Only the five most recent entries are shown here.")
-        description.setWordWrap(True)
-        layout.addWidget(description)
-
-        self.history_table = self._create_result_table()
-        self.history_table.setProperty('result_limit', self.history_preview_limit)
-        self.result_table_registry['history'].add(self.history_table)
-        layout.addWidget(self.history_table)
-
-        controls_layout = QHBoxLayout()
-        controls_layout.addStretch()
-        history_view_all = QPushButton("View All")
-        history_view_all.clicked.connect(self.show_history_modal)
-        controls_layout.addWidget(history_view_all)
-        layout.addLayout(controls_layout)
-
-        self.history_view_all_button = history_view_all
-        self.refresh_history_views()
-        return tab
-
     def _create_proofreader_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -4044,12 +3920,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         else:
             self.show_toast("Confirmed", "Semua entry berhasil dikonfirmasi.", kind="success")
 
-    def send_history_entry_to_proofreader(self, history_id):
-        self._stage_history_entry_for_review(history_id, 'proofreader')
-
-    def send_history_entry_to_quality(self, history_id):
-        self._stage_history_entry_for_review(history_id, 'quality')
-
     def prompt_send_to_scene(self, history_id):
         if not self.scenes:
              # Offer to create one
@@ -4129,58 +3999,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         if ok and item:
              self.add_entry_to_scene(item, entry)
              self.statusBar().showMessage(f"Added to scene '{item}'.", 3000)
-
-    def _stage_history_entry_for_review(self, history_id, target):
-        target = (target or '').lower()
-        if target not in ('proofreader', 'quality'):
-            return
-
-        entry = self.get_history_entry(history_id)
-        if not entry:
-            self.show_banner("history-entry-missing", "Entry missing", "Unable to find this history entry. It may have been removed.", kind="warning")
-            return
-
-        record = {
-            'history_id': history_id,
-            'id': history_id,
-            'original_text': entry.get('original_text', ''),
-            'translated_text': entry.get('translated_text', ''),
-            'translation_style': entry.get('translation_style', ''),
-            'timestamp': time.time(),
-        }
-        if entry.get('manual'):
-            record['manual'] = True
-        if entry.get('manual_inpaint') is not None:
-            record['manual_inpaint'] = bool(entry.get('manual_inpaint'))
-        if entry.get('ai_model'):
-            record['ai_model'] = entry.get('ai_model')
-        if entry.get('staged'):
-            record['staged'] = bool(entry.get('staged'))
-
-        if target == 'proofreader':
-            dest_list = self.proofreader_entries
-            existing = self.get_proofreader_entry(history_id)
-            tab_label = "Proofreader"
-        else:
-            dest_list = self.quality_entries
-            existing = self.get_quality_entry(history_id)
-            tab_label = "Quality Checker"
-
-        if existing:
-            staged_flag = existing.get('staged')
-            existing.update(record)
-            if staged_flag is not None:
-                existing['staged'] = staged_flag
-            try:
-                dest_list.remove(existing)
-            except ValueError:
-                pass
-            dest_list.insert(0, existing)
-        else:
-            dest_list.insert(0, record)
-
-        self.refresh_history_views()
-        self.statusBar().showMessage(f"Entry {history_id} dipindahkan ke {tab_label}.", 3000)
 
     def create_scene(self, name):
         if not name or not isinstance(name, str):
@@ -4235,51 +4053,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         self.refresh_history_views()
         return True
 
-    def move_entry_to_deleted_history(self, history_id):
-        # Find the entry in history
-        entry = self.get_history_entry(history_id)
-        if not entry:
-            # Maybe it's in a scene? Or maybe we just can't find it.
-            # If we strictly want to preserve DELETED items from canvas, 
-            # we should look it up from the area before it's gone?
-            # Actually catch: delete_typeset_area calls this.
-            return
-
-        target_scene = "Deleted History"
-        if target_scene not in self.scenes:
-            self.create_scene(target_scene)
-        
-        # Check if already in deleted history
-        deleted_list = self.scenes[target_scene]
-        if any(e.get('id') == history_id for e in deleted_list):
-            return
-
-        # Clone and add
-        new_entry = copy.deepcopy(entry)
-        # Mark as deleted from canvas
-        new_entry['deleted_from_canvas'] = True
-        new_entry['deletion_timestamp'] = time.time()
-        
-        self.scenes[target_scene].insert(0, new_entry)
-        
-        # NOTE: Do we remove from main history? 
-        # Requirement: "pindahkan secara otomatis" (move automatically).
-        # So yes, we should probably remove from the main history view 
-        # OR just keep it in history but mark it?
-        # User said "Deleted History" category/folder.
-        # Let's keep it simple: Add to scene "Deleted History". 
-        # Removing from self.history_entries might confuse the "History" tab which logs *everything*.
-        # But if the user says "item ... dipindahkan", it implies move.
-        # Let's remove from history entries to be safe/clean.
-        try:
-             self.history_entries.remove(entry)
-             if history_id in self.history_lookup:
-                 del self.history_lookup[history_id]
-        except ValueError:
-             pass
-
-        self.refresh_history_views()
-    
     def get_scene_entries(self, scene_name):
         return self.scenes.get(scene_name, [])
 
@@ -4447,9 +4220,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         modal_layout.addWidget(close_box)
         dialog.exec_()
 
-    def show_history_modal(self):
-        self._show_result_modal('history', 'History (All Entries)')
-
     def show_proofreader_modal(self):
         self._show_result_modal('proofreader', 'Proofreader Results (All Entries)')
 
@@ -4601,19 +4371,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
     def setup_styles(self):
         self.apply_appearance_from_settings()
 
-    def apply_appearance_from_settings(self):
-        appearance_cfg = SETTINGS.get('appearance', {})
-        if not isinstance(appearance_cfg, dict):
-            appearance_cfg = {}
-        resolved = set_active_appearance(
-            appearance_cfg,
-            system_dark=self._system_prefers_dark_theme(),
-        )
-        self.current_theme = resolved.get('effective_mode', 'dark')
-        self.setStyleSheet(app_stylesheet())
-        self._refresh_theme_dependent_styles()
-        return resolved
-
     def _refresh_theme_dependent_styles(self):
         for attr_name, qss_factory in (
             ('toggle_left_btn', toggle_button_qss),
@@ -4692,102 +4449,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                     widget.setCursor(cursor_shape)
         except Exception:
             pass
-
-    def apply_defaults_from_settings(self, apply_runtime_controls=True):
-        """Memuat default presets dari settings.json dan menerapkan ke UI."""
-        gen_cfg = SETTINGS.get('general', {}) if isinstance(SETTINGS.get('general'), dict) else {}
-        
-        if apply_runtime_controls:
-            # 1. OCR Language default
-            default_ocr = gen_cfg.get('default_ocr_lang', 'Japanese (Manga-OCR)')
-            if hasattr(self, 'ocr_lang_combo'):
-                idx = self.ocr_lang_combo.findText(default_ocr)
-                if idx != -1:
-                    self.ocr_lang_combo.setCurrentIndex(idx)
-
-            # 2. AI-Only Translate default
-            default_ai_only = bool(gen_cfg.get('default_ai_only_translate', False))
-            if hasattr(self, 'ai_only_translate_checkbox'):
-                self.ai_only_translate_checkbox.setChecked(default_ai_only)
-
-            # 3. AI Model default
-            default_ai_model = gen_cfg.get('default_ai_model', '')
-            if default_ai_model and hasattr(self, 'ai_model_combo'):
-                idx = self.ai_model_combo.findText(default_ai_model)
-                if idx != -1:
-                    self.ai_model_combo.setCurrentIndex(idx)
-
-            # 3.5 Default Translation Style
-            default_style = gen_cfg.get('default_translation_style', 'Santai (Default)')
-            if default_style and hasattr(self, 'style_combo'):
-                idx = self.style_combo.findText(default_style)
-                if idx != -1:
-                    self.style_combo.setCurrentIndex(idx)
-                
-        # 4. Typesetting Defaults
-        # Update the font template used for NEW areas only.
-        # We do NOT force-override the live typeset panel controls if the user
-        # is already editing (i.e. an area is selected), because those controls
-        # reflect the SELECTED AREA's properties, not the global default.
-        default_font_family = gen_cfg.get('default_font_family', '')
-        if default_font_family and self.font_manager:
-            new_font = self.font_manager.create_qfont(default_font_family)
-        else:
-            default_display = self.font_manager.list_fonts()[0] if self.font_manager else 'Arial'
-            new_font = self.font_manager.create_qfont(default_display) if self.font_manager else QFont('Arial')
-            
-        default_size = gen_cfg.get('default_font_size', 14)
-        new_font.setPointSize(int(default_size))
-        
-        default_bold = gen_cfg.get('default_font_bold', False)
-        new_font.setWeight(QFont.Bold if default_bold else QFont.Normal)
-        new_font.setLetterSpacing(QFont.PercentageSpacing, 100.0)
-        
-        # Store as the font template for new areas.
-        # Only replace self.typeset_font if there is NO active area selected
-        # (to avoid stomping a font the user explicitly chose for a selected area).
-        has_selection = getattr(self, 'selected_typeset_area', None) is not None
-        if not has_selection:
-            self.typeset_font = new_font
-
-        # Update the in-memory typeset_defaults so future areas inherit these settings.
-        # This dict is what _create_typeset_area reads for new areas.
-        self.typeset_defaults = {
-            'font_display': (self.font_manager.display_name_for_font(new_font) if self.font_manager else ''),
-            'font_size': float(default_size),
-            'bold': bool(default_bold),
-            'italic': new_font.italic(),
-            'underline': new_font.underline(),
-            'line_spacing': float(getattr(self, 'typeset_line_spacing_value', 1.1)),
-            'char_spacing': float(getattr(self, 'typeset_char_spacing_value', 100.0)),
-            'alignment': getattr(self, 'typeset_alignment', 'center'),
-            'orientation': getattr(self, 'typeset_orientation', 'horizontal'),
-            'outline': bool(getattr(self, 'typeset_outline_enabled', False)),
-            'outline_width': float(getattr(self, 'typeset_outline_width', 2.0)),
-            'outline_color': (self.typeset_outline_color.name() if isinstance(getattr(self, 'typeset_outline_color', None), QColor) else '#000000'),
-            'outline_style': getattr(self, 'typeset_outline_style', 'stroke'),
-            'color': (self.typeset_color.name() if isinstance(getattr(self, 'typeset_color', None), QColor) else '#000000'),
-            'gradient_enabled': bool(getattr(self, 'typeset_gradient_enabled', False)),
-            'gradient_angle': float(getattr(self, 'typeset_gradient_angle', 0.0)),
-            'gradient_colors': list(getattr(self, 'typeset_gradient_colors', ["#FF0000", "#0000FF"])),
-        }
-
-        # Only update the live typeset panel UI if nothing is selected.
-        # When a text area IS selected, the panel shows that area's properties
-        # and should not be disturbed by a settings change.
-        if not has_selection:
-            if hasattr(self, 'font_dropdown'):
-                self._populate_typeset_font_dropdown()
-                display_name = self.font_manager.display_name_for_font(new_font) if self.font_manager else ''
-                if display_name:
-                    with QSignalBlocker(self.font_dropdown):
-                        self.font_dropdown.setCurrentText(display_name)
-            if hasattr(self, 'font_size_spin'):
-                with QSignalBlocker(self.font_size_spin):
-                    self.font_size_spin.setValue(float(default_size))
-            if hasattr(self, 'bold_toggle'):
-                with QSignalBlocker(self.bold_toggle):
-                    self.bold_toggle.setChecked(bool(default_bold))
 
     def setup_shortcuts(self):
         self._shortcut_callbacks = {
@@ -5352,83 +5013,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                     'provider_key': provider_key
                 }
             self._apply_ai_model_overrides_from_settings(provider_filter=provider)
-
-    def _apply_ai_model_overrides_from_settings(self, provider_filter=None):
-        overrides = SETTINGS.get('ai_model_overrides', {})
-        if not isinstance(overrides, dict):
-            return
-        for provider, models in overrides.items():
-            if provider_filter and provider != provider_filter:
-                continue
-            if not isinstance(models, dict):
-                continue
-            provider_dict = self.AI_PROVIDERS.setdefault(provider, {})
-            for model_id, override in models.items():
-                if not isinstance(override, dict):
-                    continue
-                target = provider_dict.setdefault(model_id, {'display': model_id})
-                pricing = override.get('pricing')
-                if isinstance(pricing, dict):
-                    target.setdefault('pricing', {})
-                    for field in ('input', 'output'):
-                        if field in pricing:
-                            try:
-                                target['pricing'][field] = float(pricing[field])
-                            except (TypeError, ValueError):
-                                pass
-                limits = override.get('limits')
-                if isinstance(limits, dict):
-                    target.setdefault('limits', {})
-                    for field in ('rpm', 'rpd'):
-                        if field in limits:
-                            try:
-                                value = int(limits[field])
-                            except (TypeError, ValueError):
-                                continue
-                            if value > 0:
-                                target['limits'][field] = value
-
-                if provider == 'OpenRouter' and hasattr(self, 'openrouter_pricing_db') and model_id in self.openrouter_pricing_db:
-                    db_target = self.openrouter_pricing_db[model_id]
-                    if isinstance(pricing, dict):
-                        db_target.setdefault('pricing', {}).update(target.get('pricing', {}))
-                    if isinstance(limits, dict):
-                        db_target.setdefault('limits', {}).update(target.get('limits', {}))
-
-    def _persist_ai_model_overrides_to_settings(self):
-        overrides = {}
-        for provider, models in getattr(self, 'AI_PROVIDERS', {}).items():
-            if not isinstance(models, dict):
-                continue
-            provider_payload = {}
-            for model_id, info in models.items():
-                if not isinstance(info, dict):
-                    continue
-                payload = {}
-                pricing = info.get('pricing')
-                if isinstance(pricing, dict):
-                    payload['pricing'] = {
-                        'input': float(pricing.get('input', 0.0) or 0.0),
-                        'output': float(pricing.get('output', 0.0) or 0.0),
-                    }
-                limits = info.get('limits')
-                if isinstance(limits, dict):
-                    limit_payload = {}
-                    for field in ('rpm', 'rpd'):
-                        try:
-                            value = int(limits.get(field, 0) or 0)
-                        except (TypeError, ValueError):
-                            value = 0
-                        if value > 0:
-                            limit_payload[field] = value
-                    if limit_payload:
-                        payload['limits'] = limit_payload
-                if payload:
-                    provider_payload[model_id] = payload
-            if provider_payload:
-                overrides[provider] = provider_payload
-        SETTINGS['ai_model_overrides'] = overrides
-        save_settings(SETTINGS)
 
     def fetch_openrouter_pricing_async(self):
         """Mengambil data harga model OpenRouter secara dinamis dari API models resmi OpenRouter."""
@@ -6522,16 +6106,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             if needs_another_run:
                 self.ui_update_timer.start(100)
 
-    def generate_history_id(self):
-        self.history_counter += 1
-        return f"H{self.history_counter:05d}"
-
-    def get_history_entry(self, history_id):
-        for entry in self.history_entries:
-            if entry['id'] == history_id:
-                return entry
-        return None
-
     def get_proofreader_entry(self, history_id):
         for entry in self.proofreader_entries:
             if entry.get('history_id') == history_id:
@@ -6670,172 +6244,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             area.review_notes['manual_inpaint'] = bool(manual_inpaint)
         area.ensure_defaults()
         return area
-    def rebuild_history_for_image(self, image_key, areas):
-        if not image_key or not areas:
-            return
-        for area in areas:
-            self.register_history_entry(image_key, area, getattr(area, 'original_text', ''), getattr(area, 'text', ''))
-
-    def register_history_entry(self, image_key, area, original_text, translated_text):
-        if not getattr(area, 'history_id', None):
-            area.history_id = self.generate_history_id()
-        history_id = area.history_id
-
-        if original_text is not None:
-            area.original_text = original_text
-        if translated_text is not None:
-            preserve_segments = False
-            try:
-                segments = area.get_segments()
-                if segments:
-                    existing_plain = area._segments_to_plain_text(segments)
-                    preserve_segments = (existing_plain == translated_text)
-            except Exception:
-                preserve_segments = False
-            if preserve_segments:
-                area.text = translated_text or ''
-            else:
-                area.update_plain_text(translated_text)
-
-        entry = self.get_history_entry(history_id)
-        notes = area.review_notes if isinstance(getattr(area, 'review_notes', {}), dict) else {}
-        if not isinstance(notes, dict):
-            notes = {}
-            area.review_notes = notes
-        manual_flag = bool(notes.get('manual'))
-        manual_inpaint = notes.get('manual_inpaint')
-        model_label = notes.get('ai_model')
-        record = {
-            'id': history_id,
-            'history_id': history_id,
-            'image_key': image_key,
-            'original_text': area.original_text or '',
-            'translated_text': translated_text if translated_text is not None else area.text or '',
-            'translation_style': getattr(area, 'translation_style', ''),
-            'timestamp': time.time(),
-        }
-        if manual_flag:
-            record['manual'] = True
-            if not record['original_text']:
-                record['original_text'] = 'Manual Input'
-        if manual_inpaint is not None:
-            record['manual_inpaint'] = bool(manual_inpaint)
-        if model_label:
-            record['ai_model'] = model_label
-
-        if entry:
-            entry.update(record)
-        else:
-            self.history_entries.append(record)
-
-        self.history_lookup[history_id] = {'image_key': image_key, 'area': area}
-        return record
-
-    def apply_history_update(self, history_id, *, translated_text=None, original_text=None, translation_style=None, ai_model=None):
-        entry = self.get_history_entry(history_id)
-        if not entry:
-            return False
-
-        if original_text is not None:
-            entry['original_text'] = original_text
-        if translated_text is not None:
-            entry['translated_text'] = translated_text
-        if translation_style is not None:
-            entry['translation_style'] = translation_style
-        if ai_model is not None:
-            entry['ai_model'] = ai_model
-        entry['timestamp'] = time.time()
-
-        lookup = self.history_lookup.get(history_id)
-        if not lookup:
-            return False
-
-        area = lookup.get('area')
-        if not area:
-            return False
-
-        if original_text is not None:
-            area.original_text = original_text
-        if translation_style is not None:
-            area.translation_style = translation_style
-        if translated_text is not None:
-            area.update_plain_text(translated_text)
-        if ai_model is not None:
-            notes = area.review_notes if isinstance(getattr(area, 'review_notes', {}), dict) else {}
-            if not isinstance(notes, dict):
-                notes = {}
-            notes['ai_model'] = ai_model
-            area.review_notes = notes
-
-        image_key = lookup.get('image_key')
-        image_record = self.all_typeset_data.get(image_key)
-        if image_record:
-            image_record.setdefault('redo', []).clear()
-
-        if image_key == self.get_current_data_key():
-            # Push snapshot SEBELUM perubahan teks terjemahan
-            if translated_text is not None:
-                snippet = translated_text[:20] + ('…' if len(translated_text) > 20 else '')
-                self._push_undo_snapshot(f"Translate: {snippet}")
-            self.redo_stack.clear()
-            self.redraw_all_typeset_areas()
-            self.update_undo_redo_buttons_state()
-
-        self.refresh_history_views()
-        return True
-
-    def reset_history_state(self):
-        self.history_entries.clear()
-        self.proofreader_entries.clear()
-        self.quality_entries.clear()
-        self.history_lookup.clear()
-        self.history_counter = 0
-        self.refresh_history_views()
-
-    def refresh_history_views(self):
-        if getattr(self, '_is_refreshing_history', False): return
-        self._is_refreshing_history = True
-        try:
-            sources = [
-                ('history', self.history_entries),
-                ('proofreader', self.proofreader_entries),
-                ('quality', self.quality_entries),
-                ('scene', self.scenes.get(self.current_scene_name, []) if self.current_scene_name else []),
-            ]
-
-            for source, dataset in sources:
-                tables = list(self.result_table_registry.get(source, []))
-                if not tables:
-                    continue
-                dataset = dataset or []
-
-                # Filter history by current image
-                if source == 'history' and self.current_image_path:
-                    dataset = [e for e in dataset if e.get('image_key') == self.current_image_path]
-
-                for table in tables:
-                    limit_property = table.property('result_limit')
-                    limit_value = None
-                    if limit_property not in (None, '', False):
-                        try:
-                            limit_value = int(limit_property)
-                        except (TypeError, ValueError):
-                            limit_value = None
-
-                    if source == 'history':
-                        entries = self._get_recent_entries(dataset, limit_value if limit_value and limit_value > 0 else None)
-                    else:
-                        if limit_value and limit_value > 0:
-                            entries = list(dataset[:limit_value])
-                        else:
-                            entries = list(dataset)
-                    self.populate_result_table(table, entries, source)
-
-            self.update_result_buttons_state()
-            self._update_recent_translations_list()
-        finally:
-            self._is_refreshing_history = False
-
     def update_result_buttons_state(self):
         has_history = bool(self.history_entries)
         if self.run_proofreader_button is not None:
@@ -7028,101 +6436,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         self.overall_progress_bar.setVisible(True)
         self.overall_progress_bar.setValue(value)
         self.overall_progress_bar.setFormat(text)
-
-    def get_current_settings(self):
-        lang_data = self.ocr_lang_combo.currentData()
-        ocr_engine = lang_data.get('engine') if isinstance(lang_data, dict) else None
-        ocr_lang_code = lang_data.get('code') if isinstance(lang_data, dict) else None
-        ai_provider = None
-        ai_model_id = None
-        ai_model_name = None
-        ai_provider_label = None
-        if isinstance(lang_data, dict) and ocr_engine == 'AI_OCR':
-            ai_provider = lang_data.get('provider')
-            ai_model_id = lang_data.get('model_id')
-            ai_model_name = lang_data.get('model_name')
-            ai_provider_label = lang_data.get('provider_label')
-        selected_model_info = self.get_selected_model_info() or {}
-        selected_model_label = selected_model_info.get('display') or selected_model_info.get('name')
-
-        inpaint_model_text = self.inpaint_model_combo.currentText()
-        # Hanya model LaMa yang membutuhkan dependency eksternal. Jika pengguna memilih OpenCV,
-        # biarkan kuncinya None supaya engine LaMa tidak lagi dipanggil.
-        inpaint_model_key = None
-        if "Big-LaMa" in inpaint_model_text:
-            inpaint_model_key = 'big_lama'
-        elif "Anime" in inpaint_model_text:
-            inpaint_model_key = 'anime_inpaint'
-            
-        font_for_settings = QFont(self._build_current_font())
-        self.typeset_font = font_for_settings
-        color_for_settings = QColor(self.typeset_color)
-        char_spacing_value = float(self.typeset_char_spacing_value)
-        line_spacing_value = float(self.typeset_line_spacing_value)
-        apply_mode_global = getattr(self, 'apply_mode_global_radio', None) and self.apply_mode_global_radio.isChecked()
-        if apply_mode_global:
-            use_inpaint_value = self._default_cleanup_value('use_inpaint')
-            use_background_box_value = self._default_cleanup_value('use_background_box')
-            constrain_text_value = self._default_cleanup_value('constrain_text')
-        else:
-            use_inpaint_value = bool(self.inpaint_checkbox.isChecked()) if getattr(self, 'inpaint_checkbox', None) else self._default_cleanup_value('use_inpaint')
-            use_background_box_value = bool(self.use_background_box_checkbox.isChecked()) if getattr(self, 'use_background_box_checkbox', None) else self._default_cleanup_value('use_background_box')
-            constrain_text_value = bool(self.constrain_text_checkbox.isChecked()) if getattr(self, 'constrain_text_checkbox', None) else self._default_cleanup_value('constrain_text')
-
-        return {
-            'ocr_engine': ocr_engine,
-            'ocr_lang': ocr_lang_code,
-            'ocr_ai_provider': ai_provider,
-            'ocr_ai_provider_label': ai_provider_label,
-            'ocr_ai_model_id': ai_model_id,
-            'ocr_ai_model_name': ai_model_name,
-            'orientation': self.orientation_combo.currentText(),
-            'target_lang': self.translate_combo.currentText(),
-            'use_ai': True,
-            'font': font_for_settings,
-            'color': color_for_settings,
-            'enhanced_pipeline': self.enhanced_pipeline_checkbox.isChecked(),
-            'use_ai_only_translate': self.ai_only_translate_checkbox.isChecked(),
-            'use_deepl_only_translate': self.deepl_only_checkbox.isChecked(),
-            'use_dl_detector': self.dl_bubble_detector_checkbox.isChecked(),
-            'dl_provider': self.dl_model_provider_combo.currentText(),
-            'dl_model_file': self.dl_model_file_combo.currentText(),
-            'ai_model': self.get_selected_model_name(),
-            'ai_model_label': selected_model_label,
-            'ai_model_info': selected_model_info,
-            'translation_style': self.style_combo.currentText(),
-            'auto_split_bubbles': self.split_bubbles_checkbox.isChecked(),
-            'safe_mode': self.safe_mode_checkbox.isChecked(),
-            'use_gpu': self.use_gpu_checkbox.isChecked(),
-            # Pastikan ini sesuai dengan hardware Anda
-            'use_inpaint': use_inpaint_value,
-            'inpaint_model_name': inpaint_model_text,
-            'inpaint_model_key': inpaint_model_key,
-            'inpaint_server_url': SETTINGS.get('cleanup', {}).get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL),
-            'inpaint_server_timeout': SETTINGS.get('cleanup', {}).get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT),
-            'inpaint_padding': self.inpaint_padding_spinbox.value(),
-            # Optimasi CPU
-            'cpu_threads': 4,  # Sesuaikan dengan jumlah core CPU Anda
-            'enable_mkldnn': True,  # Optimasi untuk CPU Intel
-            'orientation_mode': self.typeset_orientation,
-            'create_bubble': getattr(self, 'create_bubble_checkbox', None) and self.create_bubble_checkbox.isChecked(),
-            'use_background_box': use_background_box_value,
-            'text_effect': 'none',
-            'effect_intensity': 20.0,
-            'bezier_points': None,
-            'alignment': self.typeset_alignment,
-            'line_spacing': line_spacing_value,
-            'char_spacing': char_spacing_value,
-            'text_outline': bool(self.typeset_outline_enabled),
-            'outline_width': float(self.typeset_outline_width),
-            'outline_color': self.typeset_outline_color.name() if isinstance(self.typeset_outline_color, QColor) else '#000000',
-            'outline_style': getattr(self, 'typeset_outline_style', 'stroke'),
-            'margins': {'top': 0, 'right': 0, 'bottom': 0, 'left': 0},
-            'manga_use_easy_detection': bool(getattr(self, 'manga_use_easy_detection_checkbox', None) and self.manga_use_easy_detection_checkbox.isChecked()),
-            'tesseract_use_easy_detection': bool(getattr(self, 'tesseract_use_easy_detection_checkbox', None) and self.tesseract_use_easy_detection_checkbox.isChecked()),
-            'use_auto_text_color': bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True)),
-            'constrain_text': constrain_text_value,
-        }
 
     def _default_cleanup_value(self, key: str):
         cleanup = SETTINGS.setdefault('cleanup', {})
@@ -8473,86 +7786,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         if getattr(self, 'char_spacing_value_label', None):
             self.char_spacing_value_label.setText(f"{spacing:.0f}%")
 
-    def _apply_typeset_settings(self, settings_dict):
-        if not settings_dict or not getattr(self, 'font_dropdown', None):
-            return
-        preferred_display = settings_dict.get('font_display')
-        self._populate_typeset_font_dropdown(preferred_display)
-
-        if getattr(self, 'font_size_spin', None):
-            with QSignalBlocker(self.font_size_spin):
-                self.font_size_spin.setValue(float(settings_dict.get('font_size', 24.0)))
-        if getattr(self, 'bold_toggle', None):
-            with QSignalBlocker(self.bold_toggle):
-                self.bold_toggle.setChecked(bool(settings_dict.get('bold', False)))
-        if getattr(self, 'italic_toggle', None):
-            with QSignalBlocker(self.italic_toggle):
-                self.italic_toggle.setChecked(bool(settings_dict.get('italic', False)))
-        if getattr(self, 'underline_toggle', None):
-            with QSignalBlocker(self.underline_toggle):
-                self.underline_toggle.setChecked(bool(settings_dict.get('underline', False)))
-        self._set_line_spacing_value(settings_dict.get('line_spacing', 1.1))
-        self._set_char_spacing_value(settings_dict.get('char_spacing', 100.0))
-
-        self.typeset_alignment = settings_dict.get('alignment', 'center')
-        self.typeset_orientation = settings_dict.get('orientation', 'horizontal')
-        self._update_alignment_buttons()
-        self._update_orientation_buttons()
-
-        self.typeset_outline_enabled = bool(settings_dict.get('outline', False))
-        if getattr(self, 'outline_toggle', None):
-            with QSignalBlocker(self.outline_toggle):
-                self.outline_toggle.setChecked(self.typeset_outline_enabled)
-
-        outline_width = settings_dict.get('outline_width')
-        if outline_width is None:
-            outline_width = SETTINGS.get('typeset', {}).get('outline_width', SETTINGS.get('typeset', {}).get('outline_thickness', self.typeset_outline_width))
-        try:
-            outline_width = float(outline_width)
-        except Exception:
-            outline_width = self.typeset_outline_width
-        outline_width = max(0.0, min(outline_width, 12.0))
-        self.typeset_outline_width = outline_width
-        if getattr(self, 'outline_width_spin', None):
-            with QSignalBlocker(self.outline_width_spin):
-                self.outline_width_spin.setValue(self.typeset_outline_width)
-
-        outline_color_value = settings_dict.get('outline_color')
-        if outline_color_value is None:
-            outline_color_value = SETTINGS.get('typeset', {}).get('outline_color', '#000000')
-        outline_color = QColor(outline_color_value) if outline_color_value else QColor('#000000')
-        if not outline_color.isValid():
-            outline_color = QColor('#000000')
-        self.typeset_outline_color = outline_color
-        style_val = (settings_dict.get('outline_style') or 'stroke')
-        if isinstance(style_val, str):
-            style_val = style_val.lower()
-        self.typeset_outline_style = style_val if style_val in ('stroke', 'glow') else 'stroke'
-        self._update_outline_color_button()
-        self._refresh_outline_controls_enabled()
-
-        color_value = settings_dict.get('color', '#000000')
-        color_obj = QColor(color_value)
-        if color_obj.isValid():
-            self.typeset_color = color_obj
-        self._update_color_button()
-        
-        # Gradient defaults
-        self.typeset_gradient_enabled = bool(settings_dict.get('gradient_enabled', False))
-        self.typeset_gradient_angle = float(settings_dict.get('gradient_angle', 0.0))
-        self.typeset_gradient_colors = list(settings_dict.get('gradient_colors', ["#FF0000", "#0000FF"]))
-        if getattr(self, 'gradient_group', None):
-            with QSignalBlocker(self.gradient_group):
-                self.gradient_group.setChecked(self.typeset_gradient_enabled)
-        if getattr(self, 'grad_angle_spin', None):
-            with QSignalBlocker(self.grad_angle_spin):
-                self.grad_angle_spin.setValue(self.typeset_gradient_angle)
-        if getattr(self, 'grad_color_list', None):
-             self._update_gradient_list_ui(self.typeset_gradient_colors)
-
-        self.typeset_font = self._build_current_font()
-        self._update_typeset_preview()
-
     def _apply_typeset_defaults(self):
         defaults = self.typeset_defaults or self._create_initial_typeset_defaults()
         self._apply_typeset_settings(defaults)
@@ -9343,29 +8576,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             pass
         return default_value
 
-    def _find_speech_bubble_mask_contour(self, full_cv_image, text_rect):
-        padding = 25
-        search_qt_rect = text_rect.adjusted(-padding, -padding, padding, padding)
-        h, w, _ = full_cv_image.shape
-        search_qt_rect.setLeft(max(0, search_qt_rect.left()))
-        search_qt_rect.setTop(max(0, search_qt_rect.top()))
-        search_qt_rect.setRight(min(w - 1, search_qt_rect.right()))
-        search_qt_rect.setBottom(min(h - 1, search_qt_rect.bottom()))
-        if search_qt_rect.width() <= 0 or search_qt_rect.height() <= 0: return None
-        search_area_cv = full_cv_image[search_qt_rect.top():search_qt_rect.bottom(), search_qt_rect.left():search_qt_rect.right()]
-        gray = cv2.cvtColor(search_area_cv, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 41, 5)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours: return None
-        text_center_relative = QPoint(text_rect.center().x() - search_qt_rect.left(), text_rect.center().y() - search_qt_rect.top())
-        candidate_contours = [cnt for cnt in contours if cv2.pointPolygonTest(cnt, (text_center_relative.x(), text_center_relative.y()), False) >= 0 and cv2.contourArea(cnt) > text_rect.width() * text_rect.height() * 0.5]
-        if not candidate_contours: return None
-        best_contour = max(candidate_contours, key=cv2.contourArea)
-        final_mask = np.zeros(full_cv_image.shape[:2], dtype=np.uint8)
-        shifted_contour = best_contour + np.array([search_qt_rect.left(), search_qt_rect.top()])
-        cv2.drawContours(final_mask, [shifted_contour], -1, 255, thickness=cv2.FILLED)
-        return final_mask
-
     def _run_onnx_inference(self, model_key, full_cv_image, settings=None):
         if not self.is_onnx_available: return None
         model_info = self.dl_models[model_key]
@@ -9461,58 +8671,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         except Exception as e:
             print(f"Error during YOLO inference: {e}"); return None
 
-    def detect_bubble_with_dl_model(self, full_cv_image, settings):
-        provider = settings['dl_provider']
-        model_file = settings['dl_model_file']
-        model_key = ""
-
-        if provider == "Kitsumed": model_key = 'kitsumed_onnx' if model_file == 'model_dynamic.onnx' else 'kitsumed_pt'
-        elif provider == "Ogkalu": model_key = 'ogkalu_pt'
-
-        if not model_key: return None
-        model_type = self.dl_models[model_key]['type']
-
-        if model_type == 'onnx':
-            # model_dynamic.onnx adalah ekspor YOLOv8-seg; output-nya tensor deteksi,
-            # bukan mask mentah. Decode lewat ultralytics bila tersedia.
-            if self.is_yolo_available:
-                return self._run_yolov8_inference(model_key, full_cv_image, settings)
-            return self._run_onnx_inference(model_key, full_cv_image, settings)
-        elif model_type == 'yolo': return self._run_yolov8_inference(model_key, full_cv_image, settings)
-        return None
-
     BUBBLE_MODEL_URLS = {
         'kitsumed_onnx': ("https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble/resolve/main/model_dynamic.onnx", "~109MB"),
         'kitsumed_pt':   ("https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble/resolve/main/model.pt", "~55MB"),
         'ogkalu_pt':     ("https://huggingface.co/ogkalu/comic-speech-bubble-detector-yolov8m/resolve/main/comic-speech-bubble-detector.pt", "~52MB"),
     }
-
-    def _ensure_bubble_model_ready(self, settings):
-        """Pastikan file model bubble detector ada; tawarkan download otomatis jika hilang."""
-        provider = settings.get('dl_provider')
-        model_file = settings.get('dl_model_file')
-        if provider == "Kitsumed":
-            model_key = 'kitsumed_onnx' if model_file == 'model_dynamic.onnx' else 'kitsumed_pt'
-        elif provider == "Ogkalu":
-            model_key = 'ogkalu_pt'
-        else:
-            return True
-
-        model_path = self.dl_models[model_key]['path']
-        if os.path.exists(model_path):
-            return True
-
-        url, size_label = self.BUBBLE_MODEL_URLS[model_key]
-        reply = QMessageBox.question(
-            self,
-            "Download Model",
-            f"Model bubble detector '{os.path.basename(model_path)}' tidak ditemukan.\n"
-            f"Apakah Anda ingin mengunduhnya secara otomatis dari Hugging Face ({size_label})?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self._download_model_file(url, model_path, self.start_interactive_batch_detection, "Unduh Model Bubble")
-        return False
 
     def _download_model_file(self, url, model_path, callback=None, title="Unduh Model"):
         progress_dlg = QProgressDialog(f"Mengunduh {os.path.basename(model_path)} dari Hugging Face...", "Batal", 0, 100, self)
@@ -9540,29 +8703,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         self._downloader_worker.finished.connect(on_finished)
         progress_dlg.canceled.connect(self._downloader_worker.cancel)
         self._downloader_worker.start()
-
-    def find_speech_bubble_mask(self, full_cv_image, text_rect, settings, for_saving=False):
-        if settings['use_dl_detector']:
-            if not for_saving:
-                self.statusBar().showMessage(f"Detecting bubble with {settings['dl_provider']} model...", 2000)
-                QApplication.processEvents()
-
-            combined_dl_mask = self.detect_bubble_with_dl_model(full_cv_image, settings)
-
-            if combined_dl_mask is not None:
-                contours, _ = cv2.findContours(combined_dl_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                text_center = (text_rect.center().x(), text_rect.center().y())
-
-                for cnt in contours:
-                    if cv2.pointPolygonTest(cnt, text_center, False) >= 0:
-                        single_bubble_mask = np.zeros_like(combined_dl_mask)
-                        cv2.drawContours(single_bubble_mask, [cnt], -1, 255, thickness=cv2.FILLED)
-                        return single_bubble_mask
-
-        if not for_saving:
-            self.statusBar().showMessage("Detecting bubble with contour method...", 2000)
-            QApplication.processEvents()
-        return self._find_speech_bubble_mask_contour(full_cv_image, text_rect)
 
     def draw_single_area(self, painter, area, source_pil_image, for_saving=False, settings=None):
         if not area or not getattr(area, 'visible', True):
@@ -9855,21 +8995,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                 painter.restore()
         finally:
             painter.restore()
-
-    def draw_area_bubble(self, painter, area):
-        path = QPainterPath()
-        cleanup_polygon = area.get_cleanup_polygon() if hasattr(area, 'get_cleanup_polygon') else None
-        if cleanup_polygon:
-            path.addPolygon(QPolygonF(cleanup_polygon))
-        else:
-            rect = QRectF(area.get_cleanup_rect() if hasattr(area, 'get_cleanup_rect') else area.rect)
-            radius = max(8.0, min(rect.width(), rect.height()) * 0.18)
-            path.addRoundedRect(rect, radius, radius)
-
-        painter.setBrush(QBrush(area.get_bubble_fill_color()))
-        outline_width = max(1.0, float(getattr(area, 'bubble_outline_width', 3.0) or 3.0))
-        painter.setPen(QPen(area.get_bubble_outline_color(), outline_width))
-        painter.drawPath(path)
 
     def _ideal_outline_color(self, base_color: QColor) -> QColor:
         if not isinstance(base_color, QColor) or not base_color.isValid():
@@ -11094,90 +10219,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
 
-    def undo_last_action(self):
-        """Navigasi mundur satu langkah di undo history timeline."""
-        if self._undo_history_idx >= 0:
-            restore_idx = self._undo_history_idx
-            self._restore_snapshot(restore_idx)
-            self._undo_history_idx = restore_idx - 1
-            self.update_undo_redo_buttons_state()
-            self._refresh_undo_timeline()
-            if hasattr(self, 'image_label'):
-                self.image_label.clear_selection()
-        else:
-            # Fallback legacy: pop satu area
-            if self.typeset_areas:
-                undone_area = self.typeset_areas.pop()
-                self.redo_stack.append(undone_area)
-                if self.selected_typeset_area is undone_area:
-                    self.clear_selected_area()
-                self.redraw_all_typeset_areas()
-                self.update_undo_redo_buttons_state()
-                if hasattr(self, 'image_label'):
-                    self.image_label.clear_selection()
-
-    def redo_last_action(self):
-        """Navigasi maju satu langkah di undo history timeline."""
-        if self._undo_history and self._undo_history_idx < len(self._undo_history) - 1:
-            self._restore_snapshot(self._undo_history_idx + 1)
-        else:
-            # Fallback legacy redo
-            if self.redo_stack:
-                redone_area = self.redo_stack.pop()
-                self.typeset_areas.append(redone_area)
-                self.set_selected_area(redone_area)
-                self.redraw_all_typeset_areas()
-                self.update_undo_redo_buttons_state()
-                if hasattr(self, 'image_label'):
-                    self.image_label.clear_selection()
-
-    def update_undo_redo_buttons_state(self):
-        """Update enabled state tombol Undo dan Redo berdasarkan snapshot history."""
-        can_undo = self._undo_history_idx >= 0
-        can_redo = bool(self._undo_history) and self._undo_history_idx < len(self._undo_history) - 1
-        self.undo_button.setEnabled(can_undo)
-        self.redo_button.setEnabled(can_redo)
-
     # ── Feature #1: Snapshot History Methods ────────────────────────────────────
-
-    def _push_undo_snapshot(self, label="Action"):
-        """
-        Ambil snapshot deep-copy dari typeset_areas sebelum perubahan.
-        Push ke _undo_history dan potong redo branch.
-        """
-        import copy as _copy
-        try:
-            snapshot = []
-            for area in self.typeset_areas:
-                if hasattr(area, 'to_payload'):
-                    snapshot.append(area.to_payload())
-                else:
-                    snapshot.append(_copy.deepcopy(area))
-            current_key = self.get_current_data_key() if self.current_image_path else None
-            current_record = self.all_typeset_data.get(current_key, {}) if current_key else {}
-            image_png = self._encode_cleaned_image(self.current_image_pil) if self.current_image_pil is not None else None
-            pre_inpaint_png = current_record.get('pre_inpaint_image_png') if isinstance(current_record, dict) else None
-            snapshot_payload = {
-                'areas': snapshot,
-                'image_png': image_png,
-                'had_cleaned_image': bool(isinstance(current_record, dict) and current_record.get('cleaned_image_png')),
-                'pre_inpaint_image_png': pre_inpaint_png,
-            }
-
-            # Potong redo branch (state setelah posisi aktif)
-            if self._undo_history_idx < len(self._undo_history) - 1:
-                self._undo_history = self._undo_history[:self._undo_history_idx + 1]
-
-            self._undo_history.append({'label': label, 'snapshot': snapshot_payload})
-
-            # Cap ke max history
-            if len(self._undo_history) > self._MAX_UNDO_HISTORY:
-                self._undo_history = self._undo_history[-self._MAX_UNDO_HISTORY:]
-
-            self._undo_history_idx = len(self._undo_history) - 1
-            self._refresh_undo_timeline()
-        except Exception as e:
-            print(f"[UndoTimeline] Push snapshot failed: {e}")
 
     def _restore_snapshot(self, idx):
         """Restore typeset_areas dari snapshot ke-idx di _undo_history."""
@@ -11239,64 +10281,12 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         except Exception as e:
             print(f"[UndoTimeline] Restore snapshot failed: {e}")
 
-    def _refresh_undo_timeline(self):
-        """Perbarui QListWidget timeline dengan seluruh undo history."""
-        if not hasattr(self, 'undo_timeline_list'):
-            return
-        lst = self.undo_timeline_list
-        lst.blockSignals(True)
-        lst.clear()
-
-        from PyQt5.QtGui import QColor
-        from PyQt5.QtWidgets import QListWidgetItem
-
-        if not self._undo_history:
-            empty_item = QListWidgetItem("  (kosong)")
-            empty_item.setForeground(QColor(theme.COLORS['muted']))
-            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsSelectable)
-            lst.addItem(empty_item)
-            lst.blockSignals(False)
-            return
-
-        for i, entry in enumerate(self._undo_history):
-            is_current = (i == self._undo_history_idx)
-            is_redo    = (i > self._undo_history_idx)
-
-            if is_current:
-                prefix = "▶"
-                color  = theme.COLORS['accent']   # state aktif
-            elif is_redo:
-                prefix = "◁"
-                color  = theme.COLORS['muted']   # state yang bisa di-redo
-            else:
-                prefix = "·"
-                color  = theme.COLORS['muted']   # masa lalu
-
-            item = QListWidgetItem(f"  {prefix}  {i + 1}. {entry['label']}")
-            item.setData(Qt.UserRole, i)
-            item.setForeground(QColor(color))
-            lst.addItem(item)
-
-        # Scroll ke item aktif
-        if 0 <= self._undo_history_idx < lst.count():
-            lst.scrollToItem(lst.item(self._undo_history_idx))
-            lst.setCurrentRow(self._undo_history_idx)
-
-        lst.blockSignals(False)
-
     def _on_timeline_item_clicked(self, item):
         """Handler saat user klik item di undo timeline — jump ke snapshot tersebut."""
         idx = item.data(Qt.UserRole)
         if idx is None:
             return
         self._restore_snapshot(int(idx))
-
-    def _clear_undo_history(self):
-        """Bersihkan seluruh undo history timeline."""
-        self._undo_history.clear()
-        self._undo_history_idx = -1
-        self._refresh_undo_timeline()
-        self.update_undo_redo_buttons_state()
 
     def _snapshot_current_image_state(self):
         if not self.current_image_path:
@@ -11319,33 +10309,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                 if payload.get(image_state_key):
                     record[image_state_key] = payload.get(image_state_key)
             serialized[key] = record
-        return serialized
-    
-    def _collect_project_settings(self):
-        try:
-            settings = self.get_current_settings() or {}
-        except Exception:
-            settings = {}
-        serialized = {}
-        for key, value in settings.items():
-            if isinstance(value, QFont):
-                serialized[key] = TypesetArea.font_to_dict(value)
-            elif isinstance(value, QColor):
-                serialized[key] = value.name()
-            elif isinstance(value, (QRect, QRectF)):
-                serialized[key] = rect_to_dict(value)
-            elif isinstance(value, (QPoint, QPointF)):
-                serialized[key] = {'x': coerce_int(value.x()), 'y': coerce_int(value.y())}
-            elif isinstance(value, (set, tuple)):
-                serialized[key] = list(value)
-            else:
-                serialized[key] = value
-        serialized['cleanup'] = {
-            'use_background_box': self._default_cleanup_value('use_background_box'),
-            'use_inpaint': self._default_cleanup_value('use_inpaint'),
-            'constrain_text': self._default_cleanup_value('constrain_text'),
-            'apply_mode': self._default_cleanup_value('apply_mode'),
-        }
         return serialized
     
     def _build_project_payload(self):
@@ -11432,56 +10395,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                     record[image_state_key] = payload.get(image_state_key)
             result[resolved_key] = record
         return result, warnings
-
-    def _sanitize_history_entries(self, history_data, area_lookup, warnings):
-        sanitized = []
-        max_counter = 0
-        for entry in history_data or []:
-            if not isinstance(entry, dict):
-                warnings.append("Ignored malformed history entry.")
-                continue
-            hist_id = entry.get('history_id') or entry.get('id')
-            if hist_id is None:
-                warnings.append("A history entry without identifier was skipped.")
-                continue
-            hist_id = str(hist_id)
-            if hist_id.startswith('H') and hist_id[1:].isdigit():
-                numeric = int(hist_id[1:])
-                max_counter = max(max_counter, numeric)
-            elif hist_id.isdigit():
-                numeric = int(hist_id)
-                hist_id = f"H{numeric:05d}"
-                max_counter = max(max_counter, numeric)
-            else:
-                warnings.append(f"History id '{hist_id}' has unexpected format.")
-            record = dict(entry)
-            record['history_id'] = hist_id
-            record['id'] = hist_id
-            record['timestamp'] = float(record.get('timestamp', time.time()))
-            record['original_text'] = record.get('original_text', '')
-            record['translated_text'] = record.get('translated_text', '')
-            record['translation_style'] = record.get('translation_style', '')
-            area_info = area_lookup.get(hist_id)
-            if area_info:
-                record['image_key'] = area_info['image_key']
-                area = area_info['area']
-                if record['original_text']:
-                    area.original_text = record['original_text']
-                if record['translation_style']:
-                    area.translation_style = record['translation_style']
-                if record['translated_text']:
-                    # Only populate text from history when the area has no text of
-                    # its own (e.g. area created without going through the normal
-                    # translation pipeline).  When typeset_data already loaded a
-                    # non-empty text into the area, trust that value — it reflects
-                    # any manual edits the user made after the AI translation.
-                    if not (area.text or '').strip():
-                        area.update_plain_text(record['translated_text'])
-            else:
-                if 'image_key' not in record:
-                    warnings.append(f"History entry {hist_id} has no matching area.")
-            sanitized.append(record)
-        return sanitized, max_counter
 
     def _sanitize_review_entries(self, review_data):
         sanitized = []
@@ -13382,27 +12295,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             elif event.angleDelta().y() > 0: self.load_prev_image()
         super().wheelEvent(event)
 
-    def on_dl_detector_state_changed(self, state):
-        is_checked = (state == Qt.Checked)
-        provider = self.dl_model_provider_combo.currentText()
-        model_file = self.dl_model_file_combo.currentText()
-        is_available = True
-        tooltip = f"Uses {provider}'s {model_file} for advanced bubble detection."
-
-        if not model_file: is_available = False; tooltip = "No model selected or available."
-        elif model_file.endswith('.onnx'):
-            if not self.is_onnx_available: is_available = False; tooltip = "Disabled: 'onnxruntime' not installed."
-            elif not os.path.exists(self.dl_models['kitsumed_onnx']['path']): is_available = False; tooltip = f"Disabled: Model file not found."
-        elif model_file.endswith('.pt'):
-            if not self.is_yolo_available: is_available = False; tooltip = "Disabled: 'ultralytics' not installed."
-            else:
-                key = 'ogkalu_pt' if provider == 'Ogkalu' else 'kitsumed_pt'
-                if not os.path.exists(self.dl_models[key]['path']): is_available = False; tooltip = f"Disabled: Model file not found."
-
-        self.dl_bubble_detector_checkbox.setEnabled(is_available)
-        self.dl_bubble_detector_checkbox.setToolTip(tooltip)
-        if not is_available: self.dl_bubble_detector_checkbox.setChecked(False)
-
     def on_dl_provider_changed(self, provider):
         self.dl_model_file_combo.clear()
         if provider == "Kitsumed":
@@ -13468,188 +12360,12 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         provider, model_id = self.get_selected_model_name()
         return self.AI_PROVIDERS.get(provider, {}).get(model_id, {})
 
-    def split_extended_bubbles(self, detections, split_threshold=2.5):
-        new_detections = []
-        for item in detections:
-            poly = item['polygon']
-            bbox = poly.boundingRect()
-            if bbox.width() <= 0 or bbox.height() <= 0: continue
-            aspect_ratio = bbox.width() / bbox.height()
-
-            if aspect_ratio > split_threshold:
-                mid_x = bbox.left() + bbox.width() // 2
-                poly1 = QPolygon(QRect(bbox.left(), bbox.top(), bbox.width() // 2, bbox.height()))
-                poly2 = QPolygon(QRect(mid_x, bbox.top(), bbox.width() // 2, bbox.height()))
-                new_detections.append({'polygon': poly1, 'text': None}) # Teks akan di-OCR ulang
-                new_detections.append({'polygon': poly2, 'text': None})
-            elif (1 / aspect_ratio) > split_threshold:
-                mid_y = bbox.top() + bbox.height() // 2
-                poly1 = QPolygon(QRect(bbox.left(), bbox.top(), bbox.width(), bbox.height() // 2))
-                poly2 = QPolygon(QRect(bbox.left(), mid_y, bbox.width(), bbox.height() // 2))
-                new_detections.append({'polygon': poly1, 'text': None})
-                new_detections.append({'polygon': poly2, 'text': None})
-            else:
-                new_detections.append(item)
-        return new_detections
-
-    def on_detection_complete(self, image_path, detections):
-        self.detected_items_map[image_path] = detections
-        current_key = self._resolve_detection_key(self.get_current_data_key())
-        if current_key == image_path:
-            self.image_label.set_detected_items(detections)
-
-    def on_detection_finished(self):
-        self.set_ui_for_detection(False)
-        self.overall_progress_bar.setVisible(False)
-        if self.get_current_settings()['auto_split_bubbles']:
-            self.statusBar().showMessage("Splitting extended items...", 3000)
-            QApplication.processEvents()
-            for path, detections in self.detected_items_map.items():
-                self.detected_items_map[path] = self.split_extended_bubbles(detections)
-
-        if self.last_detection_mode == "Text" and self.detected_items_map:
-            self.preview_mode_active = True
-            self.cancel_detection_button.setText("Cancel Preview")
-            self.cancel_detection_button.setVisible(True)
-            self.file_list_widget.setEnabled(True)
-            self.prev_button.setEnabled(True)
-            self.next_button.setEnabled(True)
-        else:
-            self.preview_mode_active = False
-            self.cancel_detection_button.setVisible(False)
-            self.cancel_detection_button.setText("Cancel Detection")
-
-        self.statusBar().showMessage("Detection complete. Please review the highlighted areas.", 5000)
-        self.show_toast("Detection complete", "Please review the highlighted areas.", kind="success")
-        self.show_desktop_notification("Bubble Detection Selesai", "Proses pendeteksian balon teks/teks otomatis telah selesai.")
-        self.set_ui_for_confirmation(True)
-
-    def process_confirmed_detections(self):
-        self.statusBar().showMessage("Processing confirmed items...")
-        QApplication.processEvents()
-
-        total_items = sum(len(items) for items in self.detected_items_map.values())
-        if total_items == 0:
-            self.show_toast("No items", "No items were confirmed for processing.", kind="info")
-            self.cancel_interactive_batch()
-            return
-
-        # Gunakan settings user apa adanya (OCR engine, mode translate, dan model AI
-        # mengikuti pilihan di UI — tidak ada paksaan pipeline khusus untuk batch)
-        settings = self.get_current_settings()
-
-        # Simpan halaman saat ini untuk kembali nanti
-        current_image_path = self.current_image_path
-        current_pdf_page = self.current_pdf_page
-
-        try:
-            for image_path, detections in self.detected_items_map.items():
-                # Muat gambar untuk halaman ini jika berbeda dengan yang sedang aktif
-                if image_path != self.get_current_data_key():
-                    # Untuk file gambar biasa
-                    if not image_path.lower().endswith('.pdf'):
-                        if image_path != self.current_image_path:
-                            # Simpan data halaman saat ini
-                            current_key = self.get_current_data_key()
-                            if current_key:
-                                self._update_typeset_record(
-                                    current_key,
-                                    areas=list(self.typeset_areas),
-                                    redo=list(self.redo_stack),
-                                )
-                            
-                            # Muat gambar baru
-                            self.current_image_path = image_path
-                            self.load_image(image_path)
-                    # Untuk PDF (handle khusus)
-                    elif '::page::' in image_path:
-                        # Ekstrak path dan page number
-                        path_part, page_str = image_path.split('::page::')
-                        page_num = int(page_str)
-                        
-                        # Muat halaman PDF yang sesuai
-                        if self.pdf_document and self.pdf_document.name == path_part:
-                            self.load_pdf_page(page_num)
-                        else:
-                            # Jika PDF belum dimuat, muat dulu
-                            self.load_item(path_part)
-                            self.load_pdf_page(page_num)
-
-                # Proses setiap deteksi untuk halaman ini
-                for item in detections:
-                    polygon = item['polygon']
-                    text = item['text'] # Bisa None jika dari Bubble Detect
-                    # Salin settings per job agar flag paksaan AI-only ikut terpakai
-                    # dan worker tidak saling menimpa dict yang sama
-                    self.process_confirmed_polygon(polygon, pre_detected_text=text, settings_override=dict(settings))
-                    
-        except Exception as e:
-            self.on_worker_error(f"Error processing batch: {e}")
-        finally:
-            # Kembali ke halaman asal
-            try:
-                if current_image_path != self.get_current_data_key():
-                    if current_image_path.lower().endswith('.pdf') and current_pdf_page != -1:
-                        self.load_pdf_page(current_pdf_page)
-                    else:
-                        self.load_item(current_image_path)
-            except:
-                pass
-
-        # Worker sudah mulai dari process_confirmed_polygon, jadi kita hanya perlu membersihkan UI
-        self.cancel_interactive_batch()
-
-    def remove_detected_item(self, index_to_remove):
-        current_key = self.get_current_data_key()
-        resolved_key = self._resolve_detection_key(current_key) or current_key
-        if resolved_key in self.detected_items_map and 0 <= index_to_remove < len(self.detected_items_map[resolved_key]):
-            del self.detected_items_map[resolved_key][index_to_remove]
-            if self.detected_items_map.get(resolved_key):
-                self.image_label.set_detected_items(self.detected_items_map[resolved_key])
-            else:
-                self.image_label.clear_detected_items()
-            self.update_confirmation_button_text()
-
-    def set_ui_for_detection(self, is_detecting):
-        self.batch_process_button.setEnabled(not is_detecting)
-        self.file_list_widget.setEnabled(not is_detecting)
-        self.prev_button.setEnabled(not is_detecting); self.next_button.setEnabled(not is_detecting)
-        if is_detecting:
-            self.cancel_detection_button.setText("Cancel Detection")
-            self.cancel_detection_button.setVisible(True)
-        self.overall_progress_bar.setVisible(is_detecting)
-        if is_detecting: self.overall_progress_bar.setValue(0); self.statusBar().showMessage("Starting detection...")
-        else: self.overall_progress_bar.setVisible(False)
-
     def set_ui_for_confirmation(self, is_confirming):
         self.is_in_confirmation_mode = is_confirming
         self.batch_process_button.setEnabled(not is_confirming)
         self.confirm_items_button.setVisible(is_confirming)
         if is_confirming: self.update_confirmation_button_text()
         self._refresh_detection_overlay()
-
-    def _resolve_detection_key(self, key):
-        if not key:
-            return None
-        if key in self.detected_items_map:
-            return key
-        if "::page::" in key:
-            base_key = key.split('::page::')[0]
-            if base_key in self.detected_items_map:
-                return base_key
-        return None
-
-    def _refresh_detection_overlay(self):
-        if not self.image_label:
-            return
-        if not self.is_in_confirmation_mode:
-            self.image_label.clear_detected_items()
-            return
-        current_key = self._resolve_detection_key(self.get_current_data_key())
-        if current_key and current_key in self.detected_items_map:
-            self.image_label.set_detected_items(self.detected_items_map[current_key])
-        else:
-            self.image_label.clear_detected_items()
 
     def update_confirmation_button_text(self):
         total_items = sum(len(items) for items in self.detected_items_map.values())
@@ -13663,58 +12379,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
                 return True
         return False
     
-    # --- Metode Baru untuk Bubble Finder ---
-    def find_bubble_in_rect(self, selection_rect):
-        """Menjalankan deteksi bubble pada area yang dipilih pengguna."""
-        if not self.current_image_pil:
-            return
-        
-        settings = self.get_current_settings()
-        if not settings.get('use_dl_detector'):
-            self.show_banner("bubble-detector-disabled", "Detector disabled", "Please enable 'Gunakan DL Model untuk Bubble' in the Cleanup tab to use this feature.", kind="warning")
-            self.image_label.clear_selection()
-            return
-            
-        self.statusBar().showMessage(f"Finding bubble with {settings['dl_provider']} model...")
-        QApplication.processEvents()
-        
-        try:
-            # Crop image
-            cropped_pil = self.current_image_pil.crop((
-                selection_rect.left(), selection_rect.top(),
-                selection_rect.right(), selection_rect.bottom()
-            ))
-            cropped_cv = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
-
-            # Run inference on the crop
-            mask = self.detect_bubble_with_dl_model(cropped_cv, settings)
-            
-            if mask is None or cv2.countNonZero(mask) == 0:
-                self.statusBar().showMessage("No bubble found in the selected area.", 3000)
-                self.image_label.clear_selection()
-                return
-
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                self.statusBar().showMessage("No valid bubble contour found.", 3000)
-                self.image_label.clear_selection()
-                return
-
-            # Ambil kontur terbesar
-            best_contour = max(contours, key=cv2.contourArea)
-
-            # Geser koordinat poligon kembali ke sistem koordinat gambar penuh
-            offset = selection_rect.topLeft()
-            full_image_polygon = QPolygon([QPoint(p[0][0] + offset.x(), p[0][1] + offset.y()) for p in best_contour])
-
-            # Tampilkan untuk konfirmasi
-            self.image_label.set_pending_item(full_image_polygon)
-            self.statusBar().showMessage("Bubble found! Right-click to confirm, Middle-click to cancel.", 5000)
-
-        except Exception as e:
-            self.on_worker_error(f"Error during interactive bubble detection: {e}")
-            self.image_label.clear_selection()
-
     def confirm_pending_item(self, polygon):
         """Memproses item yang telah dikonfirmasi oleh pengguna."""
         self.statusBar().showMessage("Item confirmed. Processing for OCR...", 3000)
@@ -14023,142 +12687,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             self.show_banner("paste-typeset-error", "Paste failed", str(e), kind="error")
             traceback.print_exc()
 
-    def detect_text_with_ocr_engine(self, cv_image, settings):
-        """Detect text regions and return recognized text polygons."""
-        engine = (settings.get('ocr_engine') or 'Tesseract')
-        advanced = settings.get('batch_text_detection_enabled', False)
-
-        try:
-            raw_results = self._collect_engine_detections(cv_image, settings, engine, advanced)
-        except Exception as e:
-            print(f"Error during text detection with {engine}: {e}")
-            raw_results = []
-
-        if not raw_results:
-            return []
-
-        if advanced:
-            raw_results = self._tighten_detection_polygons(cv_image, raw_results)
-
-        filtered = self._filter_detection_noise(raw_results, cv_image.shape, advanced=advanced)
-        if not filtered:
-            return []
-
-        merged = self._merge_text_boxes_to_blocks(filtered, cv_image.shape, strict=advanced)
-        if advanced and merged:
-            merged = self._tighten_detection_polygons(cv_image, merged)
-
-        final = self._filter_detection_noise(merged, cv_image.shape, advanced=advanced)
-        return final
-
-    def _collect_engine_detections(self, cv_image, settings, engine, advanced):
-        engine = engine or 'Tesseract'
-
-        if engine == 'DocTR':
-            return self._collect_doctr_detections(cv_image, advanced=advanced)
-        if engine == 'EasyOCR':
-            return self._collect_easyocr_detections(cv_image, advanced=advanced)
-        if engine == 'PaddleOCR':
-            return self._collect_paddleocr_detections(cv_image, advanced=advanced)
-        if engine == 'RapidOCR':
-            return self._collect_rapidocr_detections(cv_image, advanced=advanced)
-        if engine == 'Manga-OCR':
-            return self._collect_manga_detections(cv_image, settings, advanced=advanced)
-        if engine == 'AI_OCR':
-            regions = self._collect_morphological_regions(cv_image, advanced=advanced)
-            results = []
-            for _, polygon in regions:
-                recognized = self._recognize_polygon(cv_image, polygon, 'AI_OCR', settings)
-                results.append((recognized, polygon))
-            return results
-        if engine == 'Tesseract':
-            if advanced:
-                return self._collect_tesseract_advanced_detections(cv_image, settings, advanced=True)
-            return self._collect_tesseract_native_detections(cv_image, settings.get('ocr_lang') or 'eng')
-        return self._collect_easyocr_detections(cv_image, advanced=advanced)
-
-    def _collect_doctr_detections(self, cv_image, advanced=False):
-        if not self.doctr_predictor:
-            return []
-
-        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-        result = self.doctr_predictor([rgb_image])
-        items = []
-        height, width = cv_image.shape[:2]
-
-        for page in result.pages:
-            for block in page.blocks:
-                for line in block.lines:
-                    line_text = ' '.join(word.value for word in line.words)
-                    geometry = line.geometry
-                    x1 = int(geometry[0][0] * width)
-                    y1 = int(geometry[0][1] * height)
-                    x2 = int(geometry[1][0] * width)
-                    y2 = int(geometry[1][1] * height)
-                    polygon = QPolygon([
-                        QPoint(x1, y1),
-                        QPoint(x2, y1),
-                        QPoint(x2, y2),
-                        QPoint(x1, y2),
-                    ])
-                    items.append((line_text, polygon))
-
-        return items
-
-    def _collect_easyocr_detections(self, cv_image, advanced=False):
-        if not self.easyocr_reader:
-            return []
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        try:
-            ocr_result = self.easyocr_reader.readtext(gray, detail=1)
-        except Exception as e:
-            print(f"EasyOCR detection error: {e}")
-            return []
-
-        items = []
-        min_prob = 0.45 if advanced else 0.30
-        for bbox, text, prob in ocr_result:
-            if advanced and prob < min_prob:
-                continue
-            polygon = QPolygon([QPoint(int(p[0]), int(p[1])) for p in bbox])
-            items.append((text, polygon))
-        return items
-
-    def _collect_paddleocr_detections(self, cv_image, advanced=False):
-        if not self.paddle_ocr_reader:
-            return []
-        try:
-            ocr_result = self.paddle_ocr_reader.ocr(cv_image, cls=True)
-        except Exception as e:
-            print(f"PaddleOCR detection error: {e}")
-            return []
-
-        items = []
-        if ocr_result and ocr_result[0]:
-            for line in ocr_result[0]:
-                polygon = QPolygon([QPoint(int(p[0]), int(p[1])) for p in line[0]])
-                items.append((line[1][0], polygon))
-        return items
-
-    def _collect_rapidocr_detections(self, cv_image, advanced=False):
-        if not self.rapid_ocr_reader:
-            return []
-        try:
-            ocr_result, _ = self.rapid_ocr_reader(cv_image)
-        except Exception as e:
-            print(f"RapidOCR detection error: {e}")
-            return []
-
-        items = []
-        if ocr_result:
-            for box_info in ocr_result:
-                polygon = QPolygon([QPoint(int(p[0]), int(p[1])) for p in box_info[0]])
-                items.append((box_info[1], polygon))
-        return items
-
-    def _collect_easy_detection_regions(self, cv_image, advanced=False):
-        return self._collect_easyocr_detections(cv_image, advanced=advanced)
-
     def _collect_morphological_regions(self, cv_image, advanced=False):
         gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -14191,78 +12719,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             items.append(('', polygon))
         return items
 
-    def _collect_manga_detections(self, cv_image, settings, advanced=False):
-        if not self.manga_ocr_reader:
-            return []
-
-        use_easy = settings.get('manga_use_easy_detection', True)
-        if use_easy:
-            regions = self._collect_easy_detection_regions(cv_image, advanced=advanced)
-        else:
-            regions = self._collect_morphological_regions(cv_image, advanced=advanced)
-
-        results = []
-        for text, polygon in regions:
-            recognized = self._recognize_polygon(cv_image, polygon, 'Manga-OCR', settings)
-            results.append((recognized or text, polygon))
-        return results
-
-    def _collect_tesseract_native_detections(self, cv_image, lang_code):
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        try:
-            config_str = '--oem 1 --psm 3'
-            writable_path = get_writable_tessdata_path()
-            if writable_path and os.path.exists(writable_path):
-                config_str += f' --tessdata-dir "{writable_path}"'
-            data = pytesseract.image_to_data(gray, lang=lang_code, config=config_str, output_type=pytesseract.Output.DICT)
-        except Exception as e:
-            print(f"Tesseract detection error: {e}")
-            return []
-
-        blocks = {}
-        for i in range(len(data['text'])):
-            text = (data['text'][i] or '').strip()
-            if not text:
-                continue
-            try:
-                conf = float(data['conf'][i])
-            except ValueError:
-                conf = 0.0
-            if conf < 45:
-                continue
-            block_key = (data.get('page_num', [0])[i], data['block_num'][i])
-            rect = QRect(data['left'][i], data['top'][i], data['width'][i], data['height'][i])
-            blocks.setdefault(block_key, {'texts': [], 'rects': []})
-            blocks[block_key]['texts'].append(text)
-            blocks[block_key]['rects'].append(rect)
-
-        results = []
-        for info in blocks.values():
-            if not info['texts']:
-                continue
-            combined_text = ' '.join(info['texts'])
-            union_rect = info['rects'][0]
-            for rect in info['rects'][1:]:
-                union_rect = union_rect.united(rect)
-            polygon = QPolygon([
-                QPoint(union_rect.left(), union_rect.top()),
-                QPoint(union_rect.right(), union_rect.top()),
-                QPoint(union_rect.right(), union_rect.bottom()),
-                QPoint(union_rect.left(), union_rect.bottom()),
-            ])
-            results.append((combined_text, polygon))
-        return results
-
-    def _collect_tesseract_advanced_detections(self, cv_image, settings, advanced=False):
-        if settings.get('tesseract_use_easy_detection', True):
-            regions = self._collect_easy_detection_regions(cv_image, advanced=advanced)
-            results = []
-            for _, polygon in regions:
-                text = self._recognize_polygon(cv_image, polygon, 'Tesseract', settings)
-                results.append((text, polygon))
-            return results
-        return self._collect_tesseract_native_detections(cv_image, settings.get('ocr_lang') or 'eng')
-
     def _recognize_polygon(self, cv_image, polygon, engine_name, base_settings):
         rect = polygon.boundingRect()
         h, w = cv_image.shape[:2]
@@ -14283,61 +12739,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
             local_settings['ocr_lang'] = base_settings.get('ocr_lang') or 'eng'
         text = self.perform_ocr(crop, local_settings)
         return text.strip()
-
-    def _filter_detection_noise(self, items, image_shape, advanced=False):
-        if not items:
-            return []
-        h, w = image_shape[:2]
-        min_area_ratio = 0.00004 if advanced else 0.00003
-        min_area = max(80, min_area_ratio * w * h)
-        max_area_ratio = 0.85 if advanced else 0.9
-        filtered = []
-        for text, polygon in items:
-            cleaned = self._clean_detected_text(text)
-            if not cleaned:
-                continue
-            if len(cleaned) <= 1 and not cleaned.isalnum():
-                continue
-            if re.fullmatch(r'[\W_]+', cleaned):
-                continue
-            letters = sum(ch.isalpha() for ch in cleaned)
-            digits = sum(ch.isdigit() for ch in cleaned)
-            if advanced:
-                if letters == 0 and digits == 0 and len(cleaned) <= 3:
-                    continue
-                if re.fullmatch(r'[!\?\-•°??????]+', cleaned):
-                    continue
-                repeated = re.search(r'(.)\1{2,}', cleaned)
-                if repeated and len(cleaned) <= 5:
-                    if repeated.group(1) != '~':
-                        continue
-            unique_chars = set(cleaned)
-            if len(unique_chars) == 1 and cleaned[0] in "!?…??????#@*/":
-                continue
-            punctuation = sum(1 for ch in cleaned if not ch.isalnum() and not ch.isspace())
-            if advanced and punctuation / max(1, len(cleaned)) > 0.6:
-                continue
-
-            rect = polygon.boundingRect()
-            area = rect.width() * rect.height()
-            if area < min_area:
-                continue
-            if area > w * h * max_area_ratio:
-                continue
-            if rect.width() < 6 or rect.height() < 6:
-                continue
-            aspect_ratio = rect.width() / max(1, rect.height())
-            if advanced and (aspect_ratio > 9.0 or aspect_ratio < 0.12):
-                continue
-
-            filtered.append((cleaned, self._clamp_polygon(polygon, w, h)))
-        return filtered
-
-    def _clean_detected_text(self, text):
-        if not text:
-            return ''
-        cleaned = re.sub(r'\s+', ' ', text)
-        return cleaned.strip()
 
     def _clamp_polygon(self, polygon, width, height):
         clamped_points = []
@@ -14447,16 +12848,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         if bottom < y:
             bottom = y
         return QRect(x, y, (right - x) + 1, (bottom - y) + 1)
-
-    def _tighten_detection_polygons(self, cv_image, items):
-        if not items:
-            return []
-        h, w = cv_image.shape[:2]
-        refined = []
-        for text, polygon in items:
-            refined_polygon = self._refine_polygon_with_image(cv_image, polygon)
-            refined.append((text, self._clamp_polygon(refined_polygon, w, h)))
-        return refined
 
     def _refine_polygon_with_image(self, cv_image, polygon):
         rect = polygon.boundingRect()
@@ -15452,118 +13843,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, QMainWindow):
         self._downloader_worker.finished.connect(on_finished)
         progress_dlg.canceled.connect(self._downloader_worker.cancel)
         self._downloader_worker.start()
-
-    def detect_panels_yolo(self):
-        if not self.current_image_path:
-            self.show_banner("panel-detect-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
-            return
-
-        model_path = self.panel_model_path_input.text().strip()
-        if not model_path:
-            model_path = os.path.join(ROOT_DIR, "src", "models", "manga_panel_detector_fp32.pt")
-        
-        # Jika file model belum ada, lakukan download otomatis!
-        if not os.path.exists(model_path):
-            reply = QMessageBox.question(
-                self,
-                "Download Model",
-                "Model YOLO26 panel detector tidak ditemukan.\nApakah Anda ingin mengunduhnya secara otomatis dari Hugging Face (~10MB)?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                self.download_panel_model(model_path, self.detect_panels_yolo)
-                return
-            else:
-                return
-
-        from src.core.config import YOLO
-        if YOLO is None:
-            self.show_banner("panel-detect-dependency", "Dependency error", "Pustaka 'ultralytics' (YOLO) tidak terpasang atau tidak terdeteksi.", kind="error")
-            return
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.statusBar().showMessage("Menjalankan deteksi panel dengan YOLO...")
-        QApplication.processEvents()
-
-        try:
-            cv_img = cv2.imread(self.current_image_path)
-            if cv_img is None:
-                raise Exception("Gagal membaca file gambar.")
-
-            use_gpu = self.use_gpu_checkbox.isChecked() and self.is_gpu_available
-            device = "cuda" if use_gpu else "cpu"
-            
-            model = YOLO(model_path)
-            results = model(cv_img, verbose=False, device=device)
-            
-            detected_rects = []
-            if results and results[0].boxes is not None:
-                for box in results[0].boxes:
-                    xyxy = box.xyxy[0].cpu().numpy()
-                    x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-                    # Class 0: panel, Class 1: text
-                    # Hanya ambil objek jika kelasnya adalah panel (0)
-                    cls_id = int(box.cls[0].cpu().numpy())
-                    if cls_id == 0:
-                        detected_rects.append(QRect(x1, y1, x2 - x1, y2 - y1))
-            
-            self.detected_panels = detected_rects
-            self.statusBar().showMessage(f"Berhasil mendeteksi {len(detected_rects)} panel.", 3000)
-            
-            self.show_panels_checkbox.setChecked(True)
-            self.image_label.update()
-            
-            if detected_rects:
-                reply = QMessageBox.question(
-                    self,
-                    "Sort RTL",
-                    f"Ditemukan {len(detected_rects)} panel. Apakah Anda ingin langsung mengurutkan balon teks berdasarkan urutan baca RTL?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.Yes:
-                    self.sort_areas_rtl()
-            else:
-                self.show_toast("Deteksi selesai", "Tidak ditemukan panel pada halaman ini.", kind="info")
-
-        except Exception as e:
-            self.show_banner("panel-detect-error", "Panel detection failed", f"Gagal mendeteksi panel: {e}", kind="error")
-        finally:
-            QApplication.restoreOverrideCursor()
-
-    def detect_panels_opencv_fallback(self):
-        if not self.current_image_path:
-            return []
-        try:
-            cv_img = cv2.imread(self.current_image_path)
-            if cv_img is None:
-                return []
-            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            
-            panels = []
-            h, w = gray.shape
-            min_panel_area = (h * w) * 0.01
-            max_panel_area = (h * w) * 0.95
-            
-            for cnt in contours:
-                x, y, gw, gh = cv2.boundingRect(cnt)
-                area = gw * gh
-                if min_panel_area < area < max_panel_area:
-                    rect = QRect(x, y, gw, gh)
-                    is_dup = False
-                    for p in panels:
-                        intersect = p.intersected(rect)
-                        if intersect.width() * intersect.height() > 0.8 * area:
-                            is_dup = True
-                            break
-                    if not is_dup:
-                        panels.append(rect)
-            
-            return panels
-        except Exception as e:
-            print(f"Error in OpenCV panel detection fallback: {e}")
-            return []
 
     def _sort_panels_rtl(self, panels):
         if not panels:

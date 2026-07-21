@@ -5,13 +5,7 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
-import cv2
-import numpy as np
-import os
-from PIL import Image
-from PyQt5.QtCore import QRect, QThread, Qt
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QApplication
+from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class InpaintMixin:

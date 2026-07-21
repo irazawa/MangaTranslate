@@ -5,24 +5,7 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
-from PyQt5.QtCore import QRect, QSize, Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
-    QAction,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QSlider,
-    QVBoxLayout,
-    QWidget,
-)
-from functools import partial
-from src.ui import theme
+from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class LayerMixin:

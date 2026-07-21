@@ -5,19 +5,7 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
-import copy
-from PyQt5.QtCore import QSignalBlocker, Qt
-from PyQt5.QtGui import QFont
-from PyQt5.QtWidgets import (
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QInputDialog,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QVBoxLayout,
-)
+from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class FontMixin:
