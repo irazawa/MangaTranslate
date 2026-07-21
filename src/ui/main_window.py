@@ -1182,6 +1182,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         for name, mid in common_models:
              combo.addItem(name, mid)
 
+
     def refresh_scene_ui_state(self):
         # Update selector
         current_idx = -1
@@ -7357,19 +7358,6 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         parts = [t.strip() for t in texts if t and t.strip()]
         return ' '.join(parts)
     
-    def import_font(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Font", "", "Fonts (*.ttf *.otf *.ttc *.otc)"
-        )
-        if file_path:
-            try:
-                display_name = self.font_manager.import_font(file_path)
-                self.show_toast("Font imported", f"Font '{display_name}' imported successfully.", kind="success")
-                self._populate_typeset_font_dropdown(display_name)
-                self.typeset_font = self._build_current_font()
-            except Exception as e:
-                self.show_banner("font-import-error", "Font import failed", str(e), kind="error")
-
     def _on_opacity_slider_changed(self, value):
         area = self.selected_typeset_area
         if not area or area not in self.typeset_areas:
