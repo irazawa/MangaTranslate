@@ -2,7 +2,7 @@
 
 MangaTranslate adalah aplikasi desktop Windows-first berbasis Python dan PyQt5 untuk membantu workflow OCR, penerjemahan, clean-up, dan typesetting halaman manga atau komik. Aplikasi ini mendukung input gambar, folder, dan PDF, dengan pemrosesan berat dijalankan di background worker agar antarmuka tetap responsif.
 
-Versi saat ini: `14.9.4`.
+Versi saat ini: `14.9.4.1`.
 
 ## Fitur Utama
 
