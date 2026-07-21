@@ -16843,25 +16843,31 @@ class MangaOCRApp(QMainWindow):
             self.show_toast("Selesai", str(msg), kind="info")
             return
 
+        applied = 0
         for area_payload in created_areas:
-            rect = area_payload['rect']
-            text = area_payload['text']
-            original_text = area_payload['original_text']
-            polygon = area_payload['polygon']
-            settings = area_payload['settings']
-            
-            self._create_typeset_area(
-                rect=rect,
-                text=text,
-                settings=settings,
-                polygon=polygon,
-                original_text=original_text,
-                is_manual=False
-            )
-        
+            try:
+                self._create_typeset_area(
+                    rect=area_payload['rect'],
+                    text=area_payload['text'],
+                    settings=area_payload['settings'],
+                    polygon=area_payload['polygon'],
+                    original_text=area_payload['original_text'],
+                    is_manual=False
+                )
+                applied += 1
+            except Exception as e:
+                # Satu area gagal tidak boleh menggagalkan seluruh halaman
+                print(f"Gagal membuat area typeset: {e}")
+
         self.redraw_all_typeset_areas(refresh_layers=True)
-        self.statusBar().showMessage(f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", 4000)
-        self.show_toast("Page translated", f"Berhasil menerjemahkan {len(created_areas)} balon teks di halaman ini.", kind="success")
+        if applied < len(created_areas):
+            self.show_banner(
+                "full-page-partial", "Sebagian area gagal",
+                f"{applied} dari {len(created_areas)} balon berhasil diterapkan ke canvas.",
+                kind="warning"
+            )
+        self.statusBar().showMessage(f"Berhasil menerjemahkan {applied} balon teks di halaman ini.", 4000)
+        self.show_toast("Page translated", f"Berhasil menerjemahkan {applied} balon teks di halaman ini.", kind="success")
 
     def on_full_page_translation_error(self, err_msg):
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
@@ -16942,11 +16948,12 @@ class FullPageTranslateWorker(QThread):
                 
                 prompt = f"""
 You are an expert manga translator. Analyze this manga page image.
-1. Identify all text regions (dialogue bubbles, narration box, floating text, SFX).
-2. For each region:
+1. Identify all text regions that need translation: dialogue bubbles, thought bubbles, narration boxes, and floating dialogue text.
+2. IGNORE sound effects (SFX / onomatopoeia drawn as stylized artistic text over the artwork) — do NOT include them in the output.
+3. For each region:
    - Perform OCR (detect the original language, e.g. Japanese, Chinese, or English).
    - Translate the text into {target_lang}.
-3. Return the results ONLY as a valid JSON array of objects. Do not wrap in markdown code blocks.
+4. Return the results ONLY as a valid JSON array of objects. Do not wrap in markdown code blocks.
 Each object MUST have the following keys:
 - "box": [x, y, width, height] (integers representing the bounding box in pixels on the original image).
 - "original": the detected original text.
@@ -17140,7 +17147,7 @@ JSON format example:
                             
                         x, y, bw, bh = parsed_box
                         x = max(0, min(x, w - 1))
-                        y = max(0, min(y, h - y - 1) if h - y > 0 else 0)
+                        y = max(0, min(y, h - 1))
                         bw = max(5, min(bw, w - x))
                         bh = max(5, min(bh, h - y))
                         
@@ -17180,42 +17187,73 @@ JSON format example:
                     raise Exception(f"Gagal mem-parsing JSON dari AI Vision: {je}\nResponse: {response_text[:200]}")
 
             else:
-                self.progress.emit(10, "Menjalankan pendeteksian teks lokal...")
-                detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
-                
-                if not detected_regions:
-                    self.finished.emit([], "Tidak ditemukan teks di halaman ini.")
+                # ── Pipeline instan lokal (tanpa AI Vision) ──
+                # 1) Deteksi balon secara lokal (YOLO bubble detector bila tersedia —
+                #    sekaligus mengabaikan SFX karena model hanya mengenali balon dialog).
+                # 2) OCR SEKALI per balon — bukan per kontur mentah, mencegah spam API
+                #    saat engine AI_OCR dipakai.
+                # 3) Terjemahkan seluruh balon dalam SATU permintaan API (batch).
+                ocr_engine = self.settings.get('ocr_engine') or 'Tesseract'
+                self.progress.emit(10, "Mendeteksi balon teks (lokal)...")
+                bubble_regions = self._detect_bubble_regions_local(cv_image)
+
+                ocr_items = []  # list of (polygon, cleaned_text)
+                if bubble_regions:
+                    total_regions = len(bubble_regions)
+                    for idx, polygon in enumerate(bubble_regions):
+                        if self._is_cancelled:
+                            break
+                        self.progress.emit(15 + int((idx / total_regions) * 40), f"OCR balon {idx+1}/{total_regions}...")
+                        raw_text = self.main_app._recognize_polygon(cv_image, polygon, ocr_engine, self.settings)
+                        self._append_ocr_item(ocr_items, polygon, raw_text)
+                elif ocr_engine == 'AI_OCR':
+                    # Tanpa model bubble: gabungkan kontur morfologi jadi blok bacaan dulu,
+                    # baru OCR per blok — dari ratusan request menjadi belasan.
+                    raw_regions = self.main_app._collect_morphological_regions(cv_image, advanced=True)
+                    merged = self.main_app._merge_text_boxes_to_blocks(raw_regions, cv_image.shape, strict=False)
+                    block_polys = []
+                    for _text, polygon in merged:
+                        rect = polygon.boundingRect()
+                        if rect.width() < 14 or rect.height() < 14:
+                            continue
+                        if rect.width() * rect.height() > w * h * 0.9:
+                            continue
+                        block_polys.append(polygon)
+                    block_polys = self._dedupe_regions(block_polys)
+                    self._sort_regions_reading_order(block_polys)
+                    total_regions = len(block_polys)
+                    for idx, polygon in enumerate(block_polys):
+                        if self._is_cancelled:
+                            break
+                        self.progress.emit(15 + int((idx / max(1, total_regions)) * 40), f"OCR blok {idx+1}/{total_regions}...")
+                        raw_text = self.main_app._recognize_polygon(cv_image, polygon, 'AI_OCR', self.settings)
+                        self._append_ocr_item(ocr_items, polygon, raw_text)
+                else:
+                    # Engine lokal (EasyOCR/Paddle/dll) punya deteksi native yang sudah
+                    # mengembalikan teks sekaligus — pakai langsung, tanpa OCR ulang.
+                    detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
+                    for raw_text, polygon in detected_regions or []:
+                        self._append_ocr_item(ocr_items, polygon, raw_text)
+
+                if self._is_cancelled:
+                    self.finished.emit([], "Dibatalkan.")
                     return
-                
-                total_regions = len(detected_regions)
-                for idx, (raw_text, polygon) in enumerate(detected_regions):
+                if not ocr_items:
+                    self.finished.emit([], "Tidak ditemukan teks yang bisa diterjemahkan di halaman ini.")
+                    return
+
+                self.progress.emit(58, f"Menerjemahkan {len(ocr_items)} balon (satu permintaan)...")
+                translations = self._translate_batch([text for _polygon, text in ocr_items])
+
+                total_items = len(ocr_items)
+                for idx, ((polygon, processed_text), translated_text) in enumerate(zip(ocr_items, translations)):
                     if self._is_cancelled:
                         break
-                    
-                    self.progress.emit(20 + int((idx / total_regions) * 80), f"Memproses teks: {idx+1}/{total_regions}...")
                     rect = polygon.boundingRect()
-                    
-                    cropped_cv = cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
-                    if cropped_cv.size == 0:
-                        continue
-                    
-                    processed_text = self.main_app.clean_and_join_text(raw_text)
-                    translated_text = ""
-                    if processed_text:
-                        try:
-                            ai_model_cfg = self.settings.get('ai_model')
-                            use_ai_translate = self.settings.get('use_ai_only_translate') or ai_model_cfg
-                            if use_ai_translate and ai_model_cfg:
-                                provider, model_name = ai_model_cfg
-                                translated_text = self.main_app.translate_with_ai(processed_text, self.settings['target_lang'], provider, model_name, self.settings)
-                            else:
-                                translated_text = self.main_app.translate_text(processed_text, self.settings['target_lang'])
-                        except Exception as e:
-                            translated_text = f"[TRANSLATION ERROR: {e}]"
-                    
                     if self.settings.get('use_inpaint', True):
+                        self.progress.emit(70 + int((idx / total_items) * 25), f"Inpainting: {idx+1}/{total_items}...")
                         self.run_inpainting_on_crop(cv_image, rect)
-                    
+
                     area_payload = {
                         'rect': rect,
                         'text': translated_text,
@@ -17230,7 +17268,335 @@ JSON format example:
             else:
                 self.finished.emit([], "Tidak ditemukan balon teks/koordinat yang valid. Silakan cek file temp/full_page_response.txt untuk melihat respon AI.")
         except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(error_detail)
+            try:
+                os.makedirs("temp", exist_ok=True)
+                with open("temp/full_page_error.txt", "w", encoding="utf-8") as f:
+                    f.write(error_detail)
+            except Exception:
+                pass
             self.error.emit(str(e))
+
+    def _append_ocr_item(self, ocr_items, polygon, raw_text):
+        """Bersihkan hasil OCR dan tambahkan ke daftar bila layak diterjemahkan."""
+        processed = self.main_app.clean_and_join_text(raw_text or '')
+        if not processed:
+            return
+        # Marker error dari engine, mis. "[ERROR: ...]" / "[PADDLEOCR RUNTIME ERROR]"
+        if processed.startswith('[') and processed.endswith(']'):
+            return
+        if len(processed) <= 1 and not processed.isalnum():
+            return
+        ocr_items.append((polygon, processed))
+
+    def _detect_bubble_regions_local(self, cv_image):
+        """Deteksi balon dialog memakai model YOLO lokal, tanpa panggilan API.
+
+        Return list[QPolygon] terurut sesuai arah baca; list kosong bila model
+        tidak tersedia/tidak menemukan apa pun (pemanggil punya fallback sendiri).
+        """
+        h, w = cv_image.shape[:2]
+        mask = None
+        try:
+            if getattr(self.main_app, 'is_yolo_available', False):
+                mask = self.main_app.detect_bubble_with_dl_model(cv_image, self.settings)
+                if mask is None:
+                    # Model pilihan user belum terunduh — pakai model YOLO lain yang ada.
+                    for key, info in self.main_app.dl_models.items():
+                        if info.get('type') == 'yolo' and os.path.exists(info.get('path', '')):
+                            mask = self.main_app._run_yolov8_inference(key, cv_image, self.settings)
+                            if mask is not None:
+                                break
+        except Exception as e:
+            print(f"Bubble detector gagal, fallback ke deteksi lain: {e}")
+            mask = None
+
+        if mask is None or not mask.any():
+            return []
+
+        regions = []
+        num, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            (mask > 0).astype(np.uint8), connectivity=8
+        )
+        for i in range(1, num):
+            x, y, bw, bh, area = (int(v) for v in stats[i])
+            if area < 400 or bw < 18 or bh < 18:
+                continue
+            if bw * bh > w * h * 0.9:
+                continue
+
+            # Balon hanya dipakai sebagai PAGAR (filter SFX). Area sebenarnya
+            # diambil dari blok teks di dalam balon, sehingga dua ucapan dalam
+            # satu balon menjadi dua area terpisah yang rapat mengikuti teks.
+            comp_mask = (labels[y:y + bh, x:x + bw] == i)
+
+            # Balon dialog asli berlatar polos (putih, atau hitam untuk teriakan).
+            # Deteksi yang jatuh di atas artwork ramai = SFX/false positive → skip.
+            crop_gray = cv2.cvtColor(cv_image[y:y + bh, x:x + bw], cv2.COLOR_BGR2GRAY)
+            interior = crop_gray[comp_mask]
+            if interior.size:
+                bright_ratio = float((interior >= 200).mean())
+                dark_ratio = float((interior <= 60).mean())
+                if bright_ratio + dark_ratio < 0.40:
+                    continue
+
+            block_rects = self._split_bubble_into_text_blocks(cv_image, x, y, bw, bh, comp_mask)
+            if not block_rects:
+                block_rects = [QRect(x, y, bw, bh)]
+            for block_rect in block_rects:
+                regions.append(QPolygon([
+                    block_rect.topLeft(), block_rect.topRight(),
+                    block_rect.bottomRight(), block_rect.bottomLeft(),
+                ]))
+        regions = self._dedupe_regions(regions)
+        self._sort_regions_reading_order(regions)
+        return regions
+
+    def _dedupe_regions(self, regions):
+        """Buang area duplikat/tumpang-tindih (sisakan yang terbesar)."""
+        kept = []
+        for polygon in sorted(
+            regions,
+            key=lambda p: -(p.boundingRect().width() * p.boundingRect().height())
+        ):
+            rect = polygon.boundingRect()
+            rect_area = rect.width() * rect.height()
+            is_duplicate = False
+            for kept_poly in kept:
+                kept_rect = kept_poly.boundingRect()
+                inter = rect.intersected(kept_rect)
+                if inter.isEmpty():
+                    continue
+                inter_area = inter.width() * inter.height()
+                smaller = min(rect_area, kept_rect.width() * kept_rect.height())
+                if smaller > 0 and inter_area >= 0.6 * smaller:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                kept.append(polygon)
+        return kept
+
+    def _split_bubble_into_text_blocks(self, cv_image, x, y, bw, bh, comp_mask=None):
+        """Pecah satu balon menjadi blok-blok teks berdasarkan piksel teksnya.
+
+        Karakter dalam satu blok dihubungkan lewat dilasi berukuran ~1.2x tinggi
+        huruf; dua ucapan yang terpisah jarak lebih besar tetap menjadi blok
+        berbeda. Return list[QRect] dalam koordinat halaman ([] bila tidak ada
+        teks terdeteksi — pemanggil memakai kotak balon utuh sebagai fallback).
+        """
+        crop = cv_image[y:y + bh, x:x + bw]
+        if crop.size == 0 or bw < 12 or bh < 12:
+            return []
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        block_size = min(31, (min(bw, bh) // 2) * 2 + 1)
+        if block_size < 3:
+            return []
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block_size, 9
+        )
+        if comp_mask is not None:
+            # Tutup lubang mask segmentasi (huruf sering bolong di mask balon)
+            closed = cv2.morphologyEx(
+                comp_mask.astype(np.uint8), cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            )
+            thresh[closed == 0] = 0
+
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        heights = []
+        for cnt in contours:
+            _cx, _cy, _cw, ch = cv2.boundingRect(cnt)
+            if 4 <= ch <= bh * 0.6:
+                heights.append(ch)
+        if not heights:
+            return []
+        med_h = int(np.median(heights))
+        min_area = max(60, med_h * med_h)
+        pad = max(4, med_h // 3)
+
+        # Dilasi self-tuning: mulai ~1.3x tinggi huruf. Bila hasilnya
+        # terfragmentasi (teks vertikal/kolom sering pecah), besarkan kernel
+        # sampai jumlah blok per balon wajar (maks 4) — satu balon nyaris
+        # tidak pernah berisi lebih dari itu.
+        k = max(3, int(med_h * 1.3))
+        rects = []
+        for _attempt in range(3):
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            blocks_mask = cv2.dilate(thresh, kernel, iterations=1)
+            num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(blocks_mask, connectivity=8)
+            rects = []
+            for i in range(1, num):
+                bx, by, bbw, bbh, area = (int(v) for v in stats[i])
+                if area < min_area:
+                    continue
+                rx1 = max(0, bx - pad)
+                ry1 = max(0, by - pad)
+                rx2 = min(bw, bx + bbw + pad)
+                ry2 = min(bh, by + bbh + pad)
+                if rx2 - rx1 < 10 or ry2 - ry1 < 10:
+                    continue
+                rects.append(QRect(x + rx1, y + ry1, rx2 - rx1, ry2 - ry1))
+            if len(rects) <= 4:
+                break
+            k = int(k * 1.7)
+        return rects
+
+    def _sort_regions_reading_order(self, regions):
+        """Urutkan balon per baris (band vertikal), kanan-ke-kiri khas manga."""
+        regions.sort(key=lambda p: (p.boundingRect().top() // 80, -p.boundingRect().right()))
+
+    def _translate_batch(self, texts):
+        """Terjemahkan daftar teks; satu panggilan API bila provider mendukung.
+
+        Selalu mengembalikan list dengan panjang sama seperti `texts`.
+        """
+        ai_model_cfg = self.settings.get('ai_model') or (None, None)
+        provider, model_name = ai_model_cfg
+        target_lang = self.settings.get('target_lang', 'Indonesian')
+
+        if provider in ('Gemini', 'OpenAI', 'OpenRouter') and len(texts) > 1:
+            try:
+                return self._translate_batch_api(texts, provider, model_name, target_lang)
+            except Exception as e:
+                print(f"Batch translate gagal, fallback per balon: {e}")
+
+        return [self._translate_single(text, target_lang, provider, model_name) for text in texts]
+
+    def _translate_single(self, text, target_lang, provider, model_name):
+        try:
+            if provider:
+                return self.main_app.translate_with_ai(text, target_lang, provider, model_name, self.settings)
+            return self.main_app.translate_text(text, target_lang)
+        except Exception as e:
+            return f"[TRANSLATION ERROR: {e}]"
+
+    def _translate_batch_api(self, texts, provider, model_name, target_lang):
+        """Kirim semua teks balon sebagai satu permintaan JSON ke provider AI."""
+        try:
+            enhancements = self.main_app._build_prompt_enhancements(self.settings)
+        except Exception:
+            enhancements = ""
+
+        payload = json.dumps(
+            [{"id": i + 1, "text": t} for i, t in enumerate(texts)],
+            ensure_ascii=False
+        )
+        prompt = f"""
+You are an expert manga translator. Below is a JSON array of dialogue texts extracted from ONE manga page, in reading order.
+For each item:
+1. Detect the language and silently correct obvious OCR mistakes.
+2. Translate the text into natural, colloquial {target_lang}. If it is already in {target_lang}, keep it as-is.
+{enhancements}
+Return ONLY a valid JSON array (no markdown, no explanation) with exactly {len(texts)} elements, same order, where each element is: {{"id": <same id>, "translation": "<translated text>"}}.
+
+Input:
+{payload}
+"""
+
+        response_text = ""
+        if provider == 'Gemini':
+            api_key = get_active_key('gemini')
+            if not api_key:
+                raise Exception("Gemini API Key belum dikonfigurasi.")
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "max_output_tokens": 8192,
+                    "temperature": 0.3,
+                    "response_mime_type": "application/json"
+                }
+            )
+            response_text = response.text if response else ""
+            if response and hasattr(response, 'usage_metadata') and response.usage_metadata:
+                if hasattr(self.main_app, "api_cost_signal"):
+                    self.main_app.api_cost_signal.emit(
+                        response.usage_metadata.prompt_token_count,
+                        response.usage_metadata.candidates_token_count,
+                        'Gemini', model_name
+                    )
+        else:  # OpenAI / OpenRouter
+            if provider == 'OpenAI':
+                client = getattr(self.main_app, "openai_client", None)
+                if not client:
+                    api_key = get_active_key('openai')
+                    if not api_key:
+                        raise Exception("OpenAI API Key belum dikonfigurasi.")
+                    client = OpenAI(api_key=api_key)
+            else:
+                api_key = (
+                    SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip() or
+                    get_openrouter_api_key()
+                )
+                if not api_key:
+                    raise Exception("OpenRouter API Key belum dikonfigurasi.")
+                client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+
+            messages = [{"role": "user", "content": prompt}]
+            try:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    max_tokens=8192,
+                    temperature=0.3
+                )
+            except Exception as api_err:
+                if "response_format" in str(api_err) or "json" in str(api_err).lower():
+                    resp = client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        max_tokens=8192,
+                        temperature=0.3
+                    )
+                else:
+                    raise api_err
+            response_text = resp.choices[0].message.content
+            if resp and hasattr(resp, 'usage') and resp.usage:
+                if hasattr(self.main_app, "api_cost_signal"):
+                    self.main_app.api_cost_signal.emit(
+                        resp.usage.prompt_tokens, resp.usage.completion_tokens,
+                        provider, model_name
+                    )
+
+        if not response_text:
+            raise Exception("Provider tidak mengembalikan respon batch.")
+
+        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
+        cleaned_json = json_match.group(1).strip() if json_match else response_text.strip()
+        data = json.loads(cleaned_json)
+
+        items = []
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            for value in data.values():
+                if isinstance(value, list):
+                    items = value
+                    break
+
+        mapping = {}
+        for idx, item in enumerate(items):
+            if isinstance(item, dict):
+                translation = item.get('translation') or item.get('text') or ''
+                try:
+                    item_id = int(item.get('id', idx + 1))
+                except (TypeError, ValueError):
+                    item_id = idx + 1
+                mapping[item_id] = str(translation)
+            elif isinstance(item, str):
+                mapping[idx + 1] = item
+
+        results = []
+        for i, original in enumerate(texts):
+            translated = (mapping.get(i + 1) or '').strip()
+            if not translated:
+                translated = self._translate_single(original, target_lang, provider, model_name)
+            results.append(translated)
+        return results
 
     def run_inpainting_on_crop(self, cv_image, rect):
         try:
