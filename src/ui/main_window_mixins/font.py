@@ -7,6 +7,10 @@ atribut yang dibuat di MangaOCRApp.__init__.
 
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
+# Eksplisit walau _imports sudah membawanya lewat star import -- inilah dua
+# fungsi yang logikanya dulu tertanam di mixin ini.
+from src.core.fonts import build_font, fonts_in_group
+
 
 class FontMixin:
     def _populate_typeset_font_dropdown(self, preferred_display=None, group: str | None = None):
@@ -18,11 +22,8 @@ class FontMixin:
         if not hasattr(self, 'font_dropdown') or not self.font_manager:
             return
         fonts = self.font_manager.list_fonts()
-        # If a group is supplied and we have a mapping, filter the fonts.
         if group and getattr(self, 'font_groups', None):
-            allowed = set(self.font_groups.get(group, []) )
-            # Keep only fonts that exist in the available fonts list
-            fonts = [f for f in fonts if f in allowed]
+            fonts = fonts_in_group(fonts, self.font_groups.get(group, []))
 
         current_display = self.font_manager.display_name_for_font(getattr(self, 'typeset_font', None))
         target_display = preferred_display or current_display
@@ -42,27 +43,25 @@ class FontMixin:
                 self.font_dropdown.setCurrentIndex(0)
 
     def _build_current_font(self) -> QFont:
-        display = None
-        if getattr(self, 'font_dropdown', None):
-            display = self.font_dropdown.currentText()
-        if self.font_manager and display:
-            font = self.font_manager.create_qfont(display)
-        elif isinstance(self.typeset_font, QFont):
-            font = QFont(self.typeset_font)
-        else:
-            font = QFont('Arial', 14)
-        size_value = float(self.font_size_spin.value()) if getattr(self, 'font_size_spin', None) else 24.0
-        if size_value <= 0:
-            size_value = 12.0
-        font.setPointSizeF(size_value)
-        if getattr(self, 'bold_toggle', None):
-            font.setBold(self.bold_toggle.isChecked())
-        if getattr(self, 'italic_toggle', None):
-            font.setItalic(self.italic_toggle.isChecked())
-        if getattr(self, 'underline_toggle', None):
-            font.setUnderline(self.underline_toggle.isChecked())
-        font.setLetterSpacing(QFont.PercentageSpacing, self.typeset_char_spacing_value or 100.0)
-        return font
+        """Baca nilai dari widget; perakitannya di src.core.fonts.build_font."""
+        dropdown = getattr(self, 'font_dropdown', None)
+        spin = getattr(self, 'font_size_spin', None)
+
+        def toggled(name):
+            # None berarti "widget belum ada" -> gaya bawaan font dibiarkan.
+            widget = getattr(self, name, None)
+            return widget.isChecked() if widget else None
+
+        return build_font(
+            self.font_manager,
+            display=dropdown.currentText() if dropdown else None,
+            fallback_font=self.typeset_font,
+            size=spin.value() if spin else None,
+            bold=toggled('bold_toggle'),
+            italic=toggled('italic_toggle'),
+            underline=toggled('underline_toggle'),
+            char_spacing=self.typeset_char_spacing_value,
+        )
 
     def _on_typeset_font_size_changed(self, value):
         self.typeset_font = self._build_current_font()

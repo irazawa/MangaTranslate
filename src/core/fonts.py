@@ -156,6 +156,58 @@ class FontManager:
 GLOBAL_FONT_MANAGER: FontManager | None = None
 
 
+def build_font(
+    font_manager: FontManager | None,
+    display: str | None = None,
+    fallback_font: QFont | None = None,
+    size: float | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    char_spacing: float | None = None,
+) -> QFont:
+    """Rakit QFont dari pilihan pengguna, tanpa menyentuh widget apa pun.
+
+    Sumber font dipilih berurutan: font_manager+display, lalu fallback_font,
+    lalu Arial 14.
+
+    bold/italic/underline bernilai None berarti "jangan diutak-atik" -- gaya
+    bawaan font dipertahankan. Ini menjaga perilaku asli, yang hanya memanggil
+    setBold() bila widget toggle-nya memang ada.
+    """
+    if font_manager and display:
+        font = font_manager.create_qfont(display)
+    elif isinstance(fallback_font, QFont):
+        font = QFont(fallback_font)
+    else:
+        font = QFont('Arial', 14)
+
+    size_value = float(size) if size is not None else 24.0
+    if size_value <= 0:
+        size_value = 12.0
+    font.setPointSizeF(size_value)
+
+    if bold is not None:
+        font.setBold(bold)
+    if italic is not None:
+        font.setItalic(italic)
+    if underline is not None:
+        font.setUnderline(underline)
+
+    font.setLetterSpacing(QFont.PercentageSpacing, char_spacing or 100.0)
+    return font
+
+
+def fonts_in_group(fonts, group_members) -> list:
+    """Saring daftar font ke anggota satu grup, mempertahankan urutan asli.
+
+    Nama yang terdaftar di grup tapi fontnya tidak terpasang akan hilang dengan
+    sendirinya -- itu memang perilaku yang diharapkan.
+    """
+    allowed = set(group_members or [])
+    return [f for f in fonts if f in allowed]
+
+
 def set_global_font_manager(manager: FontManager):
     global GLOBAL_FONT_MANAGER
     GLOBAL_FONT_MANAGER = manager

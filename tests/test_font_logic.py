@@ -103,6 +103,26 @@ def test_toggle_gaya_diterapkan(qapp, dropdown, spin):
     assert (font.bold(), font.italic(), font.underline()) == (True, False, True)
 
 
+def test_gaya_bawaan_font_dibiarkan_bila_toggle_tidak_ada(qapp, dropdown, spin):
+    """Tanpa widget toggle, gaya asli font TIDAK dipaksa jadi False.
+
+    Nuansa halus: kode asli memakai `if getattr(self, 'bold_toggle', None):`
+    sehingga setBold() sama sekali tidak dipanggil bila widgetnya belum dibuat.
+    """
+    class BoldFontManager(FakeFontManager):
+        def create_qfont(self, display_name, base_font=None):
+            font = QFont(display_name, 11)
+            font.setBold(True)
+            font.setItalic(True)
+            return font
+
+    host = Host(font_dropdown=dropdown, font_size_spin=spin)
+    host.font_manager = BoldFontManager()
+    font = host._build_current_font()
+    assert font.bold() is True
+    assert font.italic() is True
+
+
 def test_char_spacing_kosong_jadi_100(qapp, dropdown, spin):
     host = Host(font_dropdown=dropdown, font_size_spin=spin)
     host.typeset_char_spacing_value = None
