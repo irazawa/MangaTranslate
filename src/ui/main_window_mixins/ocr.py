@@ -7,6 +7,11 @@ atribut yang dibuat di MangaOCRApp.__init__.
 
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
+# Logika murni sudah pindah ke src.core.ocr; nama diberi awalan core_
+# agar tidak bentrok dengan method pembungkus di bawah.
+from src.core.ocr import extract_ai_ocr_text as core_extract_ai_ocr_text
+from src.core.ocr import preprocess_for_ocr as core_preprocess_for_ocr
+
 
 class OcrMixin:
     def _get_ai_ocr_entries(self):
@@ -127,47 +132,8 @@ class OcrMixin:
                 jp_combo.setEnabled(enable_jp)
 
     def preprocess_for_ocr(self, cv_image, orientation_hint="Auto-Detect"):
-        # Basic orientation detection remains; preprocessing pipeline optional
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-        if h == 0 or w == 0:
-            return cv_image, 0
-        angle = 0
-        if orientation_hint == "Auto-Detect":
-            try:
-                coords = cv2.findNonZero(cv2.bitwise_not(gray))
-                if coords is not None:
-                    rect = cv2.minAreaRect(coords)
-                    angle = rect[-1]
-                    if w < h and angle < -45:
-                        angle = -(90 + angle)
-                    elif w > h and angle > 45:
-                        angle = 90 - angle
-                    else:
-                        angle = -angle
-            except cv2.error:
-                angle = 0
-        elif orientation_hint == "Vertical":
-            if w > h:
-                angle = 90
-
-        # Rotate grayscale for subsequent preprocessing
-        center = (w // 2, h // 2)
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        rotated_gray = cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-
-        # Preprocessing: histogram equalization, Gaussian blur, Otsu threshold
-        try:
-            equalized = cv2.equalizeHist(rotated_gray)
-            blurred = cv2.GaussianBlur(equalized, (3, 3), 0)
-            _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        except cv2.error:
-            # Fall back to original rotated gray if any op fails
-            otsu = rotated_gray
-
-        # Return BGR image expected by OCR engines
-        processed_bgr = cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR)
-        return processed_bgr, angle
+        """Delegasi ke src.core.ocr; lihat di sana untuk logikanya."""
+        return core_preprocess_for_ocr(cv_image, orientation_hint)
 
     def perform_ocr(self, image_to_process, settings: dict) -> str:
         """
@@ -921,42 +887,5 @@ class OcrMixin:
             return f"[MOFRL ERROR: {e}]"
 
     def _extract_ai_ocr_text(self, response_json):
-        if not isinstance(response_json, dict):
-            return ""
-
-        choices = response_json.get('choices')
-        if isinstance(choices, list) and choices:
-            message = choices[0].get('message', {}) if isinstance(choices[0], dict) else {}
-            content = message.get('content') if isinstance(message, dict) else None
-            if isinstance(content, str):
-                return content.strip()
-            if isinstance(content, list):
-                parts = []
-                for chunk in content:
-                    if isinstance(chunk, dict):
-                        text_val = chunk.get('text') or chunk.get('content')
-                        if isinstance(text_val, str) and text_val.strip():
-                            parts.append(text_val.strip())
-                if parts:
-                    return '\n'.join(parts).strip()
-
-        # Some providers might return 'message' directly as string
-        message = response_json.get('message')
-        if isinstance(message, str):
-            return message.strip()
-
-        if isinstance(message, dict):
-            content = message.get('content')
-            if isinstance(content, str):
-                return content.strip()
-
-        # Fallback to top-level 'text' or 'output_text'
-        for key in ('text', 'output_text'):
-            val = response_json.get(key)
-            if isinstance(val, str):
-                return val.strip()
-            if isinstance(val, list):
-                parts = [v.strip() for v in val if isinstance(v, str)]
-                if parts:
-                    return '\n'.join(parts)
-        return ""
+        """Delegasi ke src.core.ocr; lihat di sana untuk logikanya."""
+        return core_extract_ai_ocr_text(response_json)
