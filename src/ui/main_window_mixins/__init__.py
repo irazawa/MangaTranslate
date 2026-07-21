@@ -17,5 +17,6 @@ from src.ui.main_window_mixins.translate import TranslateMixin
 from src.ui.main_window_mixins.ocr import OcrMixin
 from src.ui.main_window_mixins.typeset import TypesetMixin
 from src.ui.main_window_mixins.projectio import ProjectioMixin
+from src.ui.main_window_mixins.uibuild import UibuildMixin
 
-__all__ = ["FontMixin", "BatchMixin", "LayerMixin", "InpaintMixin", "SettingsMixin", "HistoryMixin", "DetectMixin", "TranslateMixin", "OcrMixin", "TypesetMixin", "ProjectioMixin"]
+__all__ = ["FontMixin", "BatchMixin", "LayerMixin", "InpaintMixin", "SettingsMixin", "HistoryMixin", "DetectMixin", "TranslateMixin", "OcrMixin", "TypesetMixin", "ProjectioMixin", "UibuildMixin"]
