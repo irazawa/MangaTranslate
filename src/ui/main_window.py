@@ -7603,22 +7603,29 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             self.show_banner("full-page-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
             return
 
+        # Re-entrancy guard: jangan spawn worker baru bila yang lama masih jalan.
+        worker = getattr(self, '_full_page_worker', None)
+        if worker is not None and worker.isRunning():
+            self.show_banner("full-page-busy", "Sedang berjalan",
+                             "Penerjemahan halaman masih diproses. Tunggu hingga selesai.", kind="warning")
+            return
+
         settings = self.get_current_settings()
-        
-        # Override with active AI OCR provider and model if selected in OCR language settings
-        if settings.get('ocr_engine') == 'AI_OCR' and settings.get('ocr_ai_provider'):
-            provider_raw = settings.get('ocr_ai_provider', '')
+
+        def _canon_provider(name):
+            return {'gemini': 'Gemini', 'openai': 'OpenAI', 'openrouter': 'OpenRouter'}.get(
+                str(name).lower(), name
+            )
+
+        tr_combo = getattr(self, 'full_translator_combo', None)
+        translator_choice = (tr_combo.currentData() if tr_combo is not None else None) or 'ai_translate'
+        settings['full_translator'] = translator_choice
+
+        # Model penerjemah (dipakai _translate_batch): default model AI Translate
+        # dari tab AI Cfg; pilihan 'ai_ocr' memakai provider/model AI OCR langsung.
+        if translator_choice == 'ai_ocr' and settings.get('ocr_engine') == 'AI_OCR' and settings.get('ocr_ai_provider'):
+            provider = _canon_provider(settings.get('ocr_ai_provider', ''))
             model_name = settings.get('ocr_ai_model_id', '')
-            
-            # Map provider name to capitalized/proper case if necessary
-            if provider_raw.lower() == 'gemini':
-                provider = 'Gemini'
-            elif provider_raw.lower() == 'openai':
-                provider = 'OpenAI'
-            elif provider_raw.lower() == 'openrouter':
-                provider = 'OpenRouter'
-            else:
-                provider = provider_raw
         else:
             provider, model_name = self.get_selected_model_name()
             if hasattr(self, 'ai_model_combo'):
@@ -7627,21 +7634,35 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                     data = self.ai_model_combo.itemData(idx, Qt.UserRole)
                     if data:
                         provider, model_name = data
-        
+
         settings['ai_model'] = (provider, model_name)
+
+        # Model untuk panggilan AI Vision full-page: selalu pakai model AI OCR (VLM)
+        # bila dikonfigurasi — model translate belum tentu bisa menerima gambar.
+        if settings.get('ocr_ai_provider') and settings.get('ocr_ai_model_id'):
+            settings['vision_model'] = (
+                _canon_provider(settings.get('ocr_ai_provider')),
+                settings.get('ocr_ai_model_id'),
+            )
+        else:
+            settings['vision_model'] = (provider, model_name)
         settings['target_lang'] = self.translate_combo.currentText()
-        settings['use_inpaint'] = self.inpaint_checkbox.isChecked()
+        # Pipeline Full selalu membersihkan teks (deteksi → OCR → inpaint → translate);
+        # tidak bergantung pada checkbox cleanup global — itu milik flow default.
+        settings['use_inpaint'] = True
         
         self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
         self.auto_translate_page_btn.setEnabled(False)
         
-        use_ai_vision = self.use_ai_vision_checkbox.isChecked()
-        
+        combo = getattr(self, 'full_mode_combo', None)
+        use_ai_vision = bool(combo.currentData()) if combo is not None else False
+
         self._full_page_worker = FullPageTranslateWorker(self, self.current_image_path, settings, use_ai_vision)
         self._full_page_worker.progress.connect(lambda pct, msg: self.statusBar().showMessage(f"{msg} ({pct}%)"))
         self._full_page_worker.finished.connect(self.on_full_page_translation_finished)
         self._full_page_worker.error.connect(self.on_full_page_translation_error)
-        
+        self._full_page_worker.finished.connect(self._full_page_worker.deleteLater)
+
         self._full_page_worker.start()
 
 class FileDownloadWorker(QThread):
@@ -7701,6 +7722,9 @@ class FullPageTranslateWorker(QThread):
         self.settings = settings
         self.use_ai_vision = use_ai_vision
         self._is_cancelled = False
+        # Hasil inpaint full-page (PIL RGB) — dibaca handler untuk dipasang
+        # sebagai base image canvas. None bila inpaint dilewati/gagal.
+        self.cleaned_image_pil = None
 
     def run(self):
         try:
@@ -7712,27 +7736,32 @@ class FullPageTranslateWorker(QThread):
 
             if self.use_ai_vision:
                 self.progress.emit(10, "Mengirim halaman ke AI Vision...")
-                provider, model_name = self.settings.get('ai_model', ('Gemini', 'gemini-1.5-flash'))
+                provider, model_name = (
+                    self.settings.get('vision_model')
+                    or self.settings.get('ai_model', ('Gemini', 'gemini-1.5-flash'))
+                )
                 target_lang = self.settings.get('target_lang', 'Indonesian')
-                
+                # 'ai_ocr' = VLM menerjemahkan sekaligus; selain itu VLM hanya OCR,
+                # terjemahan dikerjakan model AI Translate via _translate_batch.
+                direct_translate = self.settings.get('full_translator', 'ai_translate') == 'ai_ocr'
+
+                translate_step = f"   - Translate the text into {target_lang}.\n" if direct_translate else ""
+                translation_key_doc = (
+                    f'- "translation": the translated text in {target_lang}.\n' if direct_translate else ''
+                )
                 prompt = f"""
-You are an expert manga translator. Analyze this manga page image.
-1. Identify all text regions that need translation: dialogue bubbles, thought bubbles, narration boxes, and floating dialogue text.
-2. IGNORE sound effects (SFX / onomatopoeia drawn as stylized artistic text over the artwork) — do NOT include them in the output.
+You are an expert manga {'translator' if direct_translate else 'transcriber'}. Analyze this manga page image.
+1. Identify all text regions: dialogue bubbles, thought bubbles, narration boxes, captions, and chapter titles — INCLUDE text even when it sits outside a speech bubble.
+2. STRICTLY IGNORE sound effects (SFX / onomatopoeia): large stylized hand-drawn lettering integrated into the artwork, such as impact sounds or screams drawn as art. SFX is NOT dialogue — never include it, even when it is the only text in a panel.
 3. For each region:
    - Perform OCR (detect the original language, e.g. Japanese, Chinese, or English).
-   - Translate the text into {target_lang}.
-4. Return the results ONLY as a valid JSON array of objects. Do not wrap in markdown code blocks.
-Each object MUST have the following keys:
-- "box": [x, y, width, height] (integers representing the bounding box in pixels on the original image).
-- "original": the detected original text.
-- "translation": the translated text in {target_lang}.
-
-Image dimensions: Width = {w} pixels, Height = {h} pixels. Your coordinates must fit within these dimensions.
-JSON format example:
-[
-  {{"box": [100, 150, 80, 120], "original": "こんにちは", "translation": "Halo"}}
-]
+{translate_step}4. Return the results ONLY as valid JSON: a single object with the key "regions" whose value is an array. No markdown code blocks, no commentary.
+Each element of "regions" MUST have exactly these keys:
+- "box": [x, y, width, height] — integer pixel coordinates of the bounding box on the original image.
+- "original": the detected original text, transcribed exactly as written.
+{translation_key_doc}
+Image dimensions: Width = {w} pixels, Height = {h} pixels. Every box must fit within these dimensions.
+Do NOT invent regions and do NOT return placeholder values. If the page has no translatable text, return {{"regions": []}}.
 """
                 response_text = ""
                 if provider == 'Gemini':
@@ -7745,7 +7774,7 @@ JSON format example:
                         [prompt, pil_image],
                         generation_config={
                             "max_output_tokens": 4096,
-                            "temperature": 0.3,
+                            "temperature": 0.1,
                             "response_mime_type": "application/json"
                         }
                     )
@@ -7798,7 +7827,7 @@ JSON format example:
                             ],
                             response_format={"type": "json_object"},
                             max_tokens=4096,
-                            temperature=0.3
+                            temperature=0.1
                         )
                     except Exception as api_err:
                         # Fallback for models that do not support response_format/JSON mode
@@ -7820,7 +7849,7 @@ JSON format example:
                                     }
                                 ],
                                 max_tokens=4096,
-                                temperature=0.3
+                                temperature=0.1
                             )
                         else:
                             raise api_err
@@ -7930,19 +7959,20 @@ JSON format example:
                             ''
                         )
                         translated_text = (
-                            item.get('translation') or 
-                            item.get('translated') or 
-                            item.get('translation_text') or 
-                            item.get('translated_text') or 
-                            item.get('dest') or 
+                            item.get('translation') or
+                            item.get('translated') or
+                            item.get('translation_text') or
+                            item.get('translated_text') or
+                            item.get('dest') or
                             ''
                         )
-                        
-                        cleaned_cv = cv_image
-                        if self.settings.get('use_inpaint', True):
-                            self.progress.emit(50 + int((idx / total_items) * 40), f"Inpainting: {idx+1}/{total_items}...")
-                            cleaned_cv = self.run_inpainting_on_crop(cv_image, rect)
-                        
+                        # Skip item hampa: mode langsung butuh terjemahan; mode
+                        # AI Translate butuh teks asli untuk diterjemahkan nanti.
+                        if direct_translate and not str(translated_text).strip():
+                            continue
+                        if not direct_translate and not str(original_text).strip():
+                            continue
+
                         area_payload = {
                             'rect': rect,
                             'text': translated_text,
@@ -7957,52 +7987,27 @@ JSON format example:
 
             else:
                 # ── Pipeline instan lokal (tanpa AI Vision) ──
-                # 1) Deteksi balon secara lokal (YOLO bubble detector bila tersedia —
-                #    sekaligus mengabaikan SFX karena model hanya mengenali balon dialog).
-                # 2) OCR SEKALI per balon — bukan per kontur mentah, mencegah spam API
-                #    saat engine AI_OCR dipakai.
-                # 3) Terjemahkan seluruh balon dalam SATU permintaan API (batch).
+                # YOLO dibuang: pada manga ia sering salah deteksi (mengembalikan SATU
+                # region full-page, bukan balon). Ganti dengan deteksi blok teks via
+                # morfologi, OCR per blok, lalu terjemahkan semua dalam satu batch.
                 ocr_engine = self.settings.get('ocr_engine') or 'Tesseract'
-                self.progress.emit(10, "Mendeteksi balon teks (lokal)...")
-                bubble_regions = self._detect_bubble_regions_local(cv_image)
+                self.progress.emit(10, "Mendeteksi balon teks (morfologi)...")
 
                 ocr_items = []  # list of (polygon, cleaned_text)
-                if bubble_regions:
-                    total_regions = len(bubble_regions)
-                    for idx, polygon in enumerate(bubble_regions):
-                        if self._is_cancelled:
-                            break
-                        self.progress.emit(15 + int((idx / total_regions) * 40), f"OCR balon {idx+1}/{total_regions}...")
-                        raw_text = self.main_app._recognize_polygon(cv_image, polygon, ocr_engine, self.settings)
-                        self._append_ocr_item(ocr_items, polygon, raw_text)
-                elif ocr_engine == 'AI_OCR':
-                    # Tanpa model bubble: gabungkan kontur morfologi jadi blok bacaan dulu,
+                if ocr_engine in ('AI_OCR', 'MOFRL-GPT'):
+                    # Engine AI OCR: gabungkan kontur morfologi jadi blok bacaan dulu,
                     # baru OCR per blok — dari ratusan request menjadi belasan.
-                    raw_regions = self.main_app._collect_morphological_regions(cv_image, advanced=True)
-                    merged = self.main_app._merge_text_boxes_to_blocks(raw_regions, cv_image.shape, strict=False)
-                    block_polys = []
-                    for _text, polygon in merged:
-                        rect = polygon.boundingRect()
-                        if rect.width() < 14 or rect.height() < 14:
-                            continue
-                        if rect.width() * rect.height() > w * h * 0.9:
-                            continue
-                        block_polys.append(polygon)
-                    block_polys = self._dedupe_regions(block_polys)
-                    self._sort_regions_reading_order(block_polys)
-                    total_regions = len(block_polys)
-                    for idx, polygon in enumerate(block_polys):
-                        if self._is_cancelled:
-                            break
-                        self.progress.emit(15 + int((idx / max(1, total_regions)) * 40), f"OCR blok {idx+1}/{total_regions}...")
-                        raw_text = self.main_app._recognize_polygon(cv_image, polygon, 'AI_OCR', self.settings)
-                        self._append_ocr_item(ocr_items, polygon, raw_text)
+                    self._ocr_blocks_morphological(cv_image, ocr_engine, ocr_items)
                 else:
                     # Engine lokal (EasyOCR/Paddle/dll) punya deteksi native yang sudah
                     # mengembalikan teks sekaligus — pakai langsung, tanpa OCR ulang.
                     detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
                     for raw_text, polygon in detected_regions or []:
                         self._append_ocr_item(ocr_items, polygon, raw_text)
+                    # Fallback: bila deteksi native kosong (mis. plugin belum aktif),
+                    # pakai deteksi morfologi + OCR per blok memakai engine terpilih.
+                    if not ocr_items and not self._is_cancelled:
+                        self._ocr_blocks_morphological(cv_image, ocr_engine, ocr_items)
 
                 if self._is_cancelled:
                     self.finished.emit([], "Dibatalkan.")
@@ -8019,10 +8024,6 @@ JSON format example:
                     if self._is_cancelled:
                         break
                     rect = polygon.boundingRect()
-                    if self.settings.get('use_inpaint', True):
-                        self.progress.emit(70 + int((idx / total_items) * 25), f"Inpainting: {idx+1}/{total_items}...")
-                        self.run_inpainting_on_crop(cv_image, rect)
-
                     area_payload = {
                         'rect': rect,
                         'text': translated_text,
@@ -8031,6 +8032,63 @@ JSON format example:
                         'settings': self.settings
                     }
                     created_areas.append(area_payload)
+
+            # ── Refinement region AI Vision ──
+            # Box dari VLM besar dan sembarangan (menutupi balon + artwork sekitar).
+            # Snap rect ke interior balon polos, dedupe box yang menunjuk balon sama,
+            # dan siapkan mask yang HANYA menyentuh goresan teks di dalam interior.
+            ai_mask = None
+            if self.use_ai_vision and created_areas and not self._is_cancelled:
+                self.progress.emit(84, "Menyesuaikan region ke balon teks...")
+                try:
+                    ai_mask = self._refine_and_mask_ai_regions(cv_image, created_areas)
+                except Exception as re_err:
+                    print(f"Refinement region AI Vision gagal: {re_err}")
+                    # Tanpa refinement, mask adaptif di box besar merusak artwork —
+                    # lebih aman lewati inpaint sama sekali.
+                    ai_mask = np.zeros(cv_image.shape[:2], dtype=np.uint8)
+
+            # Terjemahan via model AI Translate — SETELAH dedupe supaya hemat token.
+            # (Mode 'ai_ocr' sudah menerima terjemahan langsung dari panggilan VLM.)
+            if (self.use_ai_vision and created_areas and not self._is_cancelled
+                    and self.settings.get('full_translator', 'ai_translate') != 'ai_ocr'):
+                self.progress.emit(86, f"Menerjemahkan {len(created_areas)} teks (model AI Translate)...")
+                translations = self._translate_batch([p['original_text'] for p in created_areas])
+                for area_payload, translated in zip(created_areas, translations):
+                    area_payload['text'] = translated
+
+            # ── Inpainting halaman: SATU panggilan untuk semua region ──
+            # Pipeline khusus Full (terpisah dari flow inpaint default): mask hanya
+            # piksel teks — bukan rect penuh — sehingga artwork dan outline balon
+            # tidak ikut terhapus. Hasil bersih dibawa ke handler via
+            # self.cleaned_image_pil untuk dipasang sebagai base image canvas.
+            if created_areas and self.settings.get('use_inpaint', True) and not self._is_cancelled:
+                self.progress.emit(88, "Membersihkan teks (inpaint halaman)...")
+                try:
+                    if ai_mask is not None:
+                        mask = ai_mask
+                    else:
+                        mask = self._build_text_pixel_mask(cv_image, [p['polygon'] for p in created_areas])
+                    if mask.any():
+                        cleaned = None
+                        model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
+                        if model_name.startswith("IOPaint"):
+                            cleaned = run_iopaint_inpaint(
+                                Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)),
+                                Image.fromarray(mask).convert("L"),
+                                self.settings.get('inpaint_server_url'),
+                                self.settings.get('inpaint_server_timeout'),
+                            )
+                        if cleaned is None:
+                            # Fallback lokal: mask piksel-teks cukup tipis, hasil
+                            # OpenCV inpaint tetap layak walau server IOPaint mati.
+                            flags = cv2.INPAINT_NS if "NS" in model_name else cv2.INPAINT_TELEA
+                            inpainted = cv2.inpaint(cv_image, mask, 3, flags)
+                            cleaned = Image.fromarray(cv2.cvtColor(inpainted, cv2.COLOR_BGR2RGB))
+                        self.cleaned_image_pil = cleaned
+                except Exception as ie:
+                    print(f"Inpaint full-page gagal (lanjut tanpa pembersihan): {ie}")
+                    self.cleaned_image_pil = None
 
             if created_areas:
                 self.finished.emit(created_areas, "Success")
@@ -8060,68 +8118,33 @@ JSON format example:
             return
         ocr_items.append((polygon, processed))
 
-    def _detect_bubble_regions_local(self, cv_image):
-        """Deteksi balon dialog memakai model YOLO lokal, tanpa panggilan API.
+    def _ocr_blocks_morphological(self, cv_image, ocr_engine, ocr_items):
+        """Deteksi blok teks via morfologi (pengganti YOLO) lalu OCR per blok.
 
-        Return list[QPolygon] terurut sesuai arah baca; list kosong bila model
-        tidak tersedia/tidak menemukan apa pun (pemanggil punya fallback sendiri).
+        Menggabungkan kontur morfologi menjadi blok bacaan, buang duplikat, urutkan
+        arah baca, lalu OCR tiap blok memakai `ocr_engine` dan tambahkan hasilnya ke
+        `ocr_items` (list of (QPolygon, cleaned_text)).
         """
         h, w = cv_image.shape[:2]
-        mask = None
-        try:
-            if getattr(self.main_app, 'is_yolo_available', False):
-                mask = self.main_app.detect_bubble_with_dl_model(cv_image, self.settings)
-                if mask is None:
-                    # Model pilihan user belum terunduh — pakai model YOLO lain yang ada.
-                    for key, info in self.main_app.dl_models.items():
-                        if info.get('type') == 'yolo' and os.path.exists(info.get('path', '')):
-                            mask = self.main_app._run_yolov8_inference(key, cv_image, self.settings)
-                            if mask is not None:
-                                break
-        except Exception as e:
-            print(f"Bubble detector gagal, fallback ke deteksi lain: {e}")
-            mask = None
-
-        if mask is None or not mask.any():
-            return []
-
-        regions = []
-        num, labels, stats, _centroids = cv2.connectedComponentsWithStats(
-            (mask > 0).astype(np.uint8), connectivity=8
-        )
-        for i in range(1, num):
-            x, y, bw, bh, area = (int(v) for v in stats[i])
-            if area < 400 or bw < 18 or bh < 18:
+        raw_regions = self.main_app._collect_morphological_regions(cv_image, advanced=True)
+        merged = self.main_app._merge_text_boxes_to_blocks(raw_regions, cv_image.shape, strict=False)
+        block_polys = []
+        for _text, polygon in merged:
+            rect = polygon.boundingRect()
+            if rect.width() < 14 or rect.height() < 14:
                 continue
-            if bw * bh > w * h * 0.9:
+            if rect.width() * rect.height() > w * h * 0.9:
                 continue
-
-            # Balon hanya dipakai sebagai PAGAR (filter SFX). Area sebenarnya
-            # diambil dari blok teks di dalam balon, sehingga dua ucapan dalam
-            # satu balon menjadi dua area terpisah yang rapat mengikuti teks.
-            comp_mask = (labels[y:y + bh, x:x + bw] == i)
-
-            # Balon dialog asli berlatar polos (putih, atau hitam untuk teriakan).
-            # Deteksi yang jatuh di atas artwork ramai = SFX/false positive → skip.
-            crop_gray = cv2.cvtColor(cv_image[y:y + bh, x:x + bw], cv2.COLOR_BGR2GRAY)
-            interior = crop_gray[comp_mask]
-            if interior.size:
-                bright_ratio = float((interior >= 200).mean())
-                dark_ratio = float((interior <= 60).mean())
-                if bright_ratio + dark_ratio < 0.40:
-                    continue
-
-            block_rects = self._split_bubble_into_text_blocks(cv_image, x, y, bw, bh, comp_mask)
-            if not block_rects:
-                block_rects = [QRect(x, y, bw, bh)]
-            for block_rect in block_rects:
-                regions.append(QPolygon([
-                    block_rect.topLeft(), block_rect.topRight(),
-                    block_rect.bottomRight(), block_rect.bottomLeft(),
-                ]))
-        regions = self._dedupe_regions(regions)
-        self._sort_regions_reading_order(regions)
-        return regions
+            block_polys.append(polygon)
+        block_polys = self._dedupe_regions(block_polys)
+        self._sort_regions_reading_order(block_polys)
+        total_regions = len(block_polys)
+        for idx, polygon in enumerate(block_polys):
+            if self._is_cancelled:
+                break
+            self.progress.emit(15 + int((idx / max(1, total_regions)) * 40), f"OCR blok {idx+1}/{total_regions}...")
+            raw_text = self.main_app._recognize_polygon(cv_image, polygon, ocr_engine, self.settings)
+            self._append_ocr_item(ocr_items, polygon, raw_text)
 
     def _dedupe_regions(self, regions):
         """Buang area duplikat/tumpang-tindih (sisakan yang terbesar)."""
@@ -8146,71 +8169,6 @@ JSON format example:
             if not is_duplicate:
                 kept.append(polygon)
         return kept
-
-    def _split_bubble_into_text_blocks(self, cv_image, x, y, bw, bh, comp_mask=None):
-        """Pecah satu balon menjadi blok-blok teks berdasarkan piksel teksnya.
-
-        Karakter dalam satu blok dihubungkan lewat dilasi berukuran ~1.2x tinggi
-        huruf; dua ucapan yang terpisah jarak lebih besar tetap menjadi blok
-        berbeda. Return list[QRect] dalam koordinat halaman ([] bila tidak ada
-        teks terdeteksi — pemanggil memakai kotak balon utuh sebagai fallback).
-        """
-        crop = cv_image[y:y + bh, x:x + bw]
-        if crop.size == 0 or bw < 12 or bh < 12:
-            return []
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        block_size = min(31, (min(bw, bh) // 2) * 2 + 1)
-        if block_size < 3:
-            return []
-        thresh = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block_size, 9
-        )
-        if comp_mask is not None:
-            # Tutup lubang mask segmentasi (huruf sering bolong di mask balon)
-            closed = cv2.morphologyEx(
-                comp_mask.astype(np.uint8), cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-            )
-            thresh[closed == 0] = 0
-
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        heights = []
-        for cnt in contours:
-            _cx, _cy, _cw, ch = cv2.boundingRect(cnt)
-            if 4 <= ch <= bh * 0.6:
-                heights.append(ch)
-        if not heights:
-            return []
-        med_h = int(np.median(heights))
-        min_area = max(60, med_h * med_h)
-        pad = max(4, med_h // 3)
-
-        # Dilasi self-tuning: mulai ~1.3x tinggi huruf. Bila hasilnya
-        # terfragmentasi (teks vertikal/kolom sering pecah), besarkan kernel
-        # sampai jumlah blok per balon wajar (maks 4) — satu balon nyaris
-        # tidak pernah berisi lebih dari itu.
-        k = max(3, int(med_h * 1.3))
-        rects = []
-        for _attempt in range(3):
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-            blocks_mask = cv2.dilate(thresh, kernel, iterations=1)
-            num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(blocks_mask, connectivity=8)
-            rects = []
-            for i in range(1, num):
-                bx, by, bbw, bbh, area = (int(v) for v in stats[i])
-                if area < min_area:
-                    continue
-                rx1 = max(0, bx - pad)
-                ry1 = max(0, by - pad)
-                rx2 = min(bw, bx + bbw + pad)
-                ry2 = min(bh, by + bbh + pad)
-                if rx2 - rx1 < 10 or ry2 - ry1 < 10:
-                    continue
-                rects.append(QRect(x + rx1, y + ry1, rx2 - rx1, ry2 - ry1))
-            if len(rects) <= 4:
-                break
-            k = int(k * 1.7)
-        return rects
 
     def _sort_regions_reading_order(self, regions):
         """Urutkan balon per baris (band vertikal), kanan-ke-kiri khas manga."""
@@ -8367,31 +8325,474 @@ Input:
             results.append(translated)
         return results
 
-    def run_inpainting_on_crop(self, cv_image, rect):
-        try:
-            h, w = cv_image.shape[:2]
-            mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.rectangle(mask, (rect.x(), rect.y()), (rect.x() + rect.width(), rect.y() + rect.height()), 255, -1)
+    def _build_text_pixel_mask(self, cv_image, polygons):
+        """Bangun mask inpaint berisi HANYA piksel teks di dalam tiap region.
 
-            model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
-            if model_name.startswith("IOPaint"):
-                pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
-                pil_mask = Image.fromarray(mask).convert("L")
-                server_result = run_iopaint_inpaint(
-                    pil_image,
-                    pil_mask,
-                    self.settings.get('inpaint_server_url'),
-                    self.settings.get('inpaint_server_timeout'),
-                )
-                inpainted_img = cv2.cvtColor(np.array(server_result), cv2.COLOR_RGB2BGR) if server_result is not None else None
-                if inpainted_img is not None and inpainted_img.shape == cv_image.shape:
-                    cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted_img[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
-                    return inpainted_img
-            
-            flags = cv2.INPAINT_NS if "NS" in model_name else cv2.INPAINT_TELEA
-            inpainted = cv2.inpaint(cv_image, mask, 3, flags)
-            cv_image[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()] = inpainted[rect.y():rect.y()+rect.height(), rect.x():rect.x()+rect.width()]
-            return inpainted
+        Beda dengan mask rect penuh (yang ikut menghapus artwork/outline balon),
+        adaptive threshold per region hanya menangkap goresan huruf — polaritas
+        otomatis (teks gelap di balon terang, teks terang di balon teriakan gelap).
+        Return mask uint8 (0/255) seukuran halaman, sudah didilasi menutup
+        anti-aliasing huruf.
+        """
+        h, w = cv_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        for polygon in polygons:
+            rect = polygon.boundingRect()
+            x1 = max(0, rect.x())
+            y1 = max(0, rect.y())
+            x2 = min(w, rect.x() + rect.width())
+            y2 = min(h, rect.y() + rect.height())
+            if x2 - x1 < 4 or y2 - y1 < 4:
+                continue
+            crop = gray[y1:y2, x1:x2]
+            block_size = min(31, (min(crop.shape) // 2) * 2 + 1)
+            if block_size < 3:
+                continue
+            thresh_type = cv2.THRESH_BINARY_INV if crop.mean() >= 128 else cv2.THRESH_BINARY
+            local = cv2.adaptiveThreshold(
+                crop, 255, cv2.ADAPTIVE_THRESH_MEAN_C, thresh_type, block_size, 9
+            )
+            # Batasi ke dalam polygon region (bukan seluruh bounding rect)
+            poly_mask = np.zeros_like(local)
+            pts = np.array([[p.x() - x1, p.y() - y1] for p in polygon], dtype=np.int32)
+            cv2.fillPoly(poly_mask, [pts], 255)
+            local = cv2.bitwise_and(local, poly_mask)
+            mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], local)
+
+        if mask.any():
+            pad = max(3, int(self.settings.get('inpaint_padding', 5)))
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
+            mask = cv2.dilate(mask, kernel, iterations=2)
+        return mask
+
+    def _find_bubble_interior(self, gray_crop):
+        """Cari zona latar polos (interior balon / background rata) dalam crop.
+
+        Balon dialog berlatar rata: terang (putih) atau — untuk balon teriakan —
+        gelap (hitam). Zona dicari sebagai connected component besar yang
+        menutupi bagian tengah crop. TANPA morphological close: close berukuran
+        besar menjembatani outline balon yang tipis sehingga interior "bocor"
+        menyatu dengan background putih halaman (huruf yang berlubang di zona
+        justru dipakai `_collect_letter_strokes` sebagai kandidat mask).
+        Return (mask_zona_u8, is_bright) atau None bila tak ada latar polos
+        (teks mengambang di atas artwork).
+        """
+        ch, cw = gray_crop.shape[:2]
+        win_x1, win_x2 = cw // 4, cw - cw // 4
+        win_y1, win_y2 = ch // 4, ch - ch // 4
+        win_area = max(1, (win_x2 - win_x1) * (win_y2 - win_y1))
+        for thresh_val, is_bright in ((200, True), (60, False)):
+            raw = ((gray_crop >= thresh_val) if is_bright else (gray_crop <= thresh_val)).astype(np.uint8)
+            num, labels, stats, _cent = cv2.connectedComponentsWithStats(raw, connectivity=8)
+            best_label, best_hits = None, 0
+            for i in range(1, num):
+                area = int(stats[i, cv2.CC_STAT_AREA])
+                if area < 0.08 * ch * cw:
+                    continue
+                # Pilih component dengan cakupan TENGAH box terbesar (teks ada di
+                # tengah) — bukan area terbesar: background halaman di pinggiran
+                # box bisa lebih luas daripada interior balon yang sebenarnya.
+                window_hits = int((labels[win_y1:win_y2, win_x1:win_x2] == i).sum())
+                if window_hits < 0.15 * win_area or window_hits <= best_hits:
+                    continue
+                best_label, best_hits = i, window_hits
+            if best_label is not None:
+                return (labels == best_label).astype(np.uint8), is_bright
+        return None
+
+    def _collect_letter_strokes(self, gray_crop, zone, is_bright):
+        """Pilih komponen goresan yang berbentuk HURUF di sekitar zona latar.
+
+        Huruf = komponen kecil-kompak yang menempel pada zona latar polos.
+        Outline balon / garis panel / line art = komponen panjang atau kurva
+        tipis besar → dikecualikan, sehingga tidak ikut terhapus inpaint bahkan
+        ketika zona latar "bocor" menyatu dengan background putih halaman.
+        Return (mask_huruf_u8, bbox_teks (x, y, w, h)) atau (None, None).
+        """
+        ch, cw = gray_crop.shape[:2]
+        strokes = ((gray_crop <= 128) if is_bright else (gray_crop >= 128)).astype(np.uint8)
+        # Hanya goresan yang menempel/berada dekat zona latar (huruf dikelilingi
+        # latar polos); goresan di tengah artwork tidak dekat zona → terbuang.
+        near_zone = cv2.dilate(zone, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+        strokes[near_zone == 0] = 0
+        num, labels, stats, _cent = cv2.connectedComponentsWithStats(strokes, connectivity=8)
+        keep = np.zeros_like(strokes)
+        kept_heights = []
+        for i in range(1, num):
+            x, y, bw, bh, area = (int(v) for v in stats[i])
+            if area < 12:
+                continue  # noise/titik screentone
+            if bw > 0.6 * cw or bh > 0.6 * ch:
+                continue  # outline balon / garis panel yang membentang
+            if area < 0.08 * bw * bh and max(bw, bh) > 40:
+                continue  # kurva tipis besar = potongan outline, bukan huruf
+            keep[labels == i] = 255
+            kept_heights.append(bh)
+        if not kept_heights:
+            return None, None
+
+        # Kelompokkan huruf menjadi blok teks — box VLM sering mencaplok teks
+        # balon tetangga. Ambil HANYA blok terdekat ke pusat crop, supaya tiap
+        # box menunjuk satu teks; teks tetangga diproses oleh box-nya sendiri
+        # (mencegah dua balon "tergabung" lalu salah satunya terbuang dedupe).
+        med_h = int(np.median(kept_heights))
+        link = max(9, int(med_h * 1.8))
+        blob = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (link, link)))
+        bnum, blabels, _bstats, bcent = cv2.connectedComponentsWithStats(
+            (blob > 0).astype(np.uint8), connectivity=8
+        )
+        if bnum > 2:
+            center_x, center_y = cw / 2.0, ch / 2.0
+            best_block, best_dist = None, None
+            for bi in range(1, bnum):
+                bx_c, by_c = bcent[bi]
+                dist = (bx_c - center_x) ** 2 + (by_c - center_y) ** 2
+                if best_dist is None or dist < best_dist:
+                    best_block, best_dist = bi, dist
+            keep[blabels != best_block] = 0
+
+        ys, xs = np.nonzero(keep)
+        if xs.size == 0:
+            return None, None
+        min_x, max_x = int(xs.min()), int(xs.max()) + 1
+        min_y, max_y = int(ys.min()), int(ys.max()) + 1
+        return keep, (min_x, min_y, max_x - min_x, max_y - min_y)
+
+    def _block_text_score(self, gray, block):
+        """Nilai 'kemiripan teks' isi sebuah blok morfologis (0 = bukan teks).
+
+        Pembeda dipakai BENTUK goresan, bukan ukuran/latar, supaya bekerja pada
+        crop rapat maupun burst putih di atas panel hitam:
+        - Huruf: goresan kompak — bbox terisi padat, tidak terlalu memanjang.
+        - Speed line / garis panel: tipis memanjang (bbox nyaris kosong) atau
+          rasio panjang:tebal ekstrem.
+        Return porsi piksel goresan yang berbentuk huruf (0..1).
+        """
+        gh, gw = gray.shape[:2]
+        x1 = max(0, block.x())
+        y1 = max(0, block.y())
+        x2 = min(gw, block.x() + block.width())
+        y2 = min(gh, block.y() + block.height())
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return 0.0
+        crop = gray[y1:y2, x1:x2]
+        background = float(np.median(crop))
+        strokes = (np.abs(crop.astype(np.int16) - background) > 60).astype(np.uint8)
+        total_px = int(strokes.sum())
+        if total_px < 20:
+            return 0.0
+        num, _labels, stats, _cent = cv2.connectedComponentsWithStats(strokes, connectivity=8)
+        letter_px = 0
+        letters = 0
+        for i in range(1, num):
+            bw, bh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+            if area < 10:
+                continue  # noise/titik screentone
+            fill = area / max(1, bw * bh)
+            elongation = max(bw, bh) / max(1, min(bw, bh))
+            if fill < 0.28 or elongation > 8:
+                continue  # garis tipis/memanjang — bukan huruf
+            letters += 1
+            letter_px += area
+        if letters < 2:
+            return 0.0
+        coverage = letter_px / max(1, (y2 - y1) * (x2 - x1))
+        if coverage < 0.02 or coverage > 0.75:
+            return 0.0
+        purity = letter_px / total_px
+        # Blok teks didominasi goresan huruf; area speed line hanya menyisakan
+        # sedikit potongan kompak di antara garis-garis panjang.
+        return purity if purity >= 0.45 else 0.0
+
+    def _assign_regions_to_text_blocks(self, cv_image, created_areas):
+        """Koreksi box VLM dengan blok teks morfologis, digerbang latar polos.
+
+        Box VLM sering meleset/mencaplok balon tetangga; snap independen per-box
+        bisa membuat dua box menunjuk blok yang sama sementara blok lain tak
+        kebagian (terjemahan nyasar ke balon salah). Solusi: penugasan GLOBAL,
+        tiap blok dimiliki maksimal SATU item, satu item boleh mengumpulkan
+        banyak blok (union) sehingga teks satu balon utuh.
+
+        Blok wajib lolos `_block_text_score` (bentuk goresan mirip huruf). Tanpa
+        gerbang itu, halaman ber-noise (speed line, screentone, panel gelap)
+        memasok banyak blok sampah dan terjemahan mendarat di artwork dalam rect
+        sempit. Item tanpa blok memakai box VLM apa adanya (jalur letter-cluster);
+        blok tanpa pemilik (mis. SFX yang tak dikembalikan VLM) tak disentuh.
+        """
+        h, w = cv_image.shape[:2]
+        try:
+            raw_regions = self.main_app._collect_morphological_regions(cv_image, advanced=True)
+            merged = self.main_app._merge_text_boxes_to_blocks(raw_regions, cv_image.shape, strict=True)
         except Exception as e:
-            print(f"Inpainting error: {e}")
-            return cv_image
+            print(f"Deteksi blok morfologis gagal (pakai box VLM apa adanya): {e}")
+            return
+        blocks = []
+        for _text, polygon in merged or []:
+            rect = polygon.boundingRect()
+            if rect.width() < 14 or rect.height() < 14:
+                continue
+            if rect.width() * rect.height() > w * h * 0.9:
+                continue
+            blocks.append(rect)
+        if not blocks:
+            return
+
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+
+        # Buang blok sampah lebih dulu: halaman ber-noise (speed line, screentone,
+        # panel gelap) memasok banyak blok yang bukan teks. Gerbangnya bentuk
+        # goresan, bukan latar — burst putih di atas panel hitam membuat gerbang
+        # "latar polos" salah sasaran (panel hitamnya sendiri latar polos).
+        text_blocks = []
+        for block in blocks:
+            score = self._block_text_score(gray, block)
+            if score > 0:
+                text_blocks.append((block, score))
+        if not text_blocks:
+            return
+
+        pairs = []
+        for ai, payload in enumerate(created_areas):
+            rect = payload['rect']
+            if rect.width() < 12 or rect.height() < 12:
+                continue
+            center = rect.center()
+            span = max(1.0, math.hypot(rect.width(), rect.height()))
+            for bi, (block, score) in enumerate(text_blocks):
+                inter = rect.intersected(block)
+                if inter.isEmpty():
+                    continue
+                block_area = max(1, block.width() * block.height())
+                containment = (inter.width() * inter.height()) / block_area
+                if containment < 0.5:
+                    continue  # blok sebagian besar di luar box
+                bc = block.center()
+                dist = math.hypot(bc.x() - center.x(), bc.y() - center.y())
+                proximity = 1.0 / (1.0 + dist / span)
+                pairs.append((containment * score * proximity, ai, bi))
+
+        if not pairs:
+            return
+
+        def _gap(rect_a, rect_b):
+            dx = max(0, max(rect_a.left() - rect_b.right(), rect_b.left() - rect_a.right()))
+            dy = max(0, max(rect_a.top() - rect_b.bottom(), rect_b.top() - rect_a.bottom()))
+            return math.hypot(dx, dy)
+
+        # Ambang ~1.5x dimensi TERKECIL blok (tinggi baris untuk teks horizontal,
+        # lebar kolom untuk teks vertikal Jepang). Memakai tinggi saja membuat
+        # kolom vertikal yang menjulang menghasilkan ambang ratusan piksel →
+        # union meledak lintas balon → mask raksasa → halaman jadi blob.
+        def _near(union, block):
+            span = min(block.width(), block.height())
+            return _gap(union, block) <= max(20.0, 1.5 * span)
+
+        # Pagar pertumbuhan: union tidak boleh merambat jauh dari box VLM-nya.
+        # Di halaman padat, tanpa pagar ini satu item bisa merangkai blok
+        # bersambung melewati beberapa balon sekaligus.
+        limits = {}
+        for ai, payload in enumerate(created_areas):
+            r = payload['rect']
+            gx = max(10, r.width() // 5)
+            gy = max(10, r.height() // 5)
+            limits[ai] = QRect(r.x() - gx, r.y() - gy, r.width() + 2 * gx, r.height() + 2 * gy)
+
+        def _may_join(ai, union, block):
+            return _near(union, block) and limits[ai].contains(block.center())
+
+        # Greedy: tiap blok dimiliki maksimal SATU item, tapi satu item boleh
+        # mengumpulkan BANYAK blok (union) — teks satu balon sering terpecah
+        # beberapa blok, dan union mencegah rect sempit + sisa teks tak terhapus.
+        # Blok tambahan wajib berdekatan dengan anchor (blok skor tertinggi)
+        # supaya box yang menutupi dua balon tidak menggabungkan keduanya.
+        pairs.sort(key=lambda t: t[0], reverse=True)
+        item_union = {}
+        used_blocks = set()
+        for _score, ai, bi in pairs:
+            if bi in used_blocks:
+                continue
+            block = text_blocks[bi][0]
+            current = item_union.get(ai)
+            if current is None:
+                item_union[ai] = QRect(block)
+            elif _may_join(ai, current, block):
+                item_union[ai] = current.united(block)
+            else:
+                continue  # blok balon lain — jangan digabung
+            used_blocks.add(bi)
+
+        # Penyelamatan: item yang box-nya meleset (tak menutupi blok mana pun)
+        # ditarik ke blok teks terdekat yang belum dimiliki — inilah yang
+        # memulangkan terjemahan ke balonnya sendiri saat box VLM bergeser.
+        max_rescue = 0.25 * max(w, h)
+        for ai, payload in enumerate(created_areas):
+            if ai in item_union:
+                continue
+            center = payload['rect'].center()
+            best = None
+            for bi, (block, _score) in enumerate(text_blocks):
+                if bi in used_blocks:
+                    continue
+                bc = block.center()
+                dist = math.hypot(bc.x() - center.x(), bc.y() - center.y())
+                if dist <= max_rescue and (best is None or dist < best[0]):
+                    best = (dist, bi, block)
+            if best is not None:
+                used_blocks.add(best[1])
+                item_union[ai] = QRect(best[2])
+                # Box aslinya meleset — pagar ikut pindah ke sekitar blok baru
+                limits[ai] = limits[ai].united(best[2].adjusted(-40, -40, 40, 40))
+
+        # Sapu blok sisa yang berdekatan dengan union: baris yang menjorok
+        # keluar box VLM tetap ikut, supaya tidak ada potongan teks tertinggal.
+        changed = True
+        while changed:
+            changed = False
+            for ai in list(item_union.keys()):
+                union = item_union[ai]
+                for bi, (block, _score) in enumerate(text_blocks):
+                    if bi in used_blocks:
+                        continue
+                    if _may_join(ai, union, block):
+                        item_union[ai] = union.united(block)
+                        union = item_union[ai]
+                        used_blocks.add(bi)
+                        changed = True
+
+        for ai, union in item_union.items():
+            # Margin agar zona latar di sekitar teks ikut dalam crop analisis
+            mx = max(6, union.width() // 8)
+            my = max(6, union.height() // 8)
+            gx1 = max(0, union.x() - mx)
+            gy1 = max(0, union.y() - my)
+            gx2 = min(w, union.x() + union.width() + mx)
+            gy2 = min(h, union.y() + union.height() + my)
+            grown = QRect(gx1, gy1, gx2 - gx1, gy2 - gy1)
+            payload = created_areas[ai]
+            payload['rect'] = grown
+            payload['polygon'] = QPolygon([
+                grown.topLeft(), grown.topRight(), grown.bottomRight(), grown.bottomLeft()
+            ])
+            # Tandai: bbox teks sudah pasti (= union blok morfologis), deteksi
+            # huruf di loop mask tidak diperlukan lagi untuk payload ini.
+            payload['_assigned_block'] = union
+
+    def _refine_and_mask_ai_regions(self, cv_image, created_areas):
+        """Rapikan region AI Vision dan bangun mask inpaint yang aman untuk artwork.
+
+        Per region VLM: cari zona latar polos, lalu pilih komponen goresan
+        berbentuk huruf di dalamnya (`_collect_letter_strokes`).
+        - Ketemu huruf → rect area di-snap ke BBOX TEKS ASLI (bukan bbox zona —
+          zona bisa bocor menyatu dengan background putih halaman sehingga
+          bbox-nya melebar); mask = SEMUA piksel non-latar di dalam bbox teks
+          (component yang menembus jauh keluar bbox dikecualikan).
+        - Tidak ketemu (teks di atas artwork ramai) → region dilewati dari
+          inpaint; teks terjemahan digambar di atas gambar asli apa adanya.
+        Box duplikat yang menunjuk teks sama di-dedupe (created_areas dimutasi
+        in-place). Return mask gabungan uint8 seukuran halaman.
+        """
+        h, w = cv_image.shape[:2]
+        # Koreksi dulu box VLM ke blok teks morfologis (penugasan global) —
+        # setelah ini tiap payload menunjuk blok teksnya sendiri, rapat.
+        self._assign_regions_to_text_blocks(cv_image, created_areas)
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        pad = max(3, int(self.settings.get('inpaint_padding', 5)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
+
+        for payload in created_areas:
+            assigned_block = payload.pop('_assigned_block', None)
+            rect = payload['rect']
+            x1 = max(0, rect.x())
+            y1 = max(0, rect.y())
+            x2 = min(w, rect.x() + rect.width())
+            y2 = min(h, rect.y() + rect.height())
+            if x2 - x1 < 12 or y2 - y1 < 12:
+                continue
+            crop = gray[y1:y2, x1:x2]
+            found = self._find_bubble_interior(crop)
+            if found is None:
+                continue
+            zone, is_bright = found
+            if assigned_block is not None:
+                # Blok morfologis sudah = bbox teks — filter bentuk huruf tidak
+                # berlaku di crop rapat (huruf ≈ seukuran crop, akan salah buang).
+                text_bbox = (
+                    assigned_block.x() - x1, assigned_block.y() - y1,
+                    assigned_block.width(), assigned_block.height(),
+                )
+            else:
+                letters, text_bbox = self._collect_letter_strokes(crop, zone, is_bright)
+                if letters is None:
+                    continue
+
+            # Mask menyeluruh: SEMUA piksel non-latar dalam bbox teks — huruf
+            # tebal, tepi anti-alias, hingga inti putih huruf ber-outline —
+            # supaya tidak ada "hantu" teks tersisa. Component yang menembus
+            # jauh keluar bbox (outline balon / line art) dikecualikan.
+            bx, by, bw2, bh2 = text_bbox
+            margin = pad + 4
+            rx1 = max(0, bx - margin)
+            ry1 = max(0, by - margin)
+            rx2 = min(x2 - x1, bx + bw2 + margin)
+            ry2 = min(y2 - y1, by + bh2 + margin)
+            non_bg = (zone == 0).astype(np.uint8)
+            numc, labelsc, statsc, _cc = cv2.connectedComponentsWithStats(non_bg, connectivity=8)
+            keep = np.zeros_like(non_bg)
+            # Huruf selalu dikelilingi latar balon; badan kotak narasi/artwork
+            # hanya bersinggungan di tepinya. Rasio sentuhan dengan latar
+            # (didilasi) memisahkan keduanya.
+            near_zone = cv2.dilate(zone, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+            touch = np.bincount(labelsc[near_zone > 0].ravel(), minlength=numc)
+            bbox_area = max(1, (rx2 - rx1) * (ry2 - ry1))
+            for ci in range(1, numc):
+                cx, cy, cbw, cbh, carea = (int(v) for v in statsc[ci])
+                if carea > 0.6 * bbox_area:
+                    continue  # sebesar itu bukan huruf — badan kotak/artwork
+                if touch[ci] < 0.35 * carea:
+                    continue  # tidak menempel latar balon → bukan teks di dalamnya
+                ix1 = max(cx, rx1)
+                iy1 = max(cy, ry1)
+                ix2 = min(cx + cbw, rx2)
+                iy2 = min(cy + cbh, ry2)
+                if ix2 <= ix1 or iy2 <= iy1:
+                    continue
+                if (ix2 - ix1) * (iy2 - iy1) < 0.7 * cbw * cbh:
+                    continue  # sebagian besar di luar bbox teks → outline/art
+                keep[labelsc == ci] = 255
+            strokes = cv2.dilate(keep, kernel, iterations=2)
+            allowed = cv2.bitwise_or(zone, (keep > 0).astype(np.uint8))
+            strokes[allowed == 0] = 0
+            mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], strokes)
+
+            # Snap rect ke bbox teks asli + margin — teks terjemahan menempati
+            # posisi yang sama dengan teks aslinya.
+            tx1 = max(0, x1 + bx - margin)
+            ty1 = max(0, y1 + by - margin)
+            tx2 = min(w, x1 + bx + bw2 + margin)
+            ty2 = min(h, y1 + by + bh2 + margin)
+            tight = QRect(tx1, ty1, tx2 - tx1, ty2 - ty1)
+            payload['rect'] = tight
+            payload['polygon'] = QPolygon([
+                tight.topLeft(), tight.topRight(), tight.bottomRight(), tight.bottomLeft()
+            ])
+
+        # Dedupe — dua box VLM sering menunjuk teks yang sama
+        kept = []
+        for payload in created_areas:
+            rect = payload['rect']
+            rect_area = rect.width() * rect.height()
+            is_duplicate = False
+            for other in kept:
+                inter = rect.intersected(other['rect'])
+                if inter.isEmpty():
+                    continue
+                smaller = min(rect_area, other['rect'].width() * other['rect'].height())
+                if smaller > 0 and inter.width() * inter.height() >= 0.6 * smaller:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                kept.append(payload)
+        created_areas[:] = kept
+        return mask

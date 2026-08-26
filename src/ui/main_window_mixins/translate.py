@@ -110,23 +110,69 @@ class TranslateMixin:
 
         layout.addWidget(detection_group)
 
-        # One-Click Full-Page Translation Group
-        auto_translate_group = QGroupBox("Full-Page Translation (Instant)")
-        auto_translate_layout = QVBoxLayout(auto_translate_group)
-        
+        layout.addStretch()
+        return tab
+
+    def _create_full_translate_tab(self):
+        """Tab khusus 'Full': one-click full-page auto translation dengan selector mode.
+
+        Tombol dan selector dipindah ke sini dari tab OCR supaya entry-nya jelas.
+        Selector menentukan `use_ai_vision` yang dibaca di start_full_page_translation.
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(14)
+
+        full_group = QGroupBox("Full-Page Translation")
+        full_layout = QVBoxLayout(full_group)
+        full_layout.setContentsMargins(12, 16, 12, 12)
+        full_layout.setSpacing(10)
+
+        info = QLabel(
+            "Proses otomatis 1 gambar aktif: deteksi → OCR (engine dari tab OCR) → "
+            "IOPaint → translate. Hasil muncul di canvas untuk dikoreksi.\n"
+            "• Lokal per-region: deteksi morfologi lalu OCR tiap blok.\n"
+            "• AI Vision: kirim 1 halaman utuh ke VLM (Gemini/OpenAI/OpenRouter).\n"
+            "• Penerjemah: model AI Translate (tab AI Cfg) atau langsung dari AI OCR/Vision."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color:#4a5c78; font-size:8.5pt; font-style:italic;")
+        full_layout.addWidget(info)
+
+        mode_form = QFormLayout()
+        mode_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        mode_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self.full_mode_combo = QComboBox()
+        # itemData = nilai use_ai_vision yang dibaca worker
+        self.full_mode_combo.addItem("Lokal per-region (morfologi)", False)
+        self.full_mode_combo.addItem("AI Vision full-page (1 API call)", True)
+        self.full_mode_combo.setCurrentIndex(0)
+        self.full_mode_combo.setToolTip(
+            "Lokal: deteksi morfologi + OCR per blok pakai engine terpilih.\n"
+            "AI Vision: 1 gambar utuh ke VLM, balik JSON box+terjemahan (hemat token)."
+        )
+        mode_form.addRow("Mode:", self.full_mode_combo)
+
+        self.full_translator_combo = QComboBox()
+        # itemData: 'ai_translate' = model dari tab AI Cfg; 'ai_ocr' = terjemahan
+        # langsung oleh model AI OCR/Vision dalam panggilan yang sama
+        self.full_translator_combo.addItem("Model AI Translate (tab AI Cfg)", 'ai_translate')
+        self.full_translator_combo.addItem("Langsung dari AI OCR/Vision", 'ai_ocr')
+        self.full_translator_combo.setCurrentIndex(0)
+        self.full_translator_combo.setToolTip(
+            "Model AI Translate: OCR dulu, lalu terjemahkan pakai model di tab AI Cfg.\n"
+            "Langsung: model AI OCR/Vision menerjemahkan sekaligus dalam satu panggilan."
+        )
+        mode_form.addRow("Penerjemah:", self.full_translator_combo)
+        full_layout.addLayout(mode_form)
+
         self.auto_translate_page_btn = QPushButton(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setStyleSheet(compact_primary_button_qss())
         self.auto_translate_page_btn.clicked.connect(self.start_full_page_translation)
-        
-        self.use_ai_vision_checkbox = QCheckBox("Gunakan AI Vision (Gemini/GPT-4o)")
-        self.use_ai_vision_checkbox.setChecked(True)
-        self.use_ai_vision_checkbox.setToolTip("Menggunakan kecerdasan buatan visual untuk deteksi sekaligus penerjemahan (sangat akurat, membutuhkan API key).")
-        
-        auto_translate_layout.addWidget(self.auto_translate_page_btn)
-        auto_translate_layout.addWidget(self.use_ai_vision_checkbox)
-        
-        layout.addWidget(auto_translate_group)
+        full_layout.addWidget(self.auto_translate_page_btn)
 
+        layout.addWidget(full_group)
         layout.addStretch()
         return tab
 
@@ -723,28 +769,76 @@ class TranslateMixin:
             self.statusBar().showMessage(f"Click-to-Translate failed: {e}", 4000)
 
     def on_full_page_translation_finished(self, created_areas, msg):
+        worker = getattr(self, '_full_page_worker', None)
+        cleaned_pil = getattr(worker, 'cleaned_image_pil', None) if worker is not None else None
+        inpaint_requested = bool(getattr(worker, 'settings', {}).get('use_inpaint', True)) if worker is not None else False
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setEnabled(True)
-        
+        if worker is not None:
+            worker.wait(3000)  # pastikan thread benar-benar berhenti sebelum referensi dilepas
+        self._full_page_worker = None
+
         if not created_areas:
             self.show_toast("Selesai", str(msg), kind="info")
             return
 
+        self._push_undo_snapshot("Full-Page Translate")
+
+        # Pasang hasil inpaint full-page (satu panggilan dari worker) sebagai base
+        # image — mekanisme yang sama dengan Inpaint Brush (cleaned/pre_inpaint
+        # record), jadi Undo/Cancel Inpaint tetap bekerja seperti biasa.
+        page_cleaned = False
+        pre_inpaint_png = None
+        record_key = None
+        if cleaned_pil is not None:
+            try:
+                record_key = self.get_current_data_key()
+                record = self.all_typeset_data.get(record_key, {}) if record_key else {}
+                pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
+                if not pre_inpaint_png:
+                    pre_inpaint_png = self._encode_cleaned_image(self.current_image_pil)
+                self._apply_base_image(cleaned_pil)
+                page_cleaned = True
+            except Exception as e:
+                print(f"Gagal menerapkan hasil inpaint halaman: {e}")
+        elif inpaint_requested:
+            self.show_banner(
+                "full-page-inpaint-miss", "Inpaint halaman gagal",
+                "Teks digambar tanpa pembersihan latar. Cek server IOPaint (127.0.0.1:8080) lalu ulangi.",
+                kind="warning"
+            )
+
         applied = 0
         for area_payload in created_areas:
             try:
-                self._create_typeset_area(
+                area = self._create_typeset_area(
                     rect=area_payload['rect'],
                     text=area_payload['text'],
                     settings=area_payload['settings'],
                     polygon=area_payload['polygon'],
                     original_text=area_payload['original_text'],
+                    # Halaman sudah bersih → renderer tidak perlu inpaint ulang per area
+                    manual_inpaint=False if page_cleaned else None,
                     is_manual=False
                 )
+                if page_cleaned:
+                    # Latar sudah bersih — kotak background hanya menutupi artwork
+                    area.set_override('use_background_box', False)
+                self.typeset_areas.append(area)
                 applied += 1
             except Exception as e:
                 # Satu area gagal tidak boleh menggagalkan seluruh halaman
                 print(f"Gagal membuat area typeset: {e}")
+
+        if page_cleaned and record_key:
+            self._update_typeset_record(
+                record_key,
+                areas=list(self.typeset_areas),
+                redo=list(self.redo_stack),
+                cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
+                pre_inpaint_image_png=pre_inpaint_png,
+            )
+            self._refresh_inpaint_result_controls()
 
         self.redraw_all_typeset_areas(refresh_layers=True)
         if applied < len(created_areas):
@@ -759,5 +853,9 @@ class TranslateMixin:
     def on_full_page_translation_error(self, err_msg):
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setEnabled(True)
+        worker = getattr(self, '_full_page_worker', None)
+        if worker is not None:
+            worker.wait(3000)  # pastikan thread benar-benar berhenti sebelum referensi dilepas
+        self._full_page_worker = None
         self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
         self.show_banner("full-page-translation-error", "Penerjemahan halaman gagal", str(err_msg), kind="error")

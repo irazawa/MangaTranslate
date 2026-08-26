@@ -296,6 +296,7 @@ class UibuildMixin:
         # Tab definitions: (label_short, emoji, tooltip, widget_builder)
         tab_defs = [
             ("OCR",      "🔍", "Translate & OCR settings",     self._create_translate_tab),
+            ("Full",     "🚀", "Full-page auto translation",   self._create_full_translate_tab),
             ("Typeset",  "✏️", "Typography & text styling",    self._create_typeset_tab),
             ("Layers",   "🗂️", "Canvas layer manager",         self._create_layers_tab),
             ("Cleanup",  "🧹", "Inpainting & detection tools",  self._create_cleanup_tab),
@@ -309,6 +310,7 @@ class UibuildMixin:
 
         compact_markers = {
             "OCR": "OCR",
+            "Full": "FULL",
             "Typeset": "TXT",
             "Layers": "LYR",
             "Cleanup": "CLN",
