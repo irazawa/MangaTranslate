@@ -53,12 +53,15 @@ class QueueProcessorSignals(WorkerSignals):
     queue_status = pyqtSignal(int)          # Sinyal jumlah item dalam antrian
     worker_finished = pyqtSignal(int)           # Sinyal saat 1 worker selesai (dengan ID worker)
     status_update = pyqtSignal(str)     # Sinyal update status bar (aman dari thread)
+    stage = pyqtSignal(int, str, str, str)  # worker_id, tahap (job/ocr/translate/api_wait), detail, label model
 
 
 # Sinyal khusus untuk pemrosesan batch (sekumpulan pekerjaan)
 class BatchProcessorSignals(WorkerSignals):
     batch_job_complete = pyqtSignal(str, object, str, str)  # image_path, new_area, original_text, translated_text
     batch_finished = pyqtSignal()           # Sinyal jika semua batch selesai
+    batch_progress = pyqtSignal(int, int, str, str)  # selesai, total, nama halaman berjalan, label model
+    info = pyqtSignal(str)                  # Pesan informasi non-fatal untuk status bar
 
 
 # Sinyal khusus untuk penyimpanan hasil batch
@@ -207,6 +210,16 @@ class QueueProcessorWorker(QObject):
         self.is_running = True
         self.signals = QueueProcessorSignals()
 
+    # --- Instrumentasi untuk tab Workers (stage & model per job) ---
+    def _model_label(self, settings: dict) -> str:
+        ai_model = settings.get('ai_model') if isinstance(settings, dict) else None
+        if isinstance(ai_model, (tuple, list)) and len(ai_model) == 2:
+            return f"{ai_model[0]} · {ai_model[1]}"
+        return str(settings.get('ai_model_label') or '') if isinstance(settings, dict) else ''
+
+    def _stage(self, key: str, detail: str = '', model_label: str = ''):
+        self.signals.stage.emit(self.worker_id, key, detail, model_label)
+
     # Fungsi utama yang dijalankan oleh thread worker
     def apply_auto_font(self, translated_text, settings):
         if not settings.get('auto_font_enabled', False):
@@ -262,6 +275,8 @@ class QueueProcessorWorker(QObject):
                 settings = job['settings']
                 # Teks dari fase deteksi (opsional, untuk menghemat panggilan OCR)
                 pre_detected_text = job.get('text')
+
+                self._stage('job', os.path.basename(str(image_path)), self._model_label(settings))
 
                 original_text, translated_text = self.process_job(cropped_cv_img, settings, pre_detected_text)
 
@@ -340,6 +355,7 @@ class QueueProcessorWorker(QObject):
     # Melakukan OCR sesuai engine yang dipilih
     def perform_ocr(self, image_to_process, settings: dict) -> str:
         # Panggil metode OCR dari main app yang sudah terpusat
+        self._stage('ocr', str(settings.get('ocr_engine', '')), self._model_label(settings))
         return self.main_app.perform_ocr(image_to_process, settings)
 
 
@@ -368,6 +384,7 @@ class QueueProcessorWorker(QObject):
                     provider, model_name = ai_model_cfg
                     if not self.wait_for_api_slot(provider, model_name):
                         return processed_text, None
+                    self._stage('translate', f"{provider} · {model_name}", self._model_label(settings))
                     try:
                         translated_text = self.main_app.translate_with_ai(processed_text, settings['target_lang'], provider, model_name, settings)
                     except Exception as exc:
@@ -424,6 +441,7 @@ class QueueProcessorWorker(QObject):
         
         # --- [DIUBAH] Logika terjemahan yang lebih fleksibel ---
         provider, model_name = settings['ai_model']
+        self._stage('translate', f"{provider} · {model_name}", self._model_label(settings))
 
         # Opsi 1: AI-Only Translate
         if settings.get('use_ai_only_translate'):
@@ -476,6 +494,7 @@ class QueueProcessorWorker(QObject):
         if not self.wait_for_api_slot(provider, model_name):
             return original_text, None
 
+        self._stage('translate', f"{provider} · {model_name}", self._model_label(settings))
         # [DIUBAH] Gunakan fungsi abstrak translate_with_ai
         try:
             translated_text = self.main_app.translate_with_ai(
@@ -500,6 +519,7 @@ class QueueProcessorWorker(QObject):
             now = time.time()
             wait_sec = 61 - int(time.strftime('%S', time.localtime(now)))
             self.signals.status_update.emit(f"API limit {model_name} tercapai. Tunggu {wait_sec}s...")
+            self._stage('api_wait', f"Menunggu slot API ({wait_sec}s)", f"{provider} · {model_name}")
             time.sleep(wait_sec)
         return False
 
@@ -569,7 +589,28 @@ class BatchProcessorWorker(QObject):
         self.main_app = main_app
         self.batch_queue = batch_queue
         self.settings = settings
+        self.is_cancelled = False
         self.signals = BatchProcessorSignals()
+
+    def cancel(self):
+        self.is_cancelled = True
+
+    def _model_label(self) -> str:
+        ai_model = self.settings.get('ai_model') if isinstance(self.settings, dict) else None
+        if isinstance(ai_model, (tuple, list)) and len(ai_model) == 2:
+            return f"{ai_model[0]} · {ai_model[1]}"
+        return str(self.settings.get('ai_model_label') or '')
+
+    # Mekanisme tunggu jika API slot penuh (rate limit), kooperatif terhadap cancel
+    def wait_for_api_slot(self, provider: str, model_name: str) -> bool:
+        while not self.is_cancelled:
+            if self.main_app.check_and_increment_usage(provider, model_name):
+                return True
+            now = time.time()
+            wait_sec = 61 - int(time.strftime('%S', time.localtime(now)))
+            self.signals.info.emit(f"API limit {model_name} tercapai. Batch menunggu {wait_sec}s...")
+            time.sleep(wait_sec)
+        return False
 
     def apply_auto_font(self, translated_text, settings):
         if not settings.get('auto_font_enabled', False):
@@ -616,8 +657,14 @@ class BatchProcessorWorker(QObject):
             for job in self.batch_queue:
                 jobs_by_image.setdefault(job['image_path'], []).append(job)
 
-            for image_path, jobs in jobs_by_image.items():
+            total_images = len(jobs_by_image)
+            model_label = self._model_label()
+            for idx, (image_path, jobs) in enumerate(jobs_by_image.items()):
+                if self.is_cancelled:
+                    break
+                self.signals.batch_progress.emit(idx, total_images, os.path.basename(str(image_path)), model_label)
                 self.process_image_batch(image_path, jobs)
+            self.signals.batch_progress.emit(total_images, total_images, "", model_label)
         except Exception as e:
             self.signals.error.emit(f"Error in batch processor: {e}")
         finally:
@@ -707,7 +754,7 @@ Snippets to Translate:
 Your final output must ONLY be the translated {target_lang} text, with each translation on a new line and correctly numbered.
 """
 
-        if not self.main_app.wait_for_api_slot(provider, model_name):
+        if not self.wait_for_api_slot(provider, model_name):
             return
 
         response_text = self.main_app.call_ai_for_batch(
@@ -717,7 +764,7 @@ Your final output must ONLY be the translated {target_lang} text, with each tran
             max_output_tokens=self.settings.get("max_output_tokens", 500012)  # default aman
         )
 
-        if not response_text or "[ERROR]" in response_text or "[FAILED]" in response_text:
+        if not response_text or "[ERROR" in response_text or "[FAILED" in response_text:
             self.signals.error.emit(
                 f"Failed to process batch for {os.path.basename(image_path)}: API call failed."
             )

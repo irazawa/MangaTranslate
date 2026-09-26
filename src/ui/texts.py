@@ -242,6 +242,45 @@ class WorkspaceText:
     RIGHT_PANEL_TOGGLE_TOOLTIP = "Toggle Tools & Workspace panel (F4)"
 
 
+class WorkersText:
+    TAB_TOOLTIP = "Monitor worker aktif, antrian, batch, dan hentikan worker yang macet"
+    WORKERS_SECTION = "Worker Aktif"
+    QUEUE_SECTION = "Antrian"
+    BATCH_SECTION = "Batch Translate"
+    EMPTY_WORKERS = "Tidak ada worker aktif. Worker muncul otomatis saat ada antrian terjemahan."
+    HINT = "Worker macet (>2 menit tanpa progres) ditandai merah. 'Batalkan' berhenti setelah tugas berjalan; 'Paksa' menghentikan segera."
+    COL_WORKER = "Worker"
+    COL_TASK = "Tugas"
+    COL_STAGE = "Tahap"
+    COL_MODEL = "Model"
+    COL_DURATION = "Durasi"
+    COL_STATUS = "Status"
+    COL_ACTION = "Aksi"
+    COL_INDEX = "#"
+    COL_ITEM = "Item"
+    STATUS_RUNNING = "Berjalan"
+    STATUS_API_WAIT = "Menunggu slot API"
+    STATUS_STUCK = "Macet"
+    FULLPAGE_TASK = "Full-page translate"
+    STAGE_LABELS = {
+        'job': "Menyiapkan",
+        'ocr': "OCR",
+        'translate': "Translate",
+        'api_wait': "Tunggu API",
+    }
+    BTN_CANCEL = "Batalkan"
+    BTN_FORCE = "Paksa"
+    BTN_CANCEL_BATCH = "Batalkan Batch"
+    BTN_FORCE_BATCH = "Paksa Hentikan Batch"
+    BATCH_IDLE = "Tidak ada batch berjalan. Aktifkan mode batch, pilih area, lalu tekan 'Process Batch Now'."
+    BATCH_DONE_FMT = "Selesai {done}/{total}"
+    BATCH_CURRENT_FMT = "Halaman: {current}"
+    BATCH_ETA_FMT = "Perkiraan selesai: {eta}"
+    BATCH_ELAPSED_FMT = "Berjalan: {elapsed}"
+    SUMMARY_ETA_FMT = "±{eta}"
+    AVG_FMT = "Rata-rata {avg}/job"
+
+
 def welcome_subtitle_html() -> str:
     return f"{escape(APP_NAME)} &mdash; v{APP_VERSION}"
 

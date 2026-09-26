@@ -303,6 +303,7 @@ class UibuildMixin:
             ("History",  "📋", "Translation history log",       self._create_history_tab),
             ("Scenes",   "🎬", "Scene / dialogue manager",      self._create_scene_tab),
             ("AI Cfg",   "🤖", "AI models & hardware config",   self._create_ai_hardware_tab),
+            ("Workers",  "🛠", WorkersText.TAB_TOOLTIP,          self._create_workers_tab),
         ]
         if self._chat_widget is not None:
             # Insert chat after OCR
@@ -318,6 +319,7 @@ class UibuildMixin:
             "Scenes": "SCN",
             "AI Cfg": "AI",
             "Chat": "CHAT",
+            "Workers": "WRK",
         }
         tab_defs = [
             (label, compact_markers.get(label, marker), tip, builder)

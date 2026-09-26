@@ -101,7 +101,7 @@ from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
 from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
-from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, TranslateMixin, OcrMixin, TypesetMixin, ProjectioMixin, UibuildMixin
+from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, TranslateMixin, OcrMixin, TypesetMixin, ProjectioMixin, UibuildMixin, WorkersMonitorMixin
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
@@ -147,7 +147,7 @@ class FindReplaceWorker(QObject):
             self.error.emit(str(exc))
 
 
-class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, TranslateMixin, OcrMixin, TypesetMixin, ProjectioMixin, UibuildMixin, QMainWindow):
+class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, TranslateMixin, OcrMixin, TypesetMixin, ProjectioMixin, UibuildMixin, WorkersMonitorMixin, QMainWindow):
     api_cost_signal = pyqtSignal(int, int, str, str)
     snippet_translated_signal = pyqtSignal()
     DARK_THEME_STYLESHEET = """
@@ -700,6 +700,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self.autosave_timer.timeout.connect(self.auto_save_project)
         # Whether autosave is allowed to run (user preference). Persisted in settings.json.
         self.autosave_enabled = bool(autosave_cfg.get('enabled', False))
+
+        # Watchdog tab Workers: registry aktivitas + deteksi macet + ETA
+        self.setup_workers_monitor()
 
         self.dl_models = {
             'kitsumed_onnx': {'path': 'src/models/model_dynamic.onnx', 'instance': None, 'type': 'onnx'},
@@ -2766,6 +2769,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         worker.signals.error.connect(self.on_worker_error)
         worker.signals.worker_finished.connect(self.on_worker_finished)
         worker.signals.status_update.connect(self.update_status_bar)
+        worker.signals.stage.connect(self.on_worker_stage)
 
         thread.started.connect(worker.run)
         thread.start()
@@ -6976,6 +6980,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
     def closeEvent(self, event):
         # Stop interactive flows and cancel background save worker first
         self.cancel_interactive_batch()
+        try:
+            if getattr(self, 'worker_watchdog_timer', None):
+                self.worker_watchdog_timer.stop()
+        except Exception:
+            pass
         try:
             if hasattr(self, 'deferred_typeset_timer'):
                 self.deferred_typeset_timer.stop()

@@ -72,7 +72,7 @@ from src.ui.canvas import *
 from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
-from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, WorkersText, about_html, welcome_subtitle_html
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult

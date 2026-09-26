@@ -539,7 +539,8 @@ def refresh_api_clients():
     try:
         if openai and OPENAI_API_KEY:
             try:
-                openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                # timeout eksplisit agar request tidak menggantung memakai default SDK 600s
+                openai_client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=120.0)
             except Exception as e:
                 print(f"Gagal mengkonfigurasi OpenAI API: {e}", file=sys.stderr)
     except Exception:

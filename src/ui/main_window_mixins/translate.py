@@ -243,6 +243,89 @@ class TranslateMixin:
         # Setelah 5x gagal, lemparkan exception agar penangan fallback di worker terpicu
         raise Exception(f"Seluruh {max_attempts} percobaan terjemahan AI gagal. Error terakhir: {last_exc}")
 
+    # Kirim prompt batch mentah (sudah berisi instruksi penomoran) ke provider AI pilihan
+    def call_ai_for_batch(self, prompt, provider, model_name, max_output_tokens=500012):
+        if not prompt or not prompt.strip():
+            return ""
+        try:
+            if provider == 'Gemini':
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.5},
+                    request_options={"timeout": 120},
+                    safety_settings=[
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    ]
+                )
+                if response.parts:
+                    if hasattr(self, "api_cost_signal"):
+                        self.api_cost_signal.emit(len(prompt), len(response.text), 'Gemini', model_name)
+                    return response.text.strip()
+                return "[GEMINI ERROR] Empty response"
+
+            if provider == 'OpenAI':
+                client = getattr(self, "openai_client", None) or openai_client
+                if client is None:
+                    return "[OPENAI ERROR] Client not configured"
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max(1024, min(max_output_tokens, 16384)),
+                )
+                output = (response.choices[0].message.content or "").strip()
+                if hasattr(response, "usage") and hasattr(self, "api_cost_signal"):
+                    self.api_cost_signal.emit(response.usage.prompt_tokens, response.usage.completion_tokens, "OpenAI", model_name)
+                return output or "[OPENAI ERROR] Empty response"
+
+            provider_key = get_translate_provider_key(provider)
+            if provider_key in LOCAL_TRANSLATE_PROVIDERS:
+                provider_meta = LOCAL_TRANSLATE_PROVIDERS.get(provider_key, {})
+                provider_display = provider_meta.get('display', provider or 'OpenRouter')
+                provider_cfg = get_translate_provider_settings(provider_key)
+                api_key = provider_cfg.get('api_key', '').strip()
+                if not api_key and not provider_meta.get('api_key_optional'):
+                    return f"[{provider_display.upper()} API KEY NOT CONFIGURED]"
+                url = provider_cfg.get('url', '').strip() or provider_meta.get('url', "https://openrouter.ai/api/v1/chat/completions")
+                model_info = self.AI_PROVIDERS.get(provider, {}).get(model_name, {})
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                payload = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": float(model_info.get('temperature', 0.7)) if model_info else 0.7,
+                    "max_tokens": int(model_info.get('max_tokens', 2048)) if model_info else 2048,
+                }
+                pr_timeout = int(provider_cfg.get('timeout', 60) or 60)
+                response = robust_post(url, headers=headers, json_payload=payload,
+                                       timeout=pr_timeout, max_retries=3, backoff_factor=1.5)
+                data = response.json()
+                choices = data.get('choices')
+                output_text = ""
+                if isinstance(choices, list) and choices:
+                    msg = choices[0].get('message', {})
+                    content = msg.get('content')
+                    if isinstance(content, list):
+                        output_text = "".join(part.get('text', '') for part in content if isinstance(part, dict))
+                    elif isinstance(content, str):
+                        output_text = content
+                if not output_text:
+                    if 'error' in data:
+                        return f"[{provider_display.upper()} ERROR: {data['error'].get('message', 'Unknown error')}]"
+                    return f"[{provider_display.upper()} ERROR: Empty response]"
+                usage = data.get('usage') or {}
+                if hasattr(self, "api_cost_signal"):
+                    self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), provider_display, model_name)
+                return output_text.strip()
+
+            return f"[ERROR: Unknown AI provider '{provider}']"
+        except Exception as exc:
+            return f"[ERROR] Batch AI call failed: {exc}"
+
     # [DIUBAH] Fungsi terjemahan Gemini yang dimodifikasi
     def translate_with_gemini(
         self,
@@ -305,12 +388,14 @@ class TranslateMixin:
     """
 
             # ? Tambah config untuk batasi output tokens + longgarkan safety_settings
+            # request_options.timeout mencegah panggilan Gemini menggantung tanpa batas
             response = model.generate_content(
                 prompt,
                 generation_config={
                     "max_output_tokens": 500012,  # batas aman
                     "temperature": settings.get("temperature", 0.5) if isinstance(settings, dict) else 0.5
                 },
+                request_options={"timeout": 120},
                 safety_settings=[
                     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},

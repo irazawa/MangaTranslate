@@ -150,7 +150,14 @@ class BatchMixin:
         self.batch_processor_worker.moveToThread(self.batch_processor_thread)
         self.batch_processor_worker.signals.batch_job_complete.connect(self.on_queue_job_complete) # Re-use the single job complete handler
         self.batch_processor_worker.signals.batch_finished.connect(self.on_api_batch_finished)
+        self.batch_processor_worker.signals.batch_progress.connect(self.on_batch_progress)
+        self.batch_processor_worker.signals.info.connect(self.update_status_bar)
         self.batch_processor_worker.signals.error.connect(self.on_worker_error)
+        self._batch_run = {
+            'total': len(queue_to_process), 'done': 0,
+            'started_at': time.time(), 'last_emit_at': time.time(),
+            'current': '', 'model': '', 'durations': [],
+        }
         self.batch_processor_thread.started.connect(self.batch_processor_worker.run)
         self.batch_processor_thread.finished.connect(self.batch_processor_thread.deleteLater)
         self.batch_processor_thread.start()
@@ -158,6 +165,7 @@ class BatchMixin:
     def on_api_batch_finished(self):
         self.statusBar().showMessage("Batch processing finished.", 5000)
         self.batch_processor_thread.quit()
+        self._batch_run = None
         self.show_toast("Batch translate complete", "Proses batch translation untuk halaman yang dipilih telah selesai.", kind="success")
         self.show_desktop_notification("Batch Translate Selesai", "Proses batch translation untuk halaman yang dipilih telah selesai.")
 
