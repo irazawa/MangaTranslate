@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.9.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -11,7 +11,6 @@ import hashlib
 import configparser
 import base64
 from datetime import date, timedelta
-from openai import OpenAI
 
 # ==============================
 # ?? Library pihak ketiga
@@ -27,7 +26,6 @@ import cv2
 import pytesseract
 import requests
 import fitz  # from PyMuPDF
-import google.generativeai as genai
 from PIL import Image
 # from PIL.ImageQt import ImageQt (unused)
 import io
@@ -105,6 +103,12 @@ from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, Inpaint
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
+from src.core.rfdetr_detector import detect_layout_regions
+
+
+def OpenAI(*args, **kwargs):
+    from openai import OpenAI as _OpenAICls
+    return _OpenAICls(*args, **kwargs)
 
 
 class FindReplaceWorker(QObject):
@@ -2179,7 +2183,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self.OCR_LANGS.clear()
 
         plugins_cfg = SETTINGS.get('ocr_plugins', {})
-        from src.core.config import check_manga_ocr
+        from src.core.config import is_manga_ocr_installed
+        manga_ocr_present = is_manga_ocr_installed()
 
         # Manga-OCR (Selalu tawarkan Japanese (Manga-OCR) agar user bisa pakai/instal offline)
         self.OCR_LANGS['Japanese (Manga-OCR)'] = {'code': 'ja', 'engine': 'Manga-OCR'}
@@ -2202,7 +2207,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             for name, code in paddle_langs.items():
                 key = f'{name} (PaddleOCR)'
                 # If Manga-OCR is available, prefer it for Japanese (it handles manga text far better)
-                if name == 'Japanese' and check_manga_ocr():
+                if name == 'Japanese' and manga_ocr_present:
                     # skip adding PaddleOCR's Japanese entry to avoid selecting a poorer OCR for manga
                     continue
                 if key not in self.OCR_LANGS: # Hindari duplikat jika sudah ada dari engine lain
@@ -2216,7 +2221,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             for name, code in easyocr_langs.items():
                 key = f'{name} (EasyOCR)'
                 # Prefer Manga-OCR for Japanese manga text if available
-                if name == 'Japanese' and check_manga_ocr():
+                if name == 'Japanese' and manga_ocr_present:
                     continue
                 if key not in self.OCR_LANGS:
                     self.OCR_LANGS[key] = {'code': code, 'engine': 'EasyOCR'}
@@ -2235,7 +2240,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 for name, code in tess_langs.items():
                     key = f'{name} (Tesseract)'
                     # If Manga-OCR exists, avoid offering Tesseract as the Japanese default
-                    if name.lower().startswith('jap') and check_manga_ocr():
+                    if name.lower().startswith('jap') and manga_ocr_present:
                         continue
                     if key not in self.OCR_LANGS:
                         self.OCR_LANGS[key] = {'code': code, 'engine': 'Tesseract'}
@@ -2292,20 +2297,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self._set_startup_status(StartupText.STATUS_LOADING_MODELS)
         self.populate_ocr_languages()
         self.populate_ai_models() # [BARU]
-
-        # Manga-OCR may already be initialized by the default OCR selection above.
-        from src.core.config import check_manga_ocr
-        if check_manga_ocr() and self.manga_ocr_reader is None:
-            try:
-                self._set_startup_status(StartupText.STATUS_LOADING_MANGA_OCR)
-                from manga_ocr import MangaOcr as MO
-                self.manga_ocr_reader = MO()
-                self.statusBar().showMessage("Manga-OCR initialized.", 3000)
-            except Exception as e:
-                self.show_banner("manga-ocr-init-error", "Manga-OCR error", f"Could not initialize Manga-OCR. Error: {e}", kind="error")
-                self.manga_ocr_reader = None
         
-        # Engine lain diinisialisasi on-demand
+        # Semua engine OCR (termasuk Manga-OCR) diinisialisasi on-demand oleh populate_ocr_languages -> on_ocr_lang_changed
+        # hanya apabila benar-benar dipilih sebagai default OCR engine.
         
         QApplication.restoreOverrideCursor()
         self.statusBar().showMessage("Ready", 3000)
@@ -7619,52 +7613,16 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                              "Penerjemahan halaman masih diproses. Tunggu hingga selesai.", kind="warning")
             return
 
-        settings = self.get_current_settings()
+        # Cakupan batch (tab Full): selain 'current' ditangani worker batch.
+        scope_combo = getattr(self, 'full_scope_combo', None)
+        if scope_combo is not None and scope_combo.currentData() != 'current':
+            self._start_full_page_batch(scope_combo.currentData())
+            return
 
-        def _canon_provider(name):
-            return {'gemini': 'Gemini', 'openai': 'OpenAI', 'openrouter': 'OpenRouter'}.get(
-                str(name).lower(), name
-            )
+        settings, use_ai_vision = self._collect_full_page_settings()
 
-        tr_combo = getattr(self, 'full_translator_combo', None)
-        translator_choice = (tr_combo.currentData() if tr_combo is not None else None) or 'ai_translate'
-        settings['full_translator'] = translator_choice
-
-        # Model penerjemah (dipakai _translate_batch): default model AI Translate
-        # dari tab AI Cfg; pilihan 'ai_ocr' memakai provider/model AI OCR langsung.
-        if translator_choice == 'ai_ocr' and settings.get('ocr_engine') == 'AI_OCR' and settings.get('ocr_ai_provider'):
-            provider = _canon_provider(settings.get('ocr_ai_provider', ''))
-            model_name = settings.get('ocr_ai_model_id', '')
-        else:
-            provider, model_name = self.get_selected_model_name()
-            if hasattr(self, 'ai_model_combo'):
-                idx = self.ai_model_combo.currentIndex()
-                if idx >= 0:
-                    data = self.ai_model_combo.itemData(idx, Qt.UserRole)
-                    if data:
-                        provider, model_name = data
-
-        settings['ai_model'] = (provider, model_name)
-
-        # Model untuk panggilan AI Vision full-page: selalu pakai model AI OCR (VLM)
-        # bila dikonfigurasi — model translate belum tentu bisa menerima gambar.
-        if settings.get('ocr_ai_provider') and settings.get('ocr_ai_model_id'):
-            settings['vision_model'] = (
-                _canon_provider(settings.get('ocr_ai_provider')),
-                settings.get('ocr_ai_model_id'),
-            )
-        else:
-            settings['vision_model'] = (provider, model_name)
-        settings['target_lang'] = self.translate_combo.currentText()
-        # Pipeline Full selalu membersihkan teks (deteksi → OCR → inpaint → translate);
-        # tidak bergantung pada checkbox cleanup global — itu milik flow default.
-        settings['use_inpaint'] = True
-        
         self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
         self.auto_translate_page_btn.setEnabled(False)
-        
-        combo = getattr(self, 'full_mode_combo', None)
-        use_ai_vision = bool(combo.currentData()) if combo is not None else False
 
         self._full_page_worker = FullPageTranslateWorker(self, self.current_image_path, settings, use_ai_vision)
         self._full_page_worker.progress.connect(lambda pct, msg: self.statusBar().showMessage(f"{msg} ({pct}%)"))
@@ -7734,8 +7692,12 @@ class FullPageTranslateWorker(QThread):
         # Hasil inpaint full-page (PIL RGB) — dibaca handler untuk dipasang
         # sebagai base image canvas. None bila inpaint dilewati/gagal.
         self.cleaned_image_pil = None
+        self.last_created_areas = []
+        self.last_error = None
 
     def run(self):
+        self.last_created_areas = []
+        self.last_error = None
         try:
             pil_image = Image.open(self.image_path).convert('RGB')
             cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -7996,27 +7958,36 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
 
             else:
                 # ── Pipeline instan lokal (tanpa AI Vision) ──
-                # YOLO dibuang: pada manga ia sering salah deteksi (mengembalikan SATU
-                # region full-page, bukan balon). Ganti dengan deteksi blok teks via
-                # morfologi, OCR per blok, lalu terjemahkan semua dalam satu batch.
+                # Deteksi region teks memakai model RF-DETR layout (koharu) yang
+                # berjalan lokal; OCR tiap region tetap via engine terpilih (AI OCR
+                # dsb.), lalu terjemahkan semua dalam satu batch. Bila model atau
+                # dependency tidak tersedia, fallback ke metode deteksi lama.
                 ocr_engine = self.settings.get('ocr_engine') or 'Tesseract'
-                self.progress.emit(10, "Mendeteksi balon teks (morfologi)...")
-
                 ocr_items = []  # list of (polygon, cleaned_text)
-                if ocr_engine in ('AI_OCR', 'MOFRL-GPT'):
-                    # Engine AI OCR: gabungkan kontur morfologi jadi blok bacaan dulu,
-                    # baru OCR per blok — dari ratusan request menjadi belasan.
-                    self._ocr_blocks_morphological(cv_image, ocr_engine, ocr_items)
-                else:
-                    # Engine lokal (EasyOCR/Paddle/dll) punya deteksi native yang sudah
-                    # mengembalikan teks sekaligus — pakai langsung, tanpa OCR ulang.
-                    detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
-                    for raw_text, polygon in detected_regions or []:
-                        self._append_ocr_item(ocr_items, polygon, raw_text)
-                    # Fallback: bila deteksi native kosong (mis. plugin belum aktif),
-                    # pakai deteksi morfologi + OCR per blok memakai engine terpilih.
-                    if not ocr_items and not self._is_cancelled:
+                detected_by_model = False
+                if not self._is_cancelled:
+                    try:
+                        self.progress.emit(10, "Mendeteksi teks (RF-DETR layout)...")
+                        self._ocr_blocks_rfdetr(cv_image, ocr_engine, ocr_items)
+                        detected_by_model = True
+                    except Exception as det_err:
+                        print(f"Deteksi RF-DETR gagal, fallback ke metode lama: {det_err}")
+                if not detected_by_model:
+                    self.progress.emit(10, "Mendeteksi balon teks (morfologi)...")
+                    if ocr_engine in ('AI_OCR', 'MOFRL-GPT'):
+                        # Engine AI OCR: gabungkan kontur morfologi jadi blok bacaan dulu,
+                        # baru OCR per blok — dari ratusan request menjadi belasan.
                         self._ocr_blocks_morphological(cv_image, ocr_engine, ocr_items)
+                    else:
+                        # Engine lokal (EasyOCR/Paddle/dll) punya deteksi native yang sudah
+                        # mengembalikan teks sekaligus — pakai langsung, tanpa OCR ulang.
+                        detected_regions = self.main_app.detect_text_with_ocr_engine(cv_image, self.settings)
+                        for raw_text, polygon in detected_regions or []:
+                            self._append_ocr_item(ocr_items, polygon, raw_text)
+                        # Fallback: bila deteksi native kosong (mis. plugin belum aktif),
+                        # pakai deteksi morfologi + OCR per blok memakai engine terpilih.
+                        if not ocr_items and not self._is_cancelled:
+                            self._ocr_blocks_morphological(cv_image, ocr_engine, ocr_items)
 
                 if self._is_cancelled:
                     self.finished.emit([], "Dibatalkan.")
@@ -8025,14 +7996,42 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     self.finished.emit([], "Tidak ditemukan teks yang bisa diterjemahkan di halaman ini.")
                     return
 
-                self.progress.emit(58, f"Menerjemahkan {len(ocr_items)} balon (satu permintaan)...")
-                translations = self._translate_batch([text for _polygon, text in ocr_items])
+                from concurrent.futures import ThreadPoolExecutor
+                polygons_only = [polygon for polygon, _text in ocr_items]
+                texts_only = [text for _polygon, text in ocr_items]
+                rfdetr_bubbles = getattr(self, '_rfdetr_bubbles', [])
+                rfdetr_panels = getattr(self, '_rfdetr_panels', [])
+                do_inpaint = bool(self.settings.get('use_inpaint', True))
 
-                total_items = len(ocr_items)
+                def _worker_translate():
+                    self.progress.emit(58, f"Menerjemahkan {len(texts_only)} balon (worker paralel)...")
+                    return self._translate_batch(texts_only)
+
+                def _worker_layout_and_inpaint():
+                    rects = self._expand_rects_into_bubbles(
+                        polygons_only,
+                        rfdetr_bubbles,
+                        w, h,
+                        cv_image=cv_image,
+                        panel_rects=rfdetr_panels,
+                    )
+                    if do_inpaint and not self._is_cancelled:
+                        self.progress.emit(75, "Membersihkan teks (worker inpaint paralel)...")
+                        self._run_page_inpaint(cv_image, polygons_only, ai_mask=None)
+                    return rects
+
+                # Jalankan worker penerjemahan (API/jaringan) dan worker layout+inpaint
+                # secara bersamaan agar tidak saling menunggu.
+                with ThreadPoolExecutor(max_workers=2) as stage_pool:
+                    fut_tr = stage_pool.submit(_worker_translate)
+                    fut_li = stage_pool.submit(_worker_layout_and_inpaint)
+                    translations = fut_tr.result()
+                    expanded_rects = fut_li.result()
+
                 for idx, ((polygon, processed_text), translated_text) in enumerate(zip(ocr_items, translations)):
                     if self._is_cancelled:
                         break
-                    rect = polygon.boundingRect()
+                    rect = expanded_rects[idx]
                     area_payload = {
                         'rect': rect,
                         'text': translated_text,
@@ -8042,66 +8041,48 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     }
                     created_areas.append(area_payload)
 
-            # ── Refinement region AI Vision ──
-            # Box dari VLM besar dan sembarangan (menutupi balon + artwork sekitar).
-            # Snap rect ke interior balon polos, dedupe box yang menunjuk balon sama,
-            # dan siapkan mask yang HANYA menyentuh goresan teks di dalam interior.
-            ai_mask = None
+            # ── Refinement region AI Vision + Paralel Translate & Inpaint ──
             if self.use_ai_vision and created_areas and not self._is_cancelled:
-                self.progress.emit(84, "Menyesuaikan region ke balon teks...")
+                self.progress.emit(80, "Menyesuaikan region ke balon teks...")
                 try:
                     ai_mask = self._refine_and_mask_ai_regions(cv_image, created_areas)
                 except Exception as re_err:
                     print(f"Refinement region AI Vision gagal: {re_err}")
-                    # Tanpa refinement, mask adaptif di box besar merusak artwork —
-                    # lebih aman lewati inpaint sama sekali.
                     ai_mask = np.zeros(cv_image.shape[:2], dtype=np.uint8)
 
-            # Terjemahan via model AI Translate — SETELAH dedupe supaya hemat token.
-            # (Mode 'ai_ocr' sudah menerima terjemahan langsung dari panggilan VLM.)
-            if (self.use_ai_vision and created_areas and not self._is_cancelled
-                    and self.settings.get('full_translator', 'ai_translate') != 'ai_ocr'):
-                self.progress.emit(86, f"Menerjemahkan {len(created_areas)} teks (model AI Translate)...")
-                translations = self._translate_batch([p['original_text'] for p in created_areas])
-                for area_payload, translated in zip(created_areas, translations):
-                    area_payload['text'] = translated
-
-            # ── Inpainting halaman: SATU panggilan untuk semua region ──
-            # Pipeline khusus Full (terpisah dari flow inpaint default): mask hanya
-            # piksel teks — bukan rect penuh — sehingga artwork dan outline balon
-            # tidak ikut terhapus. Hasil bersih dibawa ke handler via
-            # self.cleaned_image_pil untuk dipasang sebagai base image canvas.
-            if created_areas and self.settings.get('use_inpaint', True) and not self._is_cancelled:
-                self.progress.emit(88, "Membersihkan teks (inpaint halaman)...")
-                try:
-                    if ai_mask is not None:
-                        mask = ai_mask
-                    else:
-                        mask = self._build_text_pixel_mask(cv_image, [p['polygon'] for p in created_areas])
-                    if mask.any():
-                        cleaned = None
-                        model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
-                        if model_name.startswith("IOPaint"):
-                            cleaned = run_iopaint_inpaint(
-                                Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)),
-                                Image.fromarray(mask).convert("L"),
-                                self.settings.get('inpaint_server_url'),
-                                self.settings.get('inpaint_server_timeout'),
-                            )
-                        if cleaned is None:
-                            # Fallback lokal: mask piksel-teks cukup tipis, hasil
-                            # OpenCV inpaint tetap layak walau server IOPaint mati.
-                            flags = cv2.INPAINT_NS if "NS" in model_name else cv2.INPAINT_TELEA
-                            inpainted = cv2.inpaint(cv_image, mask, 3, flags)
-                            cleaned = Image.fromarray(cv2.cvtColor(inpainted, cv2.COLOR_BGR2RGB))
-                        self.cleaned_image_pil = cleaned
-                except Exception as ie:
-                    print(f"Inpaint full-page gagal (lanjut tanpa pembersihan): {ie}")
-                    self.cleaned_image_pil = None
+                need_translate = self.settings.get('full_translator', 'ai_translate') != 'ai_ocr'
+                do_inpaint = bool(self.settings.get('use_inpaint', True))
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2) as vision_pool:
+                    fut_tr = None
+                    fut_inp = None
+                    if need_translate and not self._is_cancelled:
+                        self.progress.emit(85, f"Menerjemahkan {len(created_areas)} teks & inpaint paralel...")
+                        fut_tr = vision_pool.submit(
+                            self._translate_batch,
+                            [p['original_text'] for p in created_areas]
+                        )
+                    if do_inpaint and not self._is_cancelled:
+                        if not need_translate:
+                            self.progress.emit(88, "Membersihkan teks (inpaint halaman)...")
+                        fut_inp = vision_pool.submit(
+                            self._run_page_inpaint,
+                            cv_image,
+                            [p['polygon'] for p in created_areas],
+                            ai_mask
+                        )
+                    if fut_tr is not None:
+                        translations = fut_tr.result()
+                        for area_payload, translated in zip(created_areas, translations):
+                            area_payload['text'] = translated
+                    if fut_inp is not None:
+                        fut_inp.result()
 
             if created_areas:
+                self.last_created_areas = list(created_areas)
                 self.finished.emit(created_areas, "Success")
             else:
+                self.last_created_areas = []
                 self.finished.emit([], "Tidak ditemukan balon teks/koordinat yang valid. Silakan cek file temp/full_page_response.txt untuk melihat respon AI.")
         except Exception as e:
             import traceback
@@ -8113,6 +8094,7 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     f.write(error_detail)
             except Exception:
                 pass
+            self.last_error = str(e)
             self.error.emit(str(e))
 
     def _append_ocr_item(self, ocr_items, polygon, raw_text):
@@ -8127,13 +8109,66 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
             return
         ocr_items.append((polygon, processed))
 
-    def _ocr_blocks_morphological(self, cv_image, ocr_engine, ocr_items):
-        """Deteksi blok teks via morfologi (pengganti YOLO) lalu OCR per blok.
+    def _ocr_polygons_parallel(self, cv_image, block_polys, ocr_engine, ocr_items, base_pct=12, span_pct=40):
+        """OCR banyak blok teks secara paralel menggunakan worker pool, tetap menjaga urutan baca."""
+        total_regions = len(block_polys)
+        if total_regions == 0:
+            return
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
 
-        Menggabungkan kontur morfologi menjadi blok bacaan, buang duplikat, urutkan
-        arah baca, lalu OCR tiap blok memakai `ocr_engine` dan tambahkan hasilnya ke
-        `ocr_items` (list of (QPolygon, cleaned_text)).
-        """
+        # Engine berbasis proses/API/ONNX ringan aman dijalankan paralel penuh;
+        # engine PyTorch single-instance disinkronkan lewat lock agar bebas race.
+        parallel_engines = {'Tesseract', 'AI_OCR', 'MOFRL-GPT', 'RapidOCR'}
+        if ocr_engine in parallel_engines:
+            max_workers = min(total_regions, max(2, min(6, os.cpu_count() or 4)))
+            engine_lock = None
+        else:
+            max_workers = min(total_regions, 2)
+            if not hasattr(self.main_app, '_local_ocr_engine_lock'):
+                self.main_app._local_ocr_engine_lock = threading.Lock()
+            engine_lock = self.main_app._local_ocr_engine_lock
+
+        raw_results = [None] * total_regions
+        done_count = 0
+        progress_lock = threading.Lock()
+
+        def _ocr_one(idx, poly):
+            nonlocal done_count
+            if self._is_cancelled:
+                return idx, ''
+            if engine_lock is not None:
+                with engine_lock:
+                    text = self.main_app._recognize_polygon(cv_image, poly, ocr_engine, self.settings)
+            else:
+                text = self.main_app._recognize_polygon(cv_image, poly, ocr_engine, self.settings)
+            with progress_lock:
+                done_count += 1
+                cur_done = done_count
+            self.progress.emit(
+                base_pct + int((cur_done / max(1, total_regions)) * span_pct),
+                f"OCR paralel {cur_done}/{total_regions} blok..."
+            )
+            return idx, text
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_ocr_one, idx, poly) for idx, poly in enumerate(block_polys)]
+            for fut in as_completed(futures):
+                if self._is_cancelled:
+                    break
+                try:
+                    idx, raw_text = fut.result()
+                    raw_results[idx] = raw_text
+                except Exception as ocr_err:
+                    print(f"Worker OCR paralel gagal pada blok: {ocr_err}")
+
+        for idx, polygon in enumerate(block_polys):
+            if self._is_cancelled:
+                break
+            self._append_ocr_item(ocr_items, polygon, raw_results[idx] or '')
+
+    def _ocr_blocks_morphological(self, cv_image, ocr_engine, ocr_items):
+        """Deteksi blok teks via morfologi (pengganti YOLO) lalu OCR paralel per blok."""
         h, w = cv_image.shape[:2]
         raw_regions = self.main_app._collect_morphological_regions(cv_image, advanced=True)
         merged = self.main_app._merge_text_boxes_to_blocks(raw_regions, cv_image.shape, strict=False)
@@ -8147,13 +8182,131 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
             block_polys.append(polygon)
         block_polys = self._dedupe_regions(block_polys)
         self._sort_regions_reading_order(block_polys)
-        total_regions = len(block_polys)
-        for idx, polygon in enumerate(block_polys):
-            if self._is_cancelled:
-                break
-            self.progress.emit(15 + int((idx / max(1, total_regions)) * 40), f"OCR blok {idx+1}/{total_regions}...")
-            raw_text = self.main_app._recognize_polygon(cv_image, polygon, ocr_engine, self.settings)
-            self._append_ocr_item(ocr_items, polygon, raw_text)
+        self._ocr_polygons_parallel(cv_image, block_polys, ocr_engine, ocr_items, base_pct=15, span_pct=40)
+
+    def _ocr_blocks_rfdetr(self, cv_image, ocr_engine, ocr_items):
+        """Deteksi teks via model RF-DETR layout (koharu) lalu OCR paralel per blok."""
+        h, w = cv_image.shape[:2]
+        regions = detect_layout_regions(cv_image)
+        self._rfdetr_bubbles = [
+            QRect(r['xyxy'][0], r['xyxy'][1], r['xyxy'][2] - r['xyxy'][0], r['xyxy'][3] - r['xyxy'][1])
+            for r in regions if r['class'] == 'bubble'
+        ]
+        self._rfdetr_panels = [
+            QRect(r['xyxy'][0], r['xyxy'][1], r['xyxy'][2] - r['xyxy'][0], r['xyxy'][3] - r['xyxy'][1])
+            for r in regions if r['class'] == 'panel'
+        ]
+        candidates = []
+        for region in regions:
+            if region['class'] != 'text':
+                continue
+            x1, y1, x2, y2 = region['xyxy']
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            rect = QRect(x1, y1, x2 - x1, y2 - y1)
+            if rect.width() < 14 or rect.height() < 14:
+                continue
+            if rect.width() * rect.height() > w * h * 0.9:
+                continue
+            candidates.append((QPolygon(rect), region['score']))
+        if not candidates:
+            return
+        block_polys = self._dedupe_by_confidence(candidates)
+        block_polys = self._snap_text_polys_to_bubble_strokes(cv_image, block_polys)
+        self._sort_regions_reading_order(block_polys)
+        self._ocr_polygons_parallel(cv_image, block_polys, ocr_engine, ocr_items, base_pct=12, span_pct=40)
+
+    def _snap_text_polys_to_bubble_strokes(self, cv_image, polygons):
+        """Perluas polygon teks RF-DETR yang terpotong tipis di tepi balon.
+
+        Model terkadang memotong baris/huruf pendek di ujung atas/kiri balon
+        (mis. kata 'Is' di atas 'that so?'). Di dalam komponen interior balon
+        polos yang sama, huruf-huruf yang berdekatan dengan box asli ditarik
+        masuk tanpa melewati box instance teks lain di balon yang sama.
+        """
+        if not polygons:
+            return polygons
+        h, w = cv_image.shape[:2]
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        rects = [p.boundingRect() for p in polygons]
+        snapped = []
+        close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        link_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (23, 23))
+
+        for idx, poly in enumerate(polygons):
+            r = rects[idx]
+            bx1, by1, bx2, by2 = r.x(), r.y(), r.x() + r.width(), r.y() + r.height()
+            pad = 36
+            x1, y1 = max(0, bx1 - pad), max(0, by1 - pad)
+            x2, y2 = min(w, bx2 + pad), min(h, by2 + pad)
+            crop = gray[y1:y2, x1:x2]
+            inner_area = max(1, (by2 - by1) * (bx2 - bx1))
+
+            zone = None
+            is_bright = True
+            for thresh_val, bright_flag in ((200, True), (55, False)):
+                binary = ((crop >= thresh_val) if bright_flag else (crop <= thresh_val)).astype(np.uint8)
+                _n, lbl, _st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+                inner = lbl[by1 - y1:by2 - y1, bx1 - x1:bx2 - x1]
+                vals, counts = np.unique(inner[inner > 0], return_counts=True)
+                if len(vals):
+                    best_i = int(counts.argmax())
+                    if int(counts[best_i]) >= 0.30 * inner_area:
+                        zone = (lbl == int(vals[best_i])).astype(np.uint8)
+                        is_bright = bright_flag
+                        break
+            if zone is None:
+                snapped.append(poly)
+                continue
+
+            zpad = np.pad(zone, 12, mode='constant', constant_values=0)
+            zclosed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_k)
+            zint = cv2.erode(zclosed, erode_k)[12:-12, 12:-12]
+            dark = (((crop < 185) if is_bright else (crop > 70)) & (zint > 0)).astype(np.uint8)
+            for j, ob in enumerate(rects):
+                if j == idx:
+                    continue
+                ox1 = max(0, ob.x() - x1)
+                oy1 = max(0, ob.y() - y1)
+                ox2 = min(x2 - x1, ob.x() + ob.width() - x1)
+                oy2 = min(y2 - y1, ob.y() + ob.height() - y1)
+                if ox2 > ox1 and oy2 > oy1:
+                    dark[oy1:oy2, ox1:ox2] = 0
+
+            nc, lc, sc, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+            keep = np.zeros_like(dark)
+            cw_lim, ch_lim = 0.65 * (x2 - x1), 0.65 * (y2 - y1)
+            for ci in range(1, nc):
+                cbw, cbh, carea = int(sc[ci, 2]), int(sc[ci, 3]), int(sc[ci, 4])
+                if carea < 6 or cbw > cw_lim or cbh > ch_lim:
+                    continue
+                keep[lc == ci] = 255
+            if not keep.any():
+                snapped.append(poly)
+                continue
+
+            seed = np.zeros_like(keep)
+            seed[max(0, by1 - y1):by2 - y1, max(0, bx1 - x1):bx2 - x1] = 255
+            linked = cv2.dilate(keep, link_k)
+            _nb, lb, _sb, _ = cv2.connectedComponentsWithStats((linked > 0).astype(np.uint8), connectivity=8)
+            hit_ids = np.unique(lb[(seed > 0) & (lb > 0)])
+            if len(hit_ids) == 0:
+                snapped.append(poly)
+                continue
+            keep[~np.isin(lb, hit_ids)] = 0
+            ys, xs = np.nonzero(keep)
+            if xs.size == 0:
+                snapped.append(poly)
+                continue
+            nx1 = max(0, min(bx1, int(xs.min() + x1) - 2))
+            ny1 = max(0, min(by1, int(ys.min() + y1) - 2))
+            nx2 = min(w, max(bx2, int(xs.max() + x1) + 3))
+            ny2 = min(h, max(by2, int(ys.max() + y1) + 3))
+            snapped.append(QPolygon(QRect(nx1, ny1, nx2 - nx1, ny2 - ny1)))
+        return snapped
 
     def _dedupe_regions(self, regions):
         """Buang area duplikat/tumpang-tindih (sisakan yang terbesar)."""
@@ -8179,26 +8332,206 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                 kept.append(polygon)
         return kept
 
+    def _dedupe_by_confidence(self, candidates):
+        """Buang deteksi ganda, utamakan confidence tertinggi.
+
+        `candidates`: list of (QPolygon, score). Kandidat diproses dari score
+        tertinggi; yang tumpang-tindih ≥60% dengan yang sudah dipertahankan
+        dibuang. Berbeda dari _dedupe_regions (utamakan terbesar): model kerap
+        mengeluarkan SATU box ceroboh low-confidence yang melintasi dua teks
+        bersebelahan — box pelintas itu harus kalah dari box presisi per-teks,
+        bukan menang karena ukurannya.
+        """
+        kept = []
+        for polygon, score in sorted(candidates, key=lambda c: -c[1]):
+            rect = polygon.boundingRect()
+            is_duplicate = False
+            for kept_poly in kept:
+                kept_rect = kept_poly.boundingRect()
+                inter = rect.intersected(kept_rect)
+                if inter.isEmpty():
+                    continue
+                inter_area = inter.width() * inter.height()
+                smaller = min(rect.width() * rect.height(), kept_rect.width() * kept_rect.height())
+                if smaller > 0 and inter_area >= 0.6 * smaller:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                kept.append(polygon)
+        return kept
+
     def _sort_regions_reading_order(self, regions):
         """Urutkan balon per baris (band vertikal), kanan-ke-kiri khas manga."""
         regions.sort(key=lambda p: (p.boundingRect().top() // 80, -p.boundingRect().right()))
 
+    def _expand_rects_into_bubbles(self, polygons, bubble_rects, img_w, img_h, cv_image=None, panel_rects=None):
+        """Perluas rect tiap blok teks ke interior balon yang menaunginya.
+
+        Smart fit membatasi ukuran font pada rect area; rect instance teks
+        yang sempit (kolom vertikal) memaksa font mengecil padahal balon
+        masih lega. Rect diperluas ke kotak balon — bila beberapa instance
+        berbagi satu balon, kotaknya dipartisi di titik tengah antar pusat
+        instance (sumbu separasi terbesar) dan di-clamp ke rentang interior
+        balon lokal pada band teks tersebut agar tidak meluber keluar lekukan
+        balon ganda atau menembus batas panel.
+        """
+        instance_rects = [p.boundingRect() for p in polygons]
+        if not instance_rects or not bubble_rects:
+            return instance_rects
+
+        panel_rects = panel_rects or []
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY) if cv_image is not None else None
+
+        # Balon terkecil yang memuat pusat blok, dipasangkan dengan panelnya
+        # agar satu box bubble RF-DETR yang melintasi batas panel tidak
+        # menggabungkan balon dari dua panel berbeda.
+        owner = {}
+        for i, rect in enumerate(instance_rects):
+            center = rect.center()
+            best_idx, best_area = -1, None
+            for b_idx, bubble in enumerate(bubble_rects):
+                if bubble.contains(center):
+                    area = bubble.width() * bubble.height()
+                    if best_area is None or area < best_area:
+                        best_idx, best_area = b_idx, area
+            best_panel, best_parea = -1, None
+            for p_idx, panel in enumerate(panel_rects):
+                if panel.contains(center):
+                    parea = panel.width() * panel.height()
+                    if best_parea is None or parea < best_parea:
+                        best_panel, best_parea = p_idx, parea
+            owner[i] = (best_idx, best_panel)
+
+        groups = {}
+        for i, (b_idx, p_idx) in owner.items():
+            if b_idx >= 0:
+                groups.setdefault((b_idx, p_idx), []).append(i)
+
+        expanded = dict(enumerate(instance_rects))
+        expanded_idx = set()
+        for (b_idx, p_idx), members in groups.items():
+            bubble = QRect(bubble_rects[b_idx])
+            if p_idx >= 0:
+                clipped_bubble = bubble.intersected(panel_rects[p_idx])
+                if not clipped_bubble.isEmpty():
+                    bubble = clipped_bubble
+            if len(members) == 1:
+                expanded[members[0]] = QRect(bubble)
+                expanded_idx.add(members[0])
+                continue
+            centers = [instance_rects[i].center() for i in members]
+            xs = [c.x() for c in centers]
+            ys = [c.y() for c in centers]
+            split_x = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+            keys = xs if split_x else ys
+            order = sorted(range(len(members)), key=lambda k: keys[k])
+            for pos, k in enumerate(order):
+                lo = bubble.left() if split_x else bubble.top()
+                hi = bubble.right() if split_x else bubble.bottom()
+                if pos > 0:
+                    lo = (keys[order[pos - 1]] + keys[k]) // 2
+                if pos < len(order) - 1:
+                    hi = (keys[k] + keys[order[pos + 1]]) // 2
+                if split_x:
+                    expanded[members[k]] = QRect(lo, bubble.top(), hi - lo, bubble.height())
+                else:
+                    expanded[members[k]] = QRect(bubble.left(), lo, bubble.width(), hi - lo)
+            expanded_idx.update(members)
+
+        result = []
+        for i, instance in enumerate(instance_rects):
+            rect = expanded[i]
+            if i in expanded_idx:
+                if gray is not None:
+                    rect = self._clamp_expanded_rect_to_bubble_lobe(gray, instance, rect, img_w, img_h)
+                # Padding agar teks tidak menempel outline balon.
+                pad_x = max(3, rect.width() // 12)
+                pad_y = max(3, rect.height() // 12)
+                rect = rect.adjusted(pad_x, pad_y, -pad_x, -pad_y)
+                rect = rect.intersected(QRect(0, 0, img_w, img_h))
+                # Jangan mengecilkan ruang di bawah rect teks aslinya.
+                if rect.width() < instance.width() or rect.height() < instance.height():
+                    rect = rect.united(instance)
+            result.append(rect)
+        return result
+
+    def _clamp_expanded_rect_to_bubble_lobe(self, gray, instance, expanded_rect, img_w, img_h):
+        """Batasi rect ekspansi ke lebar/tinggi aktual lobus balon pada posisi teks."""
+        x1 = max(0, min(instance.x(), expanded_rect.x()))
+        y1 = max(0, min(instance.y(), expanded_rect.y()))
+        x2 = min(img_w, max(instance.x() + instance.width(), expanded_rect.x() + expanded_rect.width()))
+        y2 = min(img_h, max(instance.y() + instance.height(), expanded_rect.y() + expanded_rect.height()))
+        if x2 - x1 < 12 or y2 - y1 < 12:
+            return expanded_rect
+        crop = gray[y1:y2, x1:x2]
+        ix1, iy1 = max(0, instance.x() - x1), max(0, instance.y() - y1)
+        ix2, iy2 = min(x2 - x1, instance.x() + instance.width() - x1), min(y2 - y1, instance.y() + instance.height() - y1)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return expanded_rect
+        inner_area = max(1, (iy2 - iy1) * (ix2 - ix1))
+        zone = None
+        for thresh_val, is_bright in ((200, True), (55, False)):
+            binary = ((crop >= thresh_val) if is_bright else (crop <= thresh_val)).astype(np.uint8)
+            _n, lbl, _st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+            inner = lbl[iy1:iy2, ix1:ix2]
+            vals, counts = np.unique(inner[inner > 0], return_counts=True)
+            if len(vals):
+                best_i = int(counts.argmax())
+                if int(counts[best_i]) >= 0.30 * inner_area:
+                    zone = (lbl == int(vals[best_i])).astype(np.uint8)
+                    break
+        if zone is None:
+            return expanded_rect
+        band_y = zone[iy1:iy2, :]
+        xs = np.where(band_y.mean(axis=0) >= 0.5)[0]
+        band_x = zone[:, ix1:ix2]
+        ys = np.where(band_x.mean(axis=1) >= 0.5)[0]
+        if xs.size == 0 or ys.size == 0:
+            return expanded_rect
+        lobe_rect = QRect(
+            int(xs.min() + x1),
+            int(ys.min() + y1),
+            int(xs.max() - xs.min() + 1),
+            int(ys.max() - ys.min() + 1),
+        )
+        clamped = expanded_rect.intersected(lobe_rect)
+        return clamped.united(instance) if not clamped.isEmpty() else expanded_rect
+
     def _translate_batch(self, texts):
-        """Terjemahkan daftar teks; satu panggilan API bila provider mendukung.
+        """Terjemahkan daftar teks; satu panggilan batch API bila provider mendukung,
+        dan paralel penuh (ThreadPoolExecutor) untuk fallback / non-AI provider.
 
         Selalu mengembalikan list dengan panjang sama seperti `texts`.
         """
+        if not texts:
+            return []
         ai_model_cfg = self.settings.get('ai_model') or (None, None)
         provider, model_name = ai_model_cfg
         target_lang = self.settings.get('target_lang', 'Indonesian')
+        provider_key = get_translate_provider_key(provider) if provider else ''
 
-        if provider in ('Gemini', 'OpenAI', 'OpenRouter') and len(texts) > 1:
+        if (provider in ('Gemini', 'OpenAI', 'OpenRouter') or provider_key in LOCAL_TRANSLATE_PROVIDERS) and len(texts) > 1:
             try:
                 return self._translate_batch_api(texts, provider, model_name, target_lang)
             except Exception as e:
-                print(f"Batch translate gagal, fallback per balon: {e}")
+                print(f"Batch translate gagal, fallback paralel per balon: {e}")
 
-        return [self._translate_single(text, target_lang, provider, model_name) for text in texts]
+        return self._translate_parallel(texts, target_lang, provider, model_name)
+
+    def _translate_parallel(self, texts, target_lang, provider, model_name):
+        """Terjemahkan banyak teks secara bersamaan lewat worker pool agar tidak menunggu satu-satu."""
+        if not texts:
+            return []
+        if len(texts) == 1:
+            return [self._translate_single(texts[0], target_lang, provider, model_name)]
+        from concurrent.futures import ThreadPoolExecutor
+        max_workers = min(len(texts), 6)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(self._translate_single, text, target_lang, provider, model_name)
+                for text in texts
+            ]
+            return [fut.result() for fut in futures]
 
     def _translate_single(self, text, target_lang, provider, model_name):
         try:
@@ -8207,6 +8540,20 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
             return self.main_app.translate_text(text, target_lang)
         except Exception as e:
             return f"[TRANSLATION ERROR: {e}]"
+
+    @staticmethod
+    def _clean_translated_punctuation(text: str) -> str:
+        if not isinstance(text, str) or not text:
+            return ""
+        lines = []
+        for line in text.splitlines():
+            s = line.rstrip()
+            if s.endswith('。'):
+                s = s[:-1].rstrip()
+            elif s.endswith('.') and not s.endswith('..'):
+                s = s[:-1].rstrip()
+            lines.append(s)
+        return '\n'.join(lines)
 
     def _translate_batch_api(self, texts, provider, model_name, target_lang):
         """Kirim semua teks balon sebagai satu permintaan JSON ke provider AI."""
@@ -8219,20 +8566,23 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
             [{"id": i + 1, "text": t} for i, t in enumerate(texts)],
             ensure_ascii=False
         )
-        prompt = f"""
-You are an expert manga translator. Below is a JSON array of dialogue texts extracted from ONE manga page, in reading order.
+        # Gunakan struktur root JSON Object {"items": [...]} agar 100% kompatibel
+        # dengan response_format={"type": "json_object"} di OpenAI/OpenRouter/Gemini.
+        prompt = f"""You are an expert manga translator. Below is a JSON array of dialogue texts extracted from ONE manga page, in reading order.
 For each item:
 1. Detect the language and silently correct obvious OCR mistakes.
 2. Translate the text into natural, colloquial {target_lang}. If it is already in {target_lang}, keep it as-is.
 {enhancements}
-Return ONLY a valid JSON array (no markdown, no explanation) with exactly {len(texts)} elements, same order, where each element is: {{"id": <same id>, "translation": "<translated text>"}}.
+Return ONLY a valid JSON object (no markdown, no explanation) with key "items" containing an array of exactly {len(texts)} elements in the same order:
+{{"items": [{{"id": 1, "translation": "<translated text>"}}, ...]}}
 
 Input:
 {payload}
 """
 
         response_text = ""
-        if provider == 'Gemini':
+        provider_key = get_translate_provider_key(provider) if provider else ''
+        if provider == 'Gemini' or provider_key == 'gemini':
             api_key = get_active_key('gemini')
             if not api_key:
                 raise Exception("Gemini API Key belum dikonfigurasi.")
@@ -8254,8 +8604,8 @@ Input:
                         response.usage_metadata.candidates_token_count,
                         'Gemini', model_name
                     )
-        else:  # OpenAI / OpenRouter
-            if provider == 'OpenAI':
+        else:  # OpenAI / OpenRouter / 9Router / Ollama
+            if provider == 'OpenAI' or provider_key == 'openai':
                 client = getattr(self.main_app, "openai_client", None)
                 if not client:
                     api_key = get_active_key('openai')
@@ -8263,13 +8613,19 @@ Input:
                         raise Exception("OpenAI API Key belum dikonfigurasi.")
                     client = OpenAI(api_key=api_key)
             else:
+                p_key = provider_key if provider_key in LOCAL_TRANSLATE_PROVIDERS else 'openrouter'
+                p_meta = LOCAL_TRANSLATE_PROVIDERS.get(p_key, {})
+                p_cfg = get_translate_provider_settings(p_key)
                 api_key = (
-                    SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip() or
-                    get_openrouter_api_key()
+                    p_cfg.get('api_key', '').strip()
+                    or SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip()
+                    or get_openrouter_api_key()
                 )
-                if not api_key:
-                    raise Exception("OpenRouter API Key belum dikonfigurasi.")
-                client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+                if not api_key and not p_meta.get('api_key_optional'):
+                    raise Exception(f"{provider} API Key belum dikonfigurasi.")
+                raw_url = p_cfg.get('url', '').strip() or p_meta.get('url', 'https://openrouter.ai/api/v1/chat/completions')
+                base_url = re.sub(r'/chat/completions/?$', '', raw_url)
+                client = OpenAI(api_key=api_key or 'local', base_url=base_url)
 
             messages = [{"role": "user", "content": prompt}]
             try:
@@ -8277,19 +8633,16 @@ Input:
                     model=model_name,
                     messages=messages,
                     response_format={"type": "json_object"},
-                    max_tokens=8192,
+                    max_tokens=4096,
                     temperature=0.3
                 )
-            except Exception as api_err:
-                if "response_format" in str(api_err) or "json" in str(api_err).lower():
-                    resp = client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        max_tokens=8192,
-                        temperature=0.3
-                    )
-                else:
-                    raise api_err
+            except Exception:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=4096,
+                    temperature=0.3
+                )
             response_text = resp.choices[0].message.content
             if resp and hasattr(resp, 'usage') and resp.usage:
                 if hasattr(self.main_app, "api_cost_signal"):
@@ -8301,11 +8654,22 @@ Input:
         if not response_text:
             raise Exception("Provider tidak mengembalikan respon batch.")
 
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
-        cleaned_json = json_match.group(1).strip() if json_match else response_text.strip()
-        data = json.loads(cleaned_json)
+        # Bersihkan tag <think>...</think> (DeepSeek/Qwen reasoning) & blok kode markdown
+        cleaned_text = re.sub(r"<think>[\s\S]*?</think>", "", response_text, flags=re.IGNORECASE).strip()
+        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_text)
+        cleaned_json = json_match.group(1).strip() if json_match else cleaned_text
+
+        try:
+            data = json.loads(cleaned_json)
+        except Exception:
+            # Ekstrak kurung kurawal atau siku terluar bila ada teks pengantar
+            obj_match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", cleaned_json)
+            if not obj_match:
+                raise
+            data = json.loads(obj_match.group(1))
 
         items = []
+        mapping = {}
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
@@ -8313,8 +8677,23 @@ Input:
                 if isinstance(value, list):
                     items = value
                     break
+            if not items:
+                # Model mengembalikan dict {"1": "terjemahan", "2": "terjemahan"}
+                # atau satu objek {"id": 1, "translation": "..."}
+                if 'translation' in data or 'text' in data:
+                    items = [data]
+                else:
+                    for k, v in data.items():
+                        try:
+                            item_id = int(str(k).strip())
+                        except ValueError:
+                            continue
+                        if isinstance(v, str):
+                            mapping[item_id] = self._clean_translated_punctuation(v.strip())
+                        elif isinstance(v, dict):
+                            tr = v.get('translation') or v.get('text') or ''
+                            mapping[item_id] = self._clean_translated_punctuation(str(tr).strip())
 
-        mapping = {}
         for idx, item in enumerate(items):
             if isinstance(item, dict):
                 translation = item.get('translation') or item.get('text') or ''
@@ -8322,57 +8701,210 @@ Input:
                     item_id = int(item.get('id', idx + 1))
                 except (TypeError, ValueError):
                     item_id = idx + 1
-                mapping[item_id] = str(translation)
+                mapping[item_id] = self._clean_translated_punctuation(str(translation).strip())
             elif isinstance(item, str):
-                mapping[idx + 1] = item
+                mapping[idx + 1] = self._clean_translated_punctuation(item.strip())
 
-        results = []
-        for i, original in enumerate(texts):
+        results = [None] * len(texts)
+        missing_indices = []
+        for i, _original in enumerate(texts):
             translated = (mapping.get(i + 1) or '').strip()
-            if not translated:
-                translated = self._translate_single(original, target_lang, provider, model_name)
-            results.append(translated)
+            if translated:
+                results[i] = translated
+            else:
+                missing_indices.append(i)
+
+        # Bila ada sebagian kecil item yang terlewat dari respon JSON, terjemahkan paralel
+        if missing_indices:
+            missing_texts = [texts[i] for i in missing_indices]
+            fallback_translations = self._translate_parallel(missing_texts, target_lang, provider, model_name)
+            for i, tr in zip(missing_indices, fallback_translations):
+                results[i] = tr
         return results
+
+    def _run_page_inpaint(self, cv_image, polygons, ai_mask=None):
+        """Jalankan inpainting halaman secara cepat: direct bubble fill (<15ms)
+        ditambah ROI-cropped IOPaint hanya pada area mask yang bertekstur."""
+        try:
+            self._direct_bubble_cleaned_bgr = None
+            if ai_mask is not None:
+                mask = ai_mask
+            else:
+                mask = self._build_text_pixel_mask(cv_image, polygons)
+            direct_bgr = getattr(self, '_direct_bubble_cleaned_bgr', None)
+            work_bgr = direct_bgr.copy() if direct_bgr is not None else cv_image.copy()
+            cleaned = None
+            nz_count = int(cv2.countNonZero(mask)) if mask is not None else 0
+            if nz_count >= 16:
+                model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
+                if model_name.startswith("IOPaint"):
+                    timeout = max(int(self.settings.get('inpaint_server_timeout') or 0), 600)
+                    server_url = self.settings.get('inpaint_server_url')
+                    h, w = work_bgr.shape[:2]
+                    # Kelompokkan piksel mask yang berdekatan menjadi ROI agar IOPaint
+                    # tidak perlu memproses gambar 1 halaman penuh jika hanya beberapa
+                    # area kecil yang butuh LaMa inpainting.
+                    grp_k = cv2.getStructuringElement(cv2.MORPH_RECT, (65, 65))
+                    grouped = cv2.dilate(mask, grp_k)
+                    num_c, _lbl, stats, _ = cv2.connectedComponentsWithStats(grouped, connectivity=8)
+                    rois = []
+                    pad_roi = 48
+                    total_roi_area = 0
+                    for ci in range(1, num_c):
+                        rx, ry, rw, rh, _area = (int(v) for v in stats[ci])
+                        x1 = max(0, rx - pad_roi)
+                        y1 = max(0, ry - pad_roi)
+                        x2 = min(w, rx + rw + pad_roi)
+                        y2 = min(h, ry + rh + pad_roi)
+                        if cv2.countNonZero(mask[y1:y2, x1:x2]) < 12:
+                            continue
+                        rois.append((x1, y1, x2, y2))
+                        total_roi_area += (x2 - x1) * (y2 - y1)
+
+                    if rois and total_roi_area < 0.60 * (w * h):
+                        roi_ok = True
+                        for x1, y1, x2, y2 in rois:
+                            if self._is_cancelled:
+                                break
+                            crop_rgb = cv2.cvtColor(work_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
+                            crop_mask = mask[y1:y2, x1:x2]
+                            res_pil = run_iopaint_inpaint(
+                                Image.fromarray(crop_rgb),
+                                Image.fromarray(crop_mask).convert("L"),
+                                server_url,
+                                timeout,
+                            )
+                            if res_pil is None:
+                                roi_ok = False
+                                break
+                            res_bgr = cv2.cvtColor(np.array(res_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+                            if res_bgr.shape[:2] != (y2 - y1, x2 - x1):
+                                res_bgr = cv2.resize(res_bgr, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
+                            # Salin hanya di sekitar area mask yang di-feather halus
+                            blend_m = cv2.dilate(crop_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))) > 0
+                            work_bgr[y1:y2, x1:x2][blend_m] = res_bgr[blend_m]
+                        if roi_ok:
+                            cleaned = Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGB))
+                    else:
+                        cleaned = run_iopaint_inpaint(
+                            Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGB)),
+                            Image.fromarray(mask).convert("L"),
+                            server_url,
+                            timeout,
+                        )
+                    if cleaned is None:
+                        print("IOPaint server gagal/tidak tersedia — memakai pembersihan interior balon langsung.")
+            if cleaned is None and direct_bgr is not None:
+                cleaned = Image.fromarray(cv2.cvtColor(direct_bgr, cv2.COLOR_BGR2RGB))
+            self.cleaned_image_pil = cleaned
+        except Exception as ie:
+            print(f"Inpaint full-page gagal (lanjut tanpa pembersihan): {ie}")
+            self.cleaned_image_pil = None
 
     def _build_text_pixel_mask(self, cv_image, polygons):
         """Bangun mask inpaint berisi HANYA piksel teks di dalam tiap region.
 
-        Beda dengan mask rect penuh (yang ikut menghapus artwork/outline balon),
-        adaptive threshold per region hanya menangkap goresan huruf — polaritas
-        otomatis (teks gelap di balon terang, teks terang di balon teriakan gelap).
-        Return mask uint8 (0/255) seukuran halaman, sudah didilasi menutup
-        anti-aliasing huruf.
+        - Bila region berada di dalam interior balon polos (`zone`), goresan
+          teks dibatasi ketat ke interior yang sudah di-erode (`zint`) agar
+          outline balon dan artwork luar (rambut/screentone) tidak pernah
+          tersentuh mask. Bila latar balon rata (solid putih/hitam), piksel
+          teks langsung diisi warna median interior balon pada
+          `self._direct_bubble_cleaned_bgr` (bebas halusinasi LaMa & instan).
+        - Bila region mengambang di atas latar bertekstur, hanya komponen
+          goresan berukuran huruf di dalam polygon yang dimasukkan ke mask
+          untuk dibersihkan IOPaint.
         """
         h, w = cv_image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
         gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        pad = max(3, int(self.settings.get('inpaint_padding', 5)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
+        close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+
+        direct_bgr = cv_image.copy()
+        direct_any = False
+
         for polygon in polygons:
             rect = polygon.boundingRect()
-            x1 = max(0, rect.x())
-            y1 = max(0, rect.y())
-            x2 = min(w, rect.x() + rect.width())
-            y2 = min(h, rect.y() + rect.height())
-            if x2 - x1 < 4 or y2 - y1 < 4:
+            bx1 = max(0, rect.x())
+            by1 = max(0, rect.y())
+            bx2 = min(w, rect.x() + rect.width())
+            by2 = min(h, rect.y() + rect.height())
+            if bx2 - bx1 < 4 or by2 - by1 < 4:
                 continue
+
+            pad_ctx = 36
+            x1, y1 = max(0, bx1 - pad_ctx), max(0, by1 - pad_ctx)
+            x2, y2 = min(w, bx2 + pad_ctx), min(h, by2 + pad_ctx)
             crop = gray[y1:y2, x1:x2]
-            block_size = min(31, (min(crop.shape) // 2) * 2 + 1)
+            inner_area = max(1, (by2 - by1) * (bx2 - bx1))
+
+            zone = None
+            is_bright = True
+            for thresh_val, bright_flag in ((200, True), (55, False)):
+                binary = ((crop >= thresh_val) if bright_flag else (crop <= thresh_val)).astype(np.uint8)
+                _n, lbl, _st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+                inner = lbl[by1 - y1:by2 - y1, bx1 - x1:bx2 - x1]
+                vals, counts = np.unique(inner[inner > 0], return_counts=True)
+                if len(vals):
+                    best_i = int(counts.argmax())
+                    if int(counts[best_i]) >= 0.30 * inner_area:
+                        zone = (lbl == int(vals[best_i])).astype(np.uint8)
+                        is_bright = bright_flag
+                        break
+
+            if zone is not None:
+                zpad = np.pad(zone, 12, mode='constant', constant_values=0)
+                zclosed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_k)
+                zint = cv2.erode(zclosed, erode_k)[12:-12, 12:-12]
+
+                poly_win = np.zeros_like(zint)
+                px1 = max(0, bx1 - x1 - 6)
+                py1 = max(0, by1 - y1 - 6)
+                px2 = min(x2 - x1, bx2 - x1 + 6)
+                py2 = min(y2 - y1, by2 - y1 + 6)
+                poly_win[py1:py2, px1:px2] = 1
+
+                strokes = (
+                    ((crop < 195) if is_bright else (crop > 60))
+                    & (zint > 0)
+                    & (poly_win > 0)
+                ).astype(np.uint8) * 255
+                dil = cv2.dilate(strokes, kernel, iterations=2)
+                dil[zint == 0] = 0
+                if not dil.any():
+                    continue
+
+                zone_vals = crop[zone > 0]
+                if zone_vals.size > 0:
+                    q25, q75 = np.percentile(zone_vals, [25, 75])
+                    if (q75 - q25) <= 12.0:
+                        bgr_crop = direct_bgr[y1:y2, x1:x2]
+                        fill_bgr = np.median(bgr_crop[zone > 0], axis=0).astype(np.uint8)
+                        bgr_crop[dil > 0] = fill_bgr
+                        direct_any = True
+                        continue
+
+                mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], dil)
+                continue
+
+            crop_tight = gray[by1:by2, bx1:bx2]
+            block_size = min(31, (min(crop_tight.shape) // 2) * 2 + 1)
             if block_size < 3:
                 continue
-            thresh_type = cv2.THRESH_BINARY_INV if crop.mean() >= 128 else cv2.THRESH_BINARY
+            thresh_type = cv2.THRESH_BINARY_INV if crop_tight.mean() >= 128 else cv2.THRESH_BINARY
             local = cv2.adaptiveThreshold(
-                crop, 255, cv2.ADAPTIVE_THRESH_MEAN_C, thresh_type, block_size, 9
+                crop_tight, 255, cv2.ADAPTIVE_THRESH_MEAN_C, thresh_type, block_size, 9
             )
-            # Batasi ke dalam polygon region (bukan seluruh bounding rect)
             poly_mask = np.zeros_like(local)
-            pts = np.array([[p.x() - x1, p.y() - y1] for p in polygon], dtype=np.int32)
+            pts = np.array([[p.x() - bx1, p.y() - by1] for p in polygon], dtype=np.int32)
             cv2.fillPoly(poly_mask, [pts], 255)
             local = cv2.bitwise_and(local, poly_mask)
-            mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], local)
+            dil_local = cv2.dilate(local, kernel, iterations=2)
+            mask[by1:by2, bx1:bx2] = cv2.bitwise_or(mask[by1:by2, bx1:bx2], dil_local)
 
-        if mask.any():
-            pad = max(3, int(self.settings.get('inpaint_padding', 5)))
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
-            mask = cv2.dilate(mask, kernel, iterations=2)
+        self._direct_bubble_cleaned_bgr = direct_bgr if direct_any else None
         return mask
 
     def _find_bubble_interior(self, gray_crop):
@@ -8805,3 +9337,138 @@ Input:
                 kept.append(payload)
         created_areas[:] = kept
         return mask
+
+class BatchFullPageWorker(QThread):
+    """Proses full-page translation untuk banyak halaman dengan pipeline multi-worker.
+
+    Pembagian tugas antar worker halaman: saat Halaman A sedang menjalankan OCR
+    paralel + Translate API + Inpainting, worker Halaman B sudah mulai mendeteksi
+    layout (RF-DETR) pada halaman berikutnya sehingga CPU/GPU dan jaringan tidak
+    saling menunggu. Hasil tiap halaman langsung dikirim ke GUI thread via
+    page_finished untuk ditulis ke all_typeset_data.
+    """
+
+    page_started = pyqtSignal(int, int, str)               # idx (1-based), total, nama file
+    page_step = pyqtSignal(int, str)                       # pct, langkah (relay inner.progress)
+    page_finished = pyqtSignal(str, list, object, object)  # path, payloads, cleaned_b64, pre_b64
+    stats_updated = pyqtSignal(int, int, int)              # done, skipped, failed
+    batch_finished = pyqtSignal(int, int, int)             # done, skipped, failed
+
+    def __init__(self, main_app, image_paths, settings, use_ai_vision):
+        super().__init__()
+        import threading
+        self.main_app = main_app
+        self.image_paths = list(image_paths)
+        self.settings = settings
+        self.use_ai_vision = use_ai_vision
+        self._is_cancelled = False
+        self._active_workers = []
+        self._workers_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+        self.inner = FullPageTranslateWorker(
+            main_app,
+            self.image_paths[0] if self.image_paths else '',
+            settings,
+            use_ai_vision,
+        )
+
+    def cancel(self):
+        self._is_cancelled = True
+        self.inner._is_cancelled = True
+        with self._workers_lock:
+            for w in list(self._active_workers):
+                w._is_cancelled = True
+
+    @staticmethod
+    def _png_to_b64(pil_image):
+        buf = io.BytesIO()
+        pil_image.convert('RGB').save(buf, format='PNG')
+        return base64.b64encode(buf.getvalue()).decode('ascii')
+
+    def _process_one_page(self, idx, total, path):
+        """Jalankan pipeline satu halaman di dalam worker pool batch."""
+        if self._is_cancelled:
+            return ('cancelled', path, [], None, None)
+        if hasattr(self.main_app, '_is_page_already_typeset') and self.main_app._is_page_already_typeset(path):
+            return ('skipped', path, [], None, None)
+
+        page_name = os.path.basename(path)
+        self.page_started.emit(idx + 1, total, page_name)
+        worker = FullPageTranslateWorker(
+            self.main_app,
+            path,
+            self.settings,
+            self.use_ai_vision,
+        )
+        worker.progress.connect(
+            lambda pct, msg, name=page_name: self.page_step.emit(pct, f"[{name}] {msg}"),
+            Qt.DirectConnection,
+        )
+        with self._workers_lock:
+            if self._is_cancelled:
+                return ('cancelled', path, [], None, None)
+            self._active_workers.append(worker)
+
+        try:
+            worker.run()
+        except Exception as exc:
+            worker.last_error = str(exc)
+        finally:
+            with self._workers_lock:
+                if worker in self._active_workers:
+                    self._active_workers.remove(worker)
+
+        if worker.last_error is not None:
+            return ('failed', path, [], None, None)
+
+        created_areas = list(worker.last_created_areas or [])
+        cleaned_b64 = None
+        pre_b64 = None
+        if worker.cleaned_image_pil is not None:
+            cleaned_b64 = self._png_to_b64(worker.cleaned_image_pil)
+            try:
+                with Image.open(path) as orig:
+                    pre_b64 = self._png_to_b64(orig)
+            except Exception:
+                pre_b64 = None
+
+        if not created_areas:
+            return ('skipped', path, [], None, None)
+
+        return ('done', path, created_areas, cleaned_b64, pre_b64)
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        done = skipped = failed = 0
+        total = len(self.image_paths)
+        if total == 0:
+            self.batch_finished.emit(0, 0, 0)
+            return
+
+        # 2 worker halaman paralel memungkinkan overlap: saat halaman 1 sedang
+        # OCR paralel + Translate API + Inpaint, halaman 2 sudah jalan deteksi RF-DETR.
+        max_page_workers = min(2, total)
+        with ThreadPoolExecutor(max_workers=max_page_workers) as pool:
+            futures = [
+                pool.submit(self._process_one_page, idx, total, path)
+                for idx, path in enumerate(self.image_paths)
+            ]
+            for fut in as_completed(futures):
+                try:
+                    outcome, path, created_areas, cleaned_b64, pre_b64 = fut.result()
+                except Exception as exc:
+                    print(f"Batch page worker error: {exc}")
+                    outcome, path, created_areas, cleaned_b64, pre_b64 = ('failed', '', [], None, None)
+                if outcome == 'cancelled':
+                    continue
+                with self._stats_lock:
+                    if outcome == 'done':
+                        self.page_finished.emit(path, created_areas, cleaned_b64, pre_b64)
+                        done += 1
+                    elif outcome == 'skipped':
+                        skipped += 1
+                    else:
+                        failed += 1
+                    self.stats_updated.emit(done, skipped, failed)
+
+        self.batch_finished.emit(done, skipped, failed)

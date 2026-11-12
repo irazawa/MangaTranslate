@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.9.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QGroupBox, QGridLayout, QFrame, QSplitter, QToolButton, QFormLayout, QFontComboBox,
     QDoubleSpinBox, QSlider,
     QMenu, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget, QProgressDialog,
-    QAbstractItemView
+    QAbstractItemView, QProgressBar
 )
 from PyQt5.QtGui import (
     QColor, QFont, QTextCharFormat, QTextCursor, QBrush, QTextBlockFormat, QPixmap, QImage,
@@ -41,7 +41,7 @@ from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
 from src.ui.notifications import notify_banner, notify_toast
-from src.ui.texts import AppearanceText, SettingsText
+from src.ui.texts import AppearanceText, SettingsText, FullPageBatchText
 from src.ui.theme import (
     APPEARANCE_DEFAULTS,
     DARK_THEME_CHOICES,
@@ -331,12 +331,11 @@ class SettingsCenterDialog(QDialog):
         self.shortcuts_tab = self._create_shortcuts_tab()
         self.api_tab = self._create_api_tab()
         self.ocr_plugins_tab = self._create_ocr_plugins_tab()
-        self.media_tools_tab = self._create_media_tools_tab()
         self.glossary_tab = self._create_glossary_tab()
 
         for page in (self.general_tab, self.cleanup_tab, self.appearance_tab,
                      self.translation_tab, self.shortcuts_tab, self.api_tab, self.ocr_plugins_tab,
-                     self.media_tools_tab, self.glossary_tab):
+                     self.glossary_tab):
             self._pages.addWidget(page)
 
         right_vbox.addWidget(self._pages, 1)
@@ -394,7 +393,6 @@ class SettingsCenterDialog(QDialog):
             "shortcut": "shortcuts",
             "ocr": "ocr_plugins",
             "plugins": "ocr_plugins",
-            "media": "media_tools",
             "theme": "appearance",
             "style": "appearance",
         }
@@ -1231,119 +1229,6 @@ class SettingsCenterDialog(QDialog):
     # ------------------------------------------------------------------
     # Save handler
     # ------------------------------------------------------------------
-    def _create_media_tools_tab(self):
-        meta = self._page_meta("media_tools")
-        page, layout = self._make_page_scroll()
-        layout.addWidget(self._make_page_header(
-            meta.get("title", "Media Tools"),
-            meta.get("subtitle", ""),
-        ))
-
-        card = QGroupBox("YouTube & FFmpeg Dependencies")
-        card.setObjectName("settings-card")
-        card_vbox = QVBoxLayout(card)
-        card_vbox.setSpacing(10)
-        card_vbox.setContentsMargins(16, 12, 16, 12)
-
-        note = QLabel(
-            "These dependencies are no longer checked or installed during app startup. "
-            "Use this installer when you want YouTube media loading, playlist extraction, "
-            "or FFmpeg-based video tools."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("settings-option-desc")
-        card_vbox.addWidget(note)
-
-        self.media_dependency_labels = {}
-        for key, label in (
-            ("yt_dlp", "yt-dlp"),
-            ("yt_dlp_ejs", "yt-dlp-ejs"),
-            ("ffmpeg", "FFmpeg"),
-            ("deno", "Deno"),
-        ):
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            status_label = QLabel()
-            status_label.setObjectName("settings-option-desc")
-            row.addStretch(1)
-            row.addWidget(status_label)
-            self.media_dependency_labels[key] = status_label
-            card_vbox.addLayout(row)
-
-        button_row = QHBoxLayout()
-        self.refresh_media_deps_btn = QPushButton("Refresh Status")
-        self.refresh_media_deps_btn.clicked.connect(self._refresh_media_dependency_status)
-        self.install_media_deps_btn = QPushButton("Install Media Tools")
-        self.install_media_deps_btn.setObjectName("settings-action-btn")
-        self.install_media_deps_btn.clicked.connect(self._run_media_dependencies_installer)
-        button_row.addWidget(self.refresh_media_deps_btn)
-        button_row.addWidget(self.install_media_deps_btn)
-        button_row.addStretch(1)
-        card_vbox.addLayout(button_row)
-
-        layout.addWidget(card)
-        layout.addStretch(1)
-        # Defer the yt-dlp/ffmpeg detection probe so it does not block dialog
-        # construction. get_media_dependency_status() runs importlib + PATH
-        # scans that can take ~100ms; running them on idle keeps Settings open
-        # instant while the status labels populate a moment later.
-        QTimer.singleShot(0, self._refresh_media_dependency_status)
-        return page
-
-    def _refresh_media_dependency_status(self):
-        status = get_media_dependency_status()
-        labels = getattr(self, 'media_dependency_labels', {})
-        for key, ready in status.items():
-            label = labels.get(key)
-            if label is None:
-                continue
-            if ready:
-                label.setText("Installed")
-                label.setStyleSheet("color: #4ade80; font-weight: bold;")
-            else:
-                label.setText("Not installed")
-                label.setStyleSheet("color: #facc15; font-weight: bold;")
-
-    def _run_media_dependencies_installer(self):
-        ret = QMessageBox.question(
-            self,
-            "Install Media Tools",
-            "Install optional YouTube/Media dependencies now?\n\n"
-            "This may download yt-dlp, yt-dlp-ejs, FFmpeg, and Deno, so it can take a while.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if ret != QMessageBox.Yes:
-            return
-
-        self.install_media_deps_btn.setEnabled(False)
-        self.refresh_media_deps_btn.setEnabled(False)
-
-        progress_dlg = QProgressDialog("Installing optional media tools...", None, 0, 0, self)
-        progress_dlg.setWindowModality(Qt.WindowModal)
-        progress_dlg.setWindowTitle("Installing Media Tools")
-        progress_dlg.show()
-
-        worker = MediaDependenciesInstallWorker()
-
-        def on_progress(status):
-            progress_dlg.setLabelText(status)
-
-        def on_finished(success, message):
-            progress_dlg.close()
-            self.install_media_deps_btn.setEnabled(True)
-            self.refresh_media_deps_btn.setEnabled(True)
-            self._refresh_media_dependency_status()
-            if success:
-                notify_toast(self, "Media tools ready", message, kind="success", timeout_ms=5000)
-            else:
-                notify_banner(self, "media-tools-install-failed", "Media tools install failed", message, kind="error")
-
-        worker.progress.connect(on_progress)
-        worker.finished.connect(on_finished)
-        worker.finished.connect(worker.deleteLater)
-        worker.start()
-        self._media_dependencies_worker = worker
-
     def _create_glossary_tab(self):
         meta = self._page_meta("glossary")
         page, layout = self._make_page_scroll()
@@ -3796,33 +3681,6 @@ def uninstall_tessdata_lang(lang):
             return False, f"Failed to delete file: {e}"
     return False, "Language model file not found or is in a system read-only folder."
 
-def _python_module_available(module_name):
-    try:
-        importlib.import_module(module_name)
-        return True
-    except Exception:
-        return False
-
-def _find_media_executable(name):
-    path = shutil.which(name)
-    if path:
-        return path
-    exe_name = f"{name}.exe" if sys.platform.startswith('win') and not name.endswith('.exe') else name
-    try:
-        local_path = os.path.join(ROOT_DIR, "bin", exe_name)
-        if os.path.exists(local_path):
-            return local_path
-    except Exception:
-        pass
-    return ""
-
-def get_media_dependency_status():
-    return {
-        "yt_dlp": _python_module_available("yt_dlp"),
-        "yt_dlp_ejs": _python_module_available("yt_dlp_ejs"),
-        "ffmpeg": bool(_find_media_executable("ffmpeg")),
-        "deno": bool(_find_media_executable("deno")),
-    }
 
 class TessdataDownloadWorker(QThread):
     progress = pyqtSignal(int, int) # downloaded, total
@@ -3903,63 +3761,6 @@ class TesseractInstallWorker(QThread):
         except Exception as e:
             self.finished.emit(False, str(e))
 
-class MediaDependenciesInstallWorker(QThread):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(bool, str)
-
-    def run(self):
-        try:
-            self.progress.emit("Installing YouTube Python packages...")
-            pip_cmd = [sys.executable, "-m", "pip", "install", "yt-dlp", "yt-dlp-ejs"]
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            pip_proc = subprocess.Popen(
-                pip_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=creationflags,
-            )
-            _, pip_stderr = pip_proc.communicate()
-            if pip_proc.returncode != 0:
-                self.finished.emit(False, f"Pip install failed:\n{pip_stderr.decode(errors='ignore')}")
-                return
-
-            importlib.invalidate_caches()
-
-            if sys.platform.startswith('win'):
-                script_path = os.path.join(ROOT_DIR, "bin", "install_ffmpeg.ps1")
-                if os.path.exists(script_path):
-                    self.progress.emit("Installing FFmpeg and Deno...")
-                    ps_cmd = [
-                        "powershell",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-File",
-                        script_path,
-                    ]
-                    ps_proc = subprocess.Popen(
-                        ps_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        creationflags=creationflags,
-                    )
-                    _, ps_stderr = ps_proc.communicate()
-                    if ps_proc.returncode != 0:
-                        self.finished.emit(False, f"FFmpeg/Deno installer failed:\n{ps_stderr.decode(errors='ignore')}")
-                        return
-                else:
-                    self.finished.emit(False, f"Installer script not found:\n{script_path}")
-                    return
-            else:
-                self.progress.emit("Skipping FFmpeg/Deno auto installer on this platform.")
-
-            status = get_media_dependency_status()
-            missing = [name for name, ready in status.items() if not ready]
-            if missing:
-                self.finished.emit(False, "Still missing: " + ", ".join(missing))
-            else:
-                self.finished.emit(True, "YouTube/Media dependencies are ready.")
-        except Exception as e:
-            self.finished.emit(False, str(e))
 
 class PipInstallWorker(QThread):
     progress = pyqtSignal(str)        # streamed pip output lines
@@ -4607,3 +4408,95 @@ class SessionAnalyticsDialog(QDialog):
 
         notify_toast(self, "Reset selesai", "Usage data berhasil direset.", kind="success")
         self.accept()
+
+
+class FullPageBatchProgressDialog(QDialog):
+    """Dialog progres batch Full-Page Translation.
+
+    Modal: selama tampil, input ke window utama (canvas, navigasi halaman)
+    terblokir sehingga state tidak bisa berubah di tengah pemrosesan batch.
+    """
+
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, parent, total_pages):
+        super().__init__(parent)
+        self.setWindowTitle(FullPageBatchText.DIALOG_TITLE)
+        self.setModal(True)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowSystemMenuHint)
+        self.setFixedWidth(500)
+        self._finished = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(10)
+
+        title = QLabel(FullPageBatchText.DIALOG_TITLE)
+        title.setStyleSheet("color:#e2e8f0; font-size:12pt; font-weight:600; border:none;")
+        layout.addWidget(title)
+
+        self.page_label = QLabel(
+            FullPageBatchText.DIALOG_PAGE_FMT.format(current=0, total=total_pages, name="—")
+        )
+        self.page_label.setStyleSheet("color:#38bdf8; font-size:10.5pt; font-weight:600; border:none;")
+        self.page_label.setWordWrap(True)
+        layout.addWidget(self.page_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, max(1, total_pages))
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(14)
+        self.progress_bar.setStyleSheet(
+            "QProgressBar { background:#0e111a; border:1px solid #1e293b; border-radius:7px;"
+            " text-align:center; color:#cbd5e1; font-size:8.5pt; }"
+            "QProgressBar::chunk { background:#38bdf8; border-radius:6px; }"
+        )
+        layout.addWidget(self.progress_bar)
+
+        self.step_label = QLabel(FullPageBatchText.DIALOG_STEP_WAIT)
+        self.step_label.setWordWrap(True)
+        self.step_label.setStyleSheet("color:#4a5c78; font-size:9pt; font-style:italic; border:none;")
+        layout.addWidget(self.step_label)
+
+        self.stats_label = QLabel(
+            FullPageBatchText.DIALOG_STATS_FMT.format(done=0, skipped=0, failed=0)
+        )
+        self.stats_label.setStyleSheet("color:#cbd5e1; font-size:9.5pt; border:none;")
+        layout.addWidget(self.stats_label)
+
+        self.cancel_btn = QPushButton(FullPageBatchText.DIALOG_CANCEL_BTN)
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_btn, 0, Qt.AlignRight)
+
+    def set_page(self, current, total, name):
+        self.page_label.setText(
+            FullPageBatchText.DIALOG_PAGE_FMT.format(current=current, total=total, name=name)
+        )
+
+    def set_step(self, msg):
+        self.step_label.setText(msg or "")
+
+    def set_done_pages(self, count):
+        self.progress_bar.setValue(count)
+
+    def set_stats(self, done, skipped, failed):
+        self.stats_label.setText(
+            FullPageBatchText.DIALOG_STATS_FMT.format(done=done, skipped=skipped, failed=failed)
+        )
+
+    def mark_finished(self):
+        self._finished = True
+        self.cancel_btn.setVisible(False)
+
+    def _on_cancel(self):
+        if self._finished:
+            return
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText(FullPageBatchText.DIALOG_CANCELLING)
+        self.cancel_requested.emit()
+
+    def reject(self):
+        # Esc / close = permintaan batal (worker berhenti di batas halaman),
+        # bukan menutup dialog di tengah batch.
+        self._on_cancel()

@@ -1,14 +1,10 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.9.8.7
 import os
 import sys
 import traceback
 import warnings
 
-# Tambahkan folder bin ke environment PATH agar system dependencies (FFmpeg & Deno) terdeteksi otomatis
 root_dir = os.path.dirname(os.path.abspath(__file__))
-bin_dir = os.path.join(root_dir, "bin")
-if os.path.exists(bin_dir) and bin_dir not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
 # Sedini mungkin: di bawah pythonw.exe sys.stdout adalah None, jadi tanpa ini
 # semua print() dan traceback hilang tanpa jejak.

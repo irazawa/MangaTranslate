@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.9.8.7
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -15,13 +15,14 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import pytesseract
-import google.generativeai as genai
 
 from PyQt5.QtCore import Qt
 
-from src.utils.helpers import check_dependency, ensure_dependencies
+from src.utils.helpers import check_dependency, ensure_dependencies, is_module_installed
 from src.utils.crypto import encrypt_settings_keys, decrypt_settings_keys
 from src.core.app_info import APP_VERSION
+
+genai = check_dependency("google.generativeai", lazy=True)
 
 def get_effective_orientation(settings: dict, ocr_lang: str = ''):
     # SETTINGS may contain a 'lang_orientation' mapping like {'en': 'Horizontal', 'ja': 'Auto-Detect'}
@@ -38,30 +39,36 @@ def get_effective_orientation(settings: dict, ocr_lang: str = ''):
 torch = check_dependency("torch")
 is_gpu_available = torch.cuda.is_available() if torch else False
 
-# --- Model Deteksi ---
-onnxruntime = check_dependency("onnxruntime", "onnxruntime atau onnxruntime-gpu")
-YOLO = None
-try:
-    from ultralytics import YOLO as YOLO_cls
-    YOLO = YOLO_cls
-except Exception as exc:
-    pass
 
-# --- Engine OCR ---
-paddleocr = check_dependency("paddleocr", "paddleocr paddlepaddle")
-doctr = check_dependency("doctr", "python-doctr[torch]")
-RapidOCR = None
-try:
-    from rapidocr_onnxruntime import RapidOCR as RapidOCR_cls
-    RapidOCR = RapidOCR_cls
-except Exception as exc:
-    pass
+def _make_lazy_class(module_name: str, class_name: str):
+    if not is_module_installed(module_name):
+        return None
+    _cached_cls = None
 
-# --- [BARU] Engine Inpainting ---
-lama_cleaner = check_dependency("lama_cleaner", "lama-cleaner")
+    def _factory(*args, **kwargs):
+        nonlocal _cached_cls
+        if _cached_cls is None:
+            mod = __import__(module_name, fromlist=[class_name])
+            _cached_cls = getattr(mod, class_name)
+        return _cached_cls(*args, **kwargs)
+
+    return _factory
+
+
+# --- Model Deteksi (Lazy-loaded agar tidak memblokir startup) ---
+onnxruntime = check_dependency("onnxruntime", "onnxruntime atau onnxruntime-gpu", lazy=True)
+YOLO = _make_lazy_class("ultralytics", "YOLO")
+
+# --- Engine OCR (Lazy-loaded agar tidak memblokir startup) ---
+paddleocr = check_dependency("paddleocr", "paddleocr paddlepaddle", lazy=True)
+doctr = check_dependency("doctr", "python-doctr[torch]", lazy=True)
+RapidOCR = _make_lazy_class("rapidocr_onnxruntime", "RapidOCR")
+
+# --- [BARU] Engine Inpainting (Lazy-loaded) ---
+lama_cleaner = check_dependency("lama_cleaner", "lama-cleaner", lazy=True)
 
 # --- [BARU] API Provider ---
-openai = check_dependency("openai", "openai")
+openai = check_dependency("openai", "openai", lazy=True)
 
 
 
@@ -647,16 +654,10 @@ MOUSE_BUTTON_NAME_MAP = {
     Qt.TaskButton: 'Task',
 }
 
-# --- Konfigurasi Manga-OCR ---
+# --- Konfigurasi Manga-OCR (Lazy-loaded saat benar-benar dibutuhkan) ---
+MangaOcr = None
 _MANGA_OCR_IMPORT_ERROR = None
 _MANGA_OCR_IMPORT_CHECKED = False
-try:
-    from manga_ocr import MangaOcr
-    _MANGA_OCR_IMPORT_CHECKED = True
-except Exception as exc:
-    MangaOcr = None
-    _MANGA_OCR_IMPORT_ERROR = str(exc)
-    _MANGA_OCR_IMPORT_CHECKED = True
 
 def check_manga_ocr(force=False):
     global MangaOcr, _MANGA_OCR_IMPORT_ERROR, _MANGA_OCR_IMPORT_CHECKED

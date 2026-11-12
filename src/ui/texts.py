@@ -89,13 +89,6 @@ class SettingsText:
             "subtitle": "Enable OCR engines, install Tesseract, and manage local language models.",
         },
         {
-            "key": "media_tools",
-            "label": "Media Tools",
-            "description": "Optional installs",
-            "title": "Media Tools",
-            "subtitle": "Install optional YouTube, FFmpeg, and Deno tooling only when you need it.",
-        },
-        {
             "key": "glossary",
             "label": "Glossary",
             "description": "Term consistency",
@@ -140,7 +133,6 @@ class SettingsWorkspaceText:
                 ("ocr_plugins", "OCR Plugins", "Engines and languages", "▣"),
                 ("shortcuts", "Shortcuts", "Keyboard and mouse", "⌘"),
                 ("glossary", "Glossary", "Term consistency", "≡"),
-                ("media_tools", "Media Tools", "Optional installs", "▤"),
                 ("cleanup", "Cleanup", "Text cleanup defaults", "✦"),
             ],
         ),
@@ -279,6 +271,41 @@ class WorkersText:
     BATCH_ELAPSED_FMT = "Berjalan: {elapsed}"
     SUMMARY_ETA_FMT = "±{eta}"
     AVG_FMT = "Rata-rata {avg}/job"
+
+
+class FullPageBatchText:
+    """Teks fitur batch Full-Page Translation (tab Full)."""
+
+    SCOPE_CURRENT = "Halaman saat ini"
+    SCOPE_SELECTED = "Halaman terpilih"
+    SCOPE_PROJECT = "Seluruh proyek"
+    SCOPE_CURRENT_TIP = "Proses hanya halaman yang sedang tampil di canvas."
+    SCOPE_SELECTED_TIP = "Proses halaman yang dipilih lewat pemilih halaman."
+    SCOPE_PROJECT_TIP = "Proses semua halaman di proyek ini. Halaman yang sudah di-typeset atau sudah memiliki file _typeset dilewati otomatis."
+
+    PICK_PAGES_BTN = "Pilih halaman… ({count})"
+    PICK_TITLE = "Pilih Halaman"
+    PICK_HINT = "Centang halaman yang ingin diproses. File _typeset beserta halaman aslinya (serta halaman yang sudah di-typeset) akan dilewati otomatis."
+    PICK_CHECK_ALL = "Centang semua"
+    PICK_UNCHECK_ALL = "Hapus centang"
+
+    DIALOG_TITLE = "Full-Page Translation — Batch"
+    DIALOG_PAGE_FMT = "Halaman {current}/{total} — {name}"
+    DIALOG_STATS_FMT = "Selesai {done} • Dilewati {skipped} • Gagal {failed}"
+    DIALOG_CANCELLING = "Membatalkan… (menunggu langkah saat ini selesai)"
+    DIALOG_CANCEL_BTN = "Batalkan"
+    DIALOG_STEP_WAIT = "Menunggu…"
+
+    START_NO_TARGETS = "Tidak ada halaman untuk diproses. Semua halaman sudah di-typeset (atau sudah punya file _typeset) atau pilihan kosong."
+    START_NEED_PICK = "Pilih dulu halaman yang ingin diproses."
+    BATCH_BUSY = "Batch full-page masih berjalan. Tunggu hingga selesai."
+    TOAST_DONE_FMT = "Batch selesai: {done} halaman diproses, {skipped} dilewati, {failed} gagal."
+
+    RESTORE_AREA_INPAINT_BTN = "↩ Pulihkan Inpaint Area"
+    RESTORE_AREA_INPAINT_TIP = "Kembalikan gambar asli (sebelum inpaint) hanya pada area teks/SFX yang sedang dipilih."
+    CANCEL_PAGE_INPAINT_BTN = "✖ Batalkan Inpaint Halaman"
+    CANCEL_PAGE_INPAINT_TIP = "Kembalikan seluruh gambar asli halaman ini seperti sebelum inpainting."
+    LAYER_RESTORE_INPAINT_ACTION = "↩ Pulihkan Inpaint Area Ini"
 
 
 def welcome_subtitle_html() -> str:

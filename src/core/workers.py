@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.0
+# Manga OCR & Typeset Tool v14.9.8.7
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -909,6 +909,7 @@ def run_iopaint_inpaint(pil_image, pil_mask, server_url=None, timeout=None, ldm_
             timeout=timeout,
         )
         if response.status_code != 200:
+            print(f"IOPaint server error: HTTP {response.status_code} {response.text[:200]}")
             return None
         with Image.open(BytesIO(response.content)) as result:
             return result.convert("RGB")

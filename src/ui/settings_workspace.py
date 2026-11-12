@@ -42,7 +42,6 @@ APP_SETTINGS_KEYS = {
     "shortcuts",
     "api",
     "ocr_plugins",
-    "media_tools",
     "glossary",
 }
 
@@ -781,7 +780,6 @@ class SettingsWorkspace(QWidget):
             "settings": "general",
             "apis": "api",
             "ocr": "ocr_plugins",
-            "media": "media_tools",
         }.get(key, key)
         self._active_key = key
 

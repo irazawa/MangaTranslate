@@ -25,12 +25,10 @@ torchvision>=0.15
 ultralytics>=8.0.0
 openai>=1.0.0
 google-generativeai>=0.3.0
+rfdetr==1.7.0
+safetensors>=0.5
 
 # Optional
 python-dotenv>=1.0
 cryptography>=42.0.0
 
-# Optional YouTube Media Player Workflow
-# Install from Settings > Media Tools when needed:
-#   yt-dlp>=2025.1.15
-#   yt-dlp-ejs>=0.8.0

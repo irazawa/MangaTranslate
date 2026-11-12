@@ -272,8 +272,25 @@ class LayerMixin:
             self._push_undo_snapshot("Clear All Areas")
             self.typeset_areas.clear()
             self.clear_selected_area()
+            key, record = self._current_inpaint_record() if hasattr(self, '_current_inpaint_record') else (None, {})
+            pre_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
+            if key and pre_png:
+                pre_img = self._decode_image_png(pre_png)
+                if pre_img is not None:
+                    self._apply_base_image(pre_img)
+                self._update_typeset_record(
+                    key,
+                    areas=[],
+                    redo=list(self.redo_stack),
+                    remove_cleaned_image=True,
+                    remove_pre_inpaint_image=True,
+                )
+                self._refresh_inpaint_result_controls()
+            elif key:
+                self._update_typeset_record(key, areas=[], redo=list(self.redo_stack))
             self.redraw_all_typeset_areas()
             self._refresh_layers_list()
+            self.update_undo_redo_buttons_state()
 
     def _show_layer_context_menu(self, pos):
         item = self.layers_list_widget.itemAt(pos)
@@ -287,6 +304,10 @@ class LayerMixin:
         rename_action = QAction("Rename Layer", self)
         rename_action.triggered.connect(partial(self._rename_layer, area))
         menu.addAction(rename_action)
+
+        restore_inpaint_action = QAction(FullPageBatchText.LAYER_RESTORE_INPAINT_ACTION, self)
+        restore_inpaint_action.triggered.connect(partial(self.restore_selected_area_inpaint, area))
+        menu.addAction(restore_inpaint_action)
         
         opacity_menu = menu.addMenu("Set Opacity")
         for val in (100, 75, 50, 25, 0):

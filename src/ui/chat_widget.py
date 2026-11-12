@@ -1481,132 +1481,29 @@ class AIChatWidgetContent(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# AIChatWidget  — wrapper that switches between AI Chat and Video Player
+# AIChatWidget  — wrapper that hosts the AI Chatbot
 # ---------------------------------------------------------------------------
 
 class AIChatWidget(QWidget):
     """
-    A wrapper widget that hosts both the AI Chatbot and a Video Player,
-    allowing the user to switch seamlessly between them without cluttering
-    the right-panel tab bar.
+    A wrapper widget that hosts the AI Chatbot in the right-panel tab bar.
     """
 
     def __init__(self, main_app=None, parent=None):
         super().__init__(parent)
         self.main_app = main_app
-        
-        # Build UI layout
+
         self.root_layout = QVBoxLayout(self)
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
 
-        # 1. Mode Switcher bar at the top
-        self.switcher_bar = QFrame()
-        self.switcher_bar.setFrameShape(QFrame.NoFrame)
-        self.switcher_bar.setFixedHeight(40)
-        self.switcher_bar.setStyleSheet("""
-            QFrame {
-                background: #090b10;
-                border-bottom: 1px solid #1e293b;
-            }
-        """)
-        switcher_layout = QHBoxLayout(self.switcher_bar)
-        switcher_layout.setContentsMargins(10, 4, 10, 4)
-        switcher_layout.setSpacing(6)
-
-        # Sleek dropdown/selector to switch modes
-        mode_lbl = QLabel("Mode:")
-        self.mode_label = mode_lbl
-        mode_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: bold; background: transparent;")
-        switcher_layout.addWidget(mode_lbl)
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["🤖 AI Chatbot", "🎬 Video Player"])
-        self.mode_combo.setStyleSheet("""
-            QComboBox {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                border-radius: 6px;
-                padding: 4px 8px;
-                color: #38bdf8;
-                font-size: 11px;
-                font-weight: bold;
-                min-width: 140px;
-            }
-            QComboBox::drop-down { width: 18px; border-left: 1px solid #1e293b; }
-            QComboBox QAbstractItemView {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                color: #cbd5e1;
-                selection-background-color: #1e3a5f;
-            }
-        """)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        switcher_layout.addWidget(self.mode_combo)
-        switcher_layout.addStretch(1)
-
-        self.root_layout.addWidget(self.switcher_bar)
-
-        # 2. Stacked widget for the content
-        self.stack = QStackedWidget()
-        
-        # Load the chatbot content widget
         self.chat_content_widget = AIChatWidgetContent(main_app=self.main_app, parent=self)
-        self.stack.addWidget(self.chat_content_widget)
-
-        # Load the video player widget
-        try:
-            from src.ui.video_player_widget import VideoPlayerWidget
-            self.video_player_widget = VideoPlayerWidget(main_app=self.main_app, parent=self)
-            self.stack.addWidget(self.video_player_widget)
-            self._video_ok = True
-        except Exception as e:
-            print(f"[VideoPlayerWidget] Failed to load: {e}")
-            fallback = QWidget()
-            flay = QVBoxLayout(fallback)
-            flay.addWidget(QLabel(f"Error loading Video Player: {e}"))
-            self.stack.addWidget(fallback)
-            self._video_ok = False
-
-        self.root_layout.addWidget(self.stack, 1)
+        self.root_layout.addWidget(self.chat_content_widget, 1)
         self.refresh_theme()
 
-    def _on_mode_changed(self, idx: int):
-        self.stack.setCurrentIndex(idx)
-        # Pause video if switching away from player
-        if idx != 1 and hasattr(self, 'video_player_widget'):
-            try:
-                self.video_player_widget.player.pause()
-            except Exception:
-                pass
-
     def refresh_theme(self):
-        self.switcher_bar.setStyleSheet(f"""
-            QFrame {{
-                background: {theme.COLORS['panel']};
-                border-bottom: 1px solid {theme.COLORS['border']};
-            }}
-        """)
-        self.mode_label.setStyleSheet(
-            f"color: {theme.COLORS['muted']}; font-size: 11px; font-weight: bold; background: transparent;"
-        )
-        self.mode_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {theme.COLORS['card_alt']};
-                border: 1px solid {theme.COLORS['border']};
-                border-radius: 6px;
-                padding: 4px 8px;
-                color: {theme.COLORS['accent']};
-                font-size: 11px;
-                font-weight: bold;
-                min-width: 140px;
-            }}
-            QComboBox::drop-down {{ width: 18px; border-left: 1px solid {theme.COLORS['border']}; }}
-            {theme.combo_popup_qss()}
-        """)
-        for child in (getattr(self, 'chat_content_widget', None), getattr(self, 'video_player_widget', None)):
-            if child is not None and hasattr(child, 'refresh_theme'):
-                child.refresh_theme()
+        if hasattr(self, 'chat_content_widget') and hasattr(self.chat_content_widget, 'refresh_theme'):
+            self.chat_content_widget.refresh_theme()
 
     def refresh_models(self):
         """Forward refresh_models call to the active chatbot widget."""
@@ -1614,15 +1511,9 @@ class AIChatWidget(QWidget):
             self.chat_content_widget.refresh_models()
 
     def closeEvent(self, event):
-        # Forward close event to children to clean up threads properly
         if hasattr(self, 'chat_content_widget'):
             try:
                 self.chat_content_widget.closeEvent(event)
-            except Exception:
-                pass
-        if hasattr(self, 'video_player_widget'):
-            try:
-                self.video_player_widget.closeEvent(event)
             except Exception:
                 pass
         super().closeEvent(event)

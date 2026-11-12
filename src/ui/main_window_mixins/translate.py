@@ -130,9 +130,11 @@ class TranslateMixin:
         full_layout.setSpacing(10)
 
         info = QLabel(
-            "Proses otomatis 1 gambar aktif: deteksi → OCR (engine dari tab OCR) → "
-            "IOPaint → translate. Hasil muncul di canvas untuk dikoreksi.\n"
-            "• Lokal per-region: deteksi morfologi lalu OCR tiap blok.\n"
+            "Proses otomatis: deteksi → OCR (engine dari tab OCR) → "
+            "IOPaint → translate.\n"
+            "Pilih cakupan: halaman aktif, halaman terpilih, atau seluruh proyek "
+            "(halaman yang sudah di-typeset dilewati).\n"
+            "• Lokal per-region: RF-DETR layout + OCR tiap region.\n"
             "• AI Vision: kirim 1 halaman utuh ke VLM (Gemini/OpenAI/OpenRouter).\n"
             "• Penerjemah: model AI Translate (tab AI Cfg) atau langsung dari AI OCR/Vision."
         )
@@ -165,12 +167,49 @@ class TranslateMixin:
             "Langsung: model AI OCR/Vision menerjemahkan sekaligus dalam satu panggilan."
         )
         mode_form.addRow("Penerjemah:", self.full_translator_combo)
+
+        self.full_scope_combo = QComboBox()
+        self.full_scope_combo.addItem(FullPageBatchText.SCOPE_CURRENT, 'current')
+        self.full_scope_combo.addItem(FullPageBatchText.SCOPE_SELECTED, 'selected')
+        self.full_scope_combo.addItem(FullPageBatchText.SCOPE_PROJECT, 'project')
+        self.full_scope_combo.setToolTip(
+            f"{FullPageBatchText.SCOPE_CURRENT_TIP}\n"
+            f"{FullPageBatchText.SCOPE_SELECTED_TIP}\n"
+            f"{FullPageBatchText.SCOPE_PROJECT_TIP}"
+        )
+        mode_form.addRow("Cakupan:", self.full_scope_combo)
+
+        self._full_selected_pages = []
+        self.full_pick_pages_btn = QPushButton(FullPageBatchText.PICK_PAGES_BTN.format(count=0))
+        self.full_pick_pages_btn.setToolTip(FullPageBatchText.SCOPE_SELECTED_TIP)
+        self.full_pick_pages_btn.clicked.connect(
+            lambda: self._open_full_page_picker()
+        )
+        self.full_pick_pages_btn.setVisible(False)
+        self.full_scope_combo.currentIndexChanged.connect(self._on_full_scope_changed)
+
         full_layout.addLayout(mode_form)
+        full_layout.addWidget(self.full_pick_pages_btn)
 
         self.auto_translate_page_btn = QPushButton(ActionText.FULL_PAGE_TRANSLATE)
         self.auto_translate_page_btn.setStyleSheet(compact_primary_button_qss())
         self.auto_translate_page_btn.clicked.connect(self.start_full_page_translation)
         full_layout.addWidget(self.auto_translate_page_btn)
+
+        inpaint_restore_row = QHBoxLayout()
+        inpaint_restore_row.setSpacing(6)
+        self.full_restore_area_inpaint_btn = QPushButton(FullPageBatchText.RESTORE_AREA_INPAINT_BTN)
+        self.full_restore_area_inpaint_btn.setToolTip(FullPageBatchText.RESTORE_AREA_INPAINT_TIP)
+        self.full_restore_area_inpaint_btn.setEnabled(False)
+        self.full_restore_area_inpaint_btn.clicked.connect(lambda: self.restore_selected_area_inpaint())
+        inpaint_restore_row.addWidget(self.full_restore_area_inpaint_btn)
+
+        self.full_cancel_page_inpaint_btn = QPushButton(FullPageBatchText.CANCEL_PAGE_INPAINT_BTN)
+        self.full_cancel_page_inpaint_btn.setToolTip(FullPageBatchText.CANCEL_PAGE_INPAINT_TIP)
+        self.full_cancel_page_inpaint_btn.setEnabled(False)
+        self.full_cancel_page_inpaint_btn.clicked.connect(self.cancel_inpaint_result)
+        inpaint_restore_row.addWidget(self.full_cancel_page_inpaint_btn)
+        full_layout.addLayout(inpaint_restore_row)
 
         layout.addWidget(full_group)
         layout.addStretch()
@@ -874,10 +913,9 @@ class TranslateMixin:
         # record), jadi Undo/Cancel Inpaint tetap bekerja seperti biasa.
         page_cleaned = False
         pre_inpaint_png = None
-        record_key = None
+        record_key = self.get_current_data_key()
         if cleaned_pil is not None:
             try:
-                record_key = self.get_current_data_key()
                 record = self.all_typeset_data.get(record_key, {}) if record_key else {}
                 pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
                 if not pre_inpaint_png:
@@ -902,10 +940,11 @@ class TranslateMixin:
                     settings=area_payload['settings'],
                     polygon=area_payload['polygon'],
                     original_text=area_payload['original_text'],
-                    # Halaman sudah bersih → renderer tidak perlu inpaint ulang per area
-                    manual_inpaint=False if page_cleaned else None,
+                    # Full-page membersihkan latar di worker — matikan live cv2.inpaint per area
+                    manual_inpaint=False,
                     is_manual=False
                 )
+                area.set_override('use_inpaint', False)
                 if page_cleaned:
                     # Latar sudah bersih — kotak background hanya menutupi artwork
                     area.set_override('use_background_box', False)
@@ -915,15 +954,22 @@ class TranslateMixin:
                 # Satu area gagal tidak boleh menggagalkan seluruh halaman
                 print(f"Gagal membuat area typeset: {e}")
 
-        if page_cleaned and record_key:
-            self._update_typeset_record(
-                record_key,
-                areas=list(self.typeset_areas),
-                redo=list(self.redo_stack),
-                cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
-                pre_inpaint_image_png=pre_inpaint_png,
-            )
-            self._refresh_inpaint_result_controls()
+        if record_key:
+            if page_cleaned:
+                self._update_typeset_record(
+                    record_key,
+                    areas=list(self.typeset_areas),
+                    redo=list(self.redo_stack),
+                    cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
+                    pre_inpaint_image_png=pre_inpaint_png,
+                )
+                self._refresh_inpaint_result_controls()
+            else:
+                self._update_typeset_record(
+                    record_key,
+                    areas=list(self.typeset_areas),
+                    redo=list(self.redo_stack),
+                )
 
         self.redraw_all_typeset_areas(refresh_layers=True)
         if applied < len(created_areas):
@@ -944,3 +990,328 @@ class TranslateMixin:
         self._full_page_worker = None
         self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
         self.show_banner("full-page-translation-error", "Penerjemahan halaman gagal", str(err_msg), kind="error")
+
+    # ── Batch Full-Page Translation ────────────────────────────────────
+
+    @staticmethod
+    def _is_typeset_output_file(path) -> bool:
+        """True bila file itu sendiri adalah hasil simpan *_typeset (mis. 01_typeset.png)."""
+        if not path:
+            return False
+        stem = os.path.splitext(os.path.basename(str(path)))[0].lower()
+        return stem.endswith('_typeset') or '_typeset' in stem
+
+    def _has_typeset_pair(self, path) -> bool:
+        """True bila halaman asli (mis. 01.jpg) sudah punya hasil *_typeset di disk atau di daftar file."""
+        if not path or self._is_typeset_output_file(path):
+            return False
+        if hasattr(self, 'check_if_saved') and self.check_if_saved(path):
+            return True
+        path_part, _ = os.path.splitext(str(path))
+        for ext in ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.PNG', '.JPG', '.JPEG', '.WEBP'):
+            if os.path.exists(f"{path_part}_typeset{ext}"):
+                return True
+        norm_dir = os.path.normcase(os.path.abspath(os.path.dirname(str(path)))) if os.path.dirname(str(path)) else ''
+        stem_lower = os.path.splitext(os.path.basename(str(path)))[0].lower()
+        target_prefix = f"{stem_lower}_typeset"
+        for other in getattr(self, 'image_files', []) or []:
+            other_dir = os.path.normcase(os.path.abspath(os.path.dirname(str(other)))) if os.path.dirname(str(other)) else ''
+            if norm_dir and other_dir and norm_dir != other_dir:
+                continue
+            other_stem = os.path.splitext(os.path.basename(str(other)))[0].lower()
+            if other_stem == target_prefix or other_stem.startswith(f"{target_prefix}."):
+                return True
+        return False
+
+    def _is_page_already_typeset(self, path) -> bool:
+        """True bila file adalah *_typeset, punya pasangan *_typeset, atau sudah punya area typeset."""
+        if not path:
+            return True
+        if self._is_typeset_output_file(path):
+            return True
+        if self._has_typeset_pair(path):
+            return True
+        key = self.get_current_data_key(path)
+        record = self.all_typeset_data.get(key)
+        if isinstance(record, dict) and record.get('areas'):
+            return True
+        return False
+
+    def _on_full_scope_changed(self, _idx):
+        scope = self.full_scope_combo.currentData()
+        self.full_pick_pages_btn.setVisible(scope == 'selected')
+
+    def _update_full_pick_pages_btn(self):
+        valid = {p for p in self.image_files if not self._is_page_already_typeset(p)}
+        count = sum(1 for p in self._full_selected_pages if p in valid)
+        self.full_pick_pages_btn.setText(FullPageBatchText.PICK_PAGES_BTN.format(count=count))
+
+    def _open_full_page_picker(self):
+        """Dialog centang halaman. Return list path terpilih, None bila dibatalkan."""
+        valid = set(self.image_files)
+        if not valid:
+            self.show_banner(
+                "full-batch-no-files", "Tidak ada halaman",
+                "Buka folder atau proyek manga terlebih dahulu.", kind="warning"
+            )
+            return None
+
+        if self.current_image_path:
+            active_key = self.get_current_data_key()
+            self._update_typeset_record(active_key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(FullPageBatchText.PICK_TITLE)
+        dlg.setModal(True)
+        dlg.resize(440, 520)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
+
+        hint = QLabel(FullPageBatchText.PICK_HINT)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#4a5c78; font-size:8.5pt; font-style:italic;")
+        lay.addWidget(hint)
+
+        lst = QListWidget()
+        prev_picked = set(self._full_selected_pages)
+        for path in self.image_files:
+            # Sembunyikan file output *_typeset (mis. 01_typeset.png) dari daftar pilih
+            if self._is_typeset_output_file(path):
+                continue
+            already_done = self._is_page_already_typeset(path)
+            item = QListWidgetItem(os.path.basename(path))
+            item.setData(Qt.UserRole, path)
+            item.setData(Qt.UserRole + 1, already_done)
+            item.setCheckState(
+                Qt.Checked if (path in prev_picked and not already_done) else Qt.Unchecked
+            )
+            if already_done:
+                suffix = "(sudah _typeset)" if self._has_typeset_pair(path) else "(sudah typeset)"
+                item.setText(f"{os.path.basename(path)}  {suffix}")
+                item.setForeground(QColor("#4a5c78"))
+            lst.addItem(item)
+        lay.addWidget(lst)
+
+        btn_row = QHBoxLayout()
+        check_all = QPushButton(FullPageBatchText.PICK_CHECK_ALL)
+        uncheck_all = QPushButton(FullPageBatchText.PICK_UNCHECK_ALL)
+        check_all.clicked.connect(
+            lambda: [
+                lst.item(i).setCheckState(Qt.Checked)
+                for i in range(lst.count())
+                if not lst.item(i).data(Qt.UserRole + 1)
+            ]
+        )
+        uncheck_all.clicked.connect(
+            lambda: [lst.item(i).setCheckState(Qt.Unchecked) for i in range(lst.count())]
+        )
+        btn_row.addWidget(check_all)
+        btn_row.addWidget(uncheck_all)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return None
+        picked = [
+            lst.item(i).data(Qt.UserRole)
+            for i in range(lst.count())
+            if lst.item(i).checkState() == Qt.Checked
+        ]
+        self._full_selected_pages = [p for p in picked if p in valid]
+        self._update_full_pick_pages_btn()
+        return self._full_selected_pages
+
+    def _collect_full_page_settings(self):
+        """Rakit settings pipeline full-page (dipakai mode tunggal & batch)."""
+        settings = self.get_current_settings()
+
+        def _canon_provider(name):
+            return {'gemini': 'Gemini', 'openai': 'OpenAI', 'openrouter': 'OpenRouter'}.get(
+                str(name).lower(), name
+            )
+
+        tr_combo = getattr(self, 'full_translator_combo', None)
+        translator_choice = (tr_combo.currentData() if tr_combo is not None else None) or 'ai_translate'
+        settings['full_translator'] = translator_choice
+
+        # Model penerjemah (dipakai _translate_batch): default model AI Translate
+        # dari tab AI Cfg; pilihan 'ai_ocr' memakai provider/model AI OCR langsung.
+        if translator_choice == 'ai_ocr' and settings.get('ocr_engine') == 'AI_OCR' and settings.get('ocr_ai_provider'):
+            provider = _canon_provider(settings.get('ocr_ai_provider', ''))
+            model_name = settings.get('ocr_ai_model_id', '')
+        else:
+            provider, model_name = self.get_selected_model_name()
+            if hasattr(self, 'ai_model_combo'):
+                idx = self.ai_model_combo.currentIndex()
+                if idx >= 0:
+                    data = self.ai_model_combo.itemData(idx, Qt.UserRole)
+                    if data:
+                        provider, model_name = data
+
+        settings['ai_model'] = (provider, model_name)
+
+        # Model untuk panggilan AI Vision full-page: selalu pakai model AI OCR (VLM)
+        # bila dikonfigurasi — model translate belum tentu bisa menerima gambar.
+        if settings.get('ocr_ai_provider') and settings.get('ocr_ai_model_id'):
+            settings['vision_model'] = (
+                _canon_provider(settings.get('ocr_ai_provider')),
+                settings.get('ocr_ai_model_id'),
+            )
+        else:
+            settings['vision_model'] = (provider, model_name)
+        settings['target_lang'] = self.translate_combo.currentText()
+        # Pipeline Full selalu membersihkan teks (deteksi → OCR → inpaint → translate);
+        # tidak bergantung pada checkbox cleanup global — itu milik flow default.
+        settings['use_inpaint'] = True
+
+        combo = getattr(self, 'full_mode_combo', None)
+        use_ai_vision = bool(combo.currentData()) if combo is not None else False
+        return settings, use_ai_vision
+
+    def _start_full_page_batch(self, scope):
+        """Jalankan full-page translation utk cakupan 'selected' / 'project'."""
+        from src.ui.main_window import BatchFullPageWorker  # hindari circular import
+
+        if not self.image_files:
+            self.show_banner(
+                "full-batch-no-files", "Tidak ada halaman",
+                "Buka folder atau proyek manga terlebih dahulu.", kind="warning"
+            )
+            return
+        worker = getattr(self, '_full_page_worker', None)
+        if worker is not None and worker.isRunning():
+            self.show_banner(
+                "full-page-busy", "Sedang berjalan",
+                "Penerjemahan halaman masih diproses. Tunggu hingga selesai.", kind="warning"
+            )
+            return
+        batch = getattr(self, '_full_batch_worker', None)
+        if batch is not None and batch.isRunning():
+            self.show_banner(
+                "full-batch-busy", "Sedang berjalan",
+                FullPageBatchText.BATCH_BUSY, kind="warning"
+            )
+            return
+
+        if self.current_image_path:
+            active_key = self.get_current_data_key()
+            self._update_typeset_record(active_key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+
+        if scope == 'selected':
+            candidates = [p for p in getattr(self, '_full_selected_pages', []) if p in set(self.image_files)]
+            if not candidates:
+                picked = self._open_full_page_picker()
+                if not picked:
+                    self.show_banner(
+                        "full-batch-need-pick", "Pilih halaman",
+                        FullPageBatchText.START_NEED_PICK, kind="warning"
+                    )
+                    return
+                candidates = picked
+        else:
+            candidates = list(self.image_files)
+
+        # Halaman yang sudah di-typeset, file *_typeset, maupun halaman asli yang sudah
+        # punya pasangan *_typeset (mis. 01.jpg + 01_typeset.png) dianggap selesai → dilewati.
+        targets = []
+        for path in candidates:
+            if self._is_page_already_typeset(path):
+                continue
+            targets.append(path)
+        if not targets:
+            self.show_toast("Batch full-page", FullPageBatchText.START_NO_TARGETS, kind="info")
+            return
+
+        settings, use_ai_vision = self._collect_full_page_settings()
+
+        self._full_batch_worker = BatchFullPageWorker(self, targets, settings, use_ai_vision)
+        dialog = FullPageBatchProgressDialog(self, total_pages=len(targets))
+        self._full_batch_dialog = dialog
+
+        batch_worker = self._full_batch_worker
+        batch_worker.page_started.connect(
+            lambda cur, tot, name: (
+                dialog.set_page(cur, tot, name),
+                dialog.set_step(FullPageBatchText.DIALOG_STEP_WAIT),
+            )
+        )
+        batch_worker.page_step.connect(lambda _pct, msg: dialog.set_step(msg))
+        batch_worker.page_finished.connect(self._on_batch_page_finished)
+        batch_worker.stats_updated.connect(
+            lambda done, skipped, failed: (
+                dialog.set_stats(done, skipped, failed),
+                dialog.set_done_pages(done),
+            )
+        )
+        batch_worker.batch_finished.connect(self._on_full_batch_finished)
+        dialog.cancel_requested.connect(batch_worker.cancel)
+        # Cleanup referensi thread hanya setelah QThread benar-benar selesai.
+        batch_worker.finished.connect(self._on_full_batch_thread_done)
+        batch_worker.finished.connect(batch_worker.deleteLater)
+
+        dialog.show()
+        batch_worker.start()
+
+    def _on_batch_page_finished(self, path, created_areas, cleaned_b64, pre_b64):
+        """Terapkan hasil satu halaman batch ke record data (bukan canvas)."""
+        if self._is_page_already_typeset(path):
+            return  # sudah di-typeset / punya pasangan _typeset — jangan menimpa (penjaga race)
+        key = self.get_current_data_key(path)
+        page_cleaned = cleaned_b64 is not None
+        new_areas = []
+        for payload in created_areas:
+            try:
+                area = self._create_typeset_area(
+                    rect=payload['rect'],
+                    text=payload['text'],
+                    settings=payload['settings'],
+                    polygon=payload['polygon'],
+                    original_text=payload['original_text'],
+                    # Full-page membersihkan latar di worker — matikan live cv2.inpaint per area
+                    manual_inpaint=False,
+                    is_manual=False
+                )
+                area.set_override('use_inpaint', False)
+                if page_cleaned:
+                    area.set_override('use_background_box', False)
+                new_areas.append(area)
+            except Exception as e:
+                print(f"Gagal membuat area typeset ({os.path.basename(path)}): {e}")
+        self._update_typeset_record(
+            key,
+            areas=new_areas,
+            redo=[],
+            cleaned_image_png=cleaned_b64,
+            pre_inpaint_image_png=pre_b64,
+        )
+        if key == self.get_current_data_key():
+            self.typeset_areas = list(new_areas)
+            self.redo_stack = []
+
+    def _on_full_batch_finished(self, done, skipped, failed):
+        dialog = getattr(self, '_full_batch_dialog', None)
+        if dialog is not None:
+            dialog.mark_finished()
+            dialog.accept()
+            self._full_batch_dialog = None
+        # Muat ulang halaman aktif agar hasil batch (bila halaman ini ikut
+        # diproses / sudah punya record baru) tampil di canvas.
+        if self.current_image_path:
+            self.load_image(self.current_image_path)
+        self.show_toast(
+            "Batch full-page",
+            FullPageBatchText.TOAST_DONE_FMT.format(done=done, skipped=skipped, failed=failed),
+            kind="success" if failed == 0 else "warning"
+        )
+
+    def _on_full_batch_thread_done(self):
+        # Dipanggil dari sinyal QThread.finished — thread sudah benar-benar
+        # mati, aman melepas referensi.
+        self._full_batch_worker = None
+

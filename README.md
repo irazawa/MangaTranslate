@@ -2,7 +2,7 @@
 
 MangaTranslate adalah aplikasi desktop Windows-first berbasis Python dan PyQt5 untuk membantu workflow OCR, penerjemahan, clean-up, dan typesetting halaman manga atau komik. Aplikasi ini mendukung input gambar, folder, dan PDF, dengan pemrosesan berat dijalankan di background worker agar antarmuka tetap responsif.
 
-Versi saat ini: `14.9.6.1`.
+Versi saat ini: `14.9.8.7`.
 
 ## Fitur Utama
 
@@ -14,8 +14,8 @@ Versi saat ini: `14.9.6.1`.
 - Undo/redo untuk perubahan typesetting, recent translations, dan riwayat proyek terakhir.
 - Clean-up teks melalui inpainting lokal, termasuk integrasi IOPaint server dan fallback OpenCV.
 - Batch processing untuk OCR, translate, save image, proofread, dan quality check.
-- Settings workspace untuk konfigurasi profil, OCR, API, tampilan, pricing, analytics, dan optional media tools.
-- AI Chat dan media player terintegrasi untuk bantuan dan pemutaran file lokal atau media berbasis `yt-dlp` jika dipasang.
+- Settings workspace untuk konfigurasi profil, OCR, API, tampilan, pricing, dan analytics.
+- AI Chat terintegrasi untuk bantuan konteks proyek dan diskusi terjemahan.
 
 ## Arsitektur Singkat
 
@@ -49,8 +49,8 @@ MangaTranslate/
 
 - Windows 10 atau Windows 11 64-bit.
 - Python 3.9 atau lebih baru tersedia di PATH.
-- Koneksi internet jika menggunakan penerjemah cloud, download model/dependensi, atau fitur media online.
-- Tesseract, FFmpeg, Deno, `yt-dlp`, dan dependency OCR tertentu bersifat opsional sesuai fitur yang digunakan.
+- Koneksi internet jika menggunakan penerjemah cloud atau mengunduh model/dependensi.
+- Tesseract dan dependency OCR tertentu bersifat opsional sesuai fitur yang digunakan.
 
 ## Instalasi dan Menjalankan Aplikasi
 

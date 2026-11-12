@@ -980,6 +980,16 @@ class TypesetMixin:
                 self.clear_selected_area()
             self.redo_stack.clear()
             self.redo_stack.append(area_to_delete)
+            restored = False
+            if hasattr(self, '_restore_area_inpaint_pixels'):
+                try:
+                    restored = bool(self._restore_area_inpaint_pixels(area_to_delete, commit_record=True))
+                except Exception as e:
+                    print(f"Gagal memulihkan piksel inpaint area yang dihapus: {e}")
+            if not restored and getattr(self, 'current_image_path', None):
+                key = self.get_current_data_key()
+                if key:
+                    self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
 

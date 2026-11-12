@@ -43,16 +43,13 @@ build/
 dist/
 *.spec
 launcher.bat
-bin/*.exe
-bin/*.wav
 
 # Data assets and logs
-src/data/video/
 src/data/chat_history/
-src/data/music/
 
 # Local/external tools and folders
 Inpainting/
+Backup/
 
 # Secret documentation files
 code.md

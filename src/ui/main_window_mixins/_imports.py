@@ -21,7 +21,6 @@ import hashlib
 import configparser
 import base64
 from datetime import date, timedelta
-from openai import OpenAI
 import warnings
 import subprocess
 import importlib
@@ -30,7 +29,6 @@ import cv2
 import pytesseract
 import requests
 import fitz  # from PyMuPDF
-import google.generativeai as genai
 from PIL import Image
 import io
 from PIL import ImageFile
@@ -72,7 +70,12 @@ from src.ui.canvas import *
 from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
-from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, WorkersText, about_html, welcome_subtitle_html
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, WorkersText, FullPageBatchText, about_html, welcome_subtitle_html
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
+
+
+def OpenAI(*args, **kwargs):
+    from openai import OpenAI as _OpenAICls
+    return _OpenAICls(*args, **kwargs)

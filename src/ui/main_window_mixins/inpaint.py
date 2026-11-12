@@ -261,12 +261,106 @@ class InpaintMixin:
     def _refresh_inpaint_result_controls(self):
         _, record = self._current_inpaint_record()
         has_inpaint_state = bool(record.get('cleaned_image_png') and record.get('pre_inpaint_image_png'))
-        for button_name in ('inpaint_compare_button', 'inpaint_cancel_button'):
+        for button_name in ('inpaint_compare_button', 'inpaint_cancel_button', 'full_cancel_page_inpaint_btn', 'full_restore_area_inpaint_btn'):
             button = getattr(self, button_name, None)
             if button is not None:
                 button.setEnabled(has_inpaint_state)
         if not has_inpaint_state and getattr(self, 'inpaint_compare_button', None) is not None:
             self._set_compare_controls_checked(False)
+
+    def _build_area_restore_mask(self, area, img_w, img_h, pad=12):
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        for poly in (getattr(area, 'cleanup_polygon', None), getattr(area, 'polygon', None)):
+            if poly is not None and not poly.isEmpty():
+                pts = np.array([[p.x(), p.y()] for p in poly], dtype=np.int32)
+                cv2.fillPoly(mask, [pts], 255)
+        for rect in (getattr(area, 'cleanup_rect', None), getattr(area, 'rect', None)):
+            if rect is not None and not rect.isEmpty():
+                x1, y1 = max(0, rect.x()), max(0, rect.y())
+                x2, y2 = min(img_w, rect.x() + rect.width()), min(img_h, rect.y() + rect.height())
+                if x2 > x1 and y2 > y1:
+                    cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+        if mask.any() and pad > 0:
+            k = max(3, int(pad) | 1)
+            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)), iterations=2)
+        return mask
+
+    def _restore_area_inpaint_pixels(self, area, commit_record=True):
+        """Salin piksel asli (sebelum inpaint) di bawah `area` kembali ke base image."""
+        if area is None or getattr(self, 'current_image_pil', None) is None:
+            return False
+        key, record = self._current_inpaint_record()
+        pre_inpaint_png = record.get('pre_inpaint_image_png') if record else None
+        if not key or not pre_inpaint_png:
+            return False
+        pre_image = self._decode_image_png(pre_inpaint_png)
+        if pre_image is None or pre_image.size != self.current_image_pil.size:
+            return False
+
+        w, h = self.current_image_pil.size
+        pad = max(9, int(self.get_current_settings().get('inpaint_padding', 5)) * 2 + 5)
+        restore_mask = self._build_area_restore_mask(area, w, h, pad=pad)
+        if not restore_mask.any():
+            return False
+
+        # Jangan timpa area inpaint milik balon teks lain yang masih aktif.
+        for other in getattr(self, 'typeset_areas', []):
+            if other is area:
+                continue
+            other_poly = getattr(other, 'cleanup_polygon', None) or getattr(other, 'polygon', None)
+            if other_poly is not None and not other_poly.isEmpty():
+                other_mask = np.zeros((h, w), dtype=np.uint8)
+                pts = np.array([[p.x(), p.y()] for p in other_poly], dtype=np.int32)
+                cv2.fillPoly(other_mask, [pts], 255)
+                other_mask = cv2.dilate(other_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
+                restore_mask[other_mask > 0] = 0
+
+        if not restore_mask.any():
+            return False
+
+        cur_arr = np.array(self.current_image_pil.convert('RGB'))
+        pre_arr = np.array(pre_image.convert('RGB'))
+        cur_arr[restore_mask > 0] = pre_arr[restore_mask > 0]
+        restored_pil = Image.fromarray(cur_arr)
+        self._apply_base_image(restored_pil)
+        if commit_record:
+            self._update_typeset_record(
+                key,
+                areas=list(self.typeset_areas),
+                redo=list(self.redo_stack),
+                cleaned_image_png=self._encode_cleaned_image(restored_pil),
+                pre_inpaint_image_png=pre_inpaint_png,
+            )
+            self._refresh_inpaint_result_controls()
+        return True
+
+    def restore_selected_area_inpaint(self, area=None):
+        """Pulihkan gambar asli di bawah area terpilih tanpa menghapus halaman lain."""
+        target = area or getattr(self, 'selected_typeset_area', None)
+        if target is None:
+            self.show_toast("Pilih Area", "Klik dulu area teks/SFX di canvas atau tab Layers yang ingin dipulihkan inpaint-nya.", kind="info")
+            return
+        self._push_undo_snapshot("Restore Area Inpaint")
+        restored = self._restore_area_inpaint_pixels(target, commit_record=False)
+        target.set_override('use_inpaint', False)
+        target.set_override('use_background_box', False)
+        if isinstance(getattr(target, 'review_notes', None), dict):
+            target.review_notes['manual_inpaint'] = False
+        key, record = self._current_inpaint_record()
+        if key:
+            kwargs = {
+                'areas': list(self.typeset_areas),
+                'redo': list(self.redo_stack),
+            }
+            if restored and getattr(self, 'current_image_pil', None) is not None:
+                kwargs['cleaned_image_png'] = self._encode_cleaned_image(self.current_image_pil)
+                if record.get('pre_inpaint_image_png'):
+                    kwargs['pre_inpaint_image_png'] = record.get('pre_inpaint_image_png')
+            self._update_typeset_record(key, **kwargs)
+        self.redraw_all_typeset_areas()
+        self._refresh_inpaint_result_controls()
+        self.update_undo_redo_buttons_state()
+        self.show_toast("Inpaint Area Dipulihkan", "Gambar asli pada area terpilih berhasil dikembalikan.", kind="success")
 
     def adjust_inpaint_brush_size(self, delta):
         spinbox = getattr(self, 'brush_size_spinbox', None)
@@ -280,7 +374,18 @@ class InpaintMixin:
         key, record = self._current_inpaint_record()
         pre_inpaint_png = record.get('pre_inpaint_image_png')
         if not key or not pre_inpaint_png:
-            self.show_toast("No Inpaint Result", "No saved inpainting result to cancel on this page.", kind="info")
+            # Tetap matikan live per-area inpaint bila ada area aktif
+            changed_any = False
+            for area in getattr(self, 'typeset_areas', []):
+                area.set_override('use_inpaint', False)
+                if isinstance(getattr(area, 'review_notes', None), dict):
+                    area.review_notes['manual_inpaint'] = False
+                changed_any = True
+            if changed_any:
+                self.redraw_all_typeset_areas()
+                self.show_toast("Inpaint Dinonaktifkan", "Inpaint per-area pada halaman ini dinonaktifkan.", kind="info")
+            else:
+                self.show_toast("No Inpaint Result", "No saved inpainting result to cancel on this page.", kind="info")
             return
         pre_image = self._decode_image_png(pre_inpaint_png)
         if pre_image is None:
@@ -291,6 +396,10 @@ class InpaintMixin:
         if cleaned_image is not None:
             self._apply_base_image(cleaned_image)
         self._push_undo_snapshot("Cancel Inpaint Clean")
+        for area in getattr(self, 'typeset_areas', []):
+            area.set_override('use_inpaint', False)
+            if isinstance(getattr(area, 'review_notes', None), dict):
+                area.review_notes['manual_inpaint'] = False
         self._set_compare_controls_checked(False)
         self._compare_mode_active = False
         self._apply_base_image(pre_image)
@@ -305,6 +414,7 @@ class InpaintMixin:
             self.image_label.clear_inpaint_mask()
         self.redraw_all_typeset_areas()
         self._refresh_inpaint_result_controls()
+        self.update_undo_redo_buttons_state()
         self.show_toast("Inpainting Cancelled", "Restored the page before inpainting.", kind="success")
 
     def _on_inpaint_brush_finished(self, result_pil):
