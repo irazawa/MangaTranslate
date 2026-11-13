@@ -9,6 +9,36 @@ from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class ProjectioMixin:
+    def _build_project_snapshot(self, *, copy_metadata=False):
+        self.paint_mutex.lock()
+        try:
+            serialized_typeset = serialize_typeset_records(self.all_typeset_data or {})
+            history = list(self.history_entries) if getattr(self, 'history_entries', None) is not None else []
+            proof = list(self.proofreader_entries) if getattr(self, 'proofreader_entries', None) is not None else []
+            quality = list(self.quality_entries) if getattr(self, 'quality_entries', None) is not None else []
+            settings_data = self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {}
+            if copy_metadata:
+                history = copy.deepcopy(history)
+                proof = copy.deepcopy(proof)
+                quality = copy.deepcopy(quality)
+                settings_data = copy.deepcopy(settings_data)
+            return {
+                'project_dir': self.project_dir,
+                'current_image_path': self.current_image_path,
+                'current_pdf_page': int(self.current_pdf_page) if isinstance(self.current_pdf_page, int) else -1,
+                'typeset_data': serialized_typeset,
+                'history_entries': history,
+                'proofreader_entries': proof,
+                'quality_entries': quality,
+                'history_counter': int(self.history_counter) if getattr(self, 'history_counter', None) is not None else 0,
+                'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
+                'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
+                'settings': settings_data,
+                'app_version': APP_VERSION,
+            }
+        finally:
+            self.paint_mutex.unlock()
+
     def emergency_save_and_exit(self):
         try:
             if getattr(self, 'project_dir', None):
@@ -21,94 +51,16 @@ class ProjectioMixin:
                     self.current_project_path, _ = self._make_project_file_path()
 
                 if self.current_project_path:
-                    from src.ui.canvas import TypesetArea
-                    self.paint_mutex.lock()
-                    try:
-                        serialized_typeset = {}
-                        for k, rec in (self.all_typeset_data or {}).items():
-                            try:
-                                areas = rec.get('areas', []) or []
-                                redo = rec.get('redo', []) or []
-                                serialized_typeset[k] = {
-                                    'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
-                                    'redo': [r.to_payload() if isinstance(r, TypesetArea) else r for r in redo],
-                                }
-                                for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
-                                    if rec.get(image_state_key):
-                                        serialized_typeset[k][image_state_key] = rec.get(image_state_key)
-                            except Exception:
-                                serialized_typeset[k] = {'areas': [], 'redo': []}
-
-                        snapshot = {
-                            'project_dir': self.project_dir,
-                            'current_image_path': self.current_image_path,
-                            'current_pdf_page': int(self.current_pdf_page) if isinstance(self.current_pdf_page, int) else -1,
-                            'typeset_data': serialized_typeset,
-                            'history_entries': list(self.history_entries) if getattr(self, 'history_entries', None) is not None else [],
-                            'proofreader_entries': list(self.proofreader_entries) if getattr(self, 'proofreader_entries', None) is not None else [],
-                            'quality_entries': list(self.quality_entries) if getattr(self, 'quality_entries', None) is not None else [],
-                            'history_counter': int(self.history_counter) if getattr(self, 'history_counter', None) is not None else 0,
-                            'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
-                            'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
-                            'settings': self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {},
-                            'app_version': APP_VERSION,
-                        }
-                    finally:
-                        self.paint_mutex.unlock()
-
-                    project_file_dir = os.path.dirname(os.path.abspath(self.current_project_path))
-                    abs_project_dir = os.path.abspath(snapshot.get('project_dir')) if snapshot.get('project_dir') else None
-                    abs_image_path = snapshot.get('current_image_path')
-
-                    rel_project_dir = None
-                    rel_image_path = None
-                    if abs_project_dir:
-                        try:
-                            rel_project_dir = os.path.relpath(abs_project_dir, project_file_dir)
-                        except ValueError:
-                            rel_project_dir = None
-                    if abs_image_path:
-                        try:
-                            rel_image_path = os.path.relpath(abs_image_path, project_file_dir)
-                        except ValueError:
-                            rel_image_path = None
-
-                    raw_typeset = snapshot.get('typeset_data', {})
-                    compact_typeset = {}
-                    image_order = []
-                    for abs_key, record in raw_typeset.items():
-                        basename = os.path.basename(abs_key)
-                        compact_typeset[basename] = record
-                        image_order.append(basename)
-
-                    payload = {
-                        'schema_version': 4,
-                        'project_dir_rel': rel_project_dir,
-                        'current_image_path_rel': rel_image_path,
-                        'project_dir': abs_project_dir,
-                        'current_image_path': abs_image_path,
-                        'current_pdf_page': int(snapshot.get('current_pdf_page', -1)),
-                        'image_order': image_order,
-                        'typeset_data': compact_typeset,
-                        'history_entries': snapshot.get('history_entries', []),
-                        'proofreader_entries': snapshot.get('proofreader_entries', []),
-                        'quality_entries': snapshot.get('quality_entries', []),
-                        'history_counter': int(snapshot.get('history_counter', 0)),
-                        'typeset_font': snapshot.get('typeset_font'),
-                        'typeset_color': snapshot.get('typeset_color'),
-                        'settings': snapshot.get('settings', {}),
-                        'saved_at': time.time(),
-                        'app_version': snapshot.get('app_version', APP_VERSION),
-                    }
-
+                    snapshot = self._build_project_snapshot(copy_metadata=False)
                     target_dir = os.path.dirname(self.current_project_path) or self.project_dir
                     if target_dir:
                         os.makedirs(target_dir, exist_ok=True)
-
-                    tmp_path = self.current_project_path + '.tmp'
-                    with open(tmp_path, 'w', encoding='utf-8') as handle:
-                        json.dump(payload, handle, ensure_ascii=False, indent=1)
-                    os.replace(tmp_path, self.current_project_path)
+                    write_project_archive(
+                        self.current_project_path,
+                        snapshot,
+                        convert_legacy=False,
+                        pdf_document=getattr(self, 'pdf_document', None),
+                    )
         except Exception as e:
             print(f"Error in emergency save: {e}", file=sys.stderr)
 
@@ -476,7 +428,7 @@ class ProjectioMixin:
 
             key = self.get_current_data_key()
             img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
-            cleaned_image = self._decode_cleaned_image(img_data)
+            cleaned_image = self._decode_cleaned_image(img_data, orig_pil=self.current_image_pil, key=key)
             self._apply_base_image(cleaned_image or self.current_image_pil)
             self.typeset_areas = img_data['areas']
             self.redo_stack = img_data['redo']
@@ -529,7 +481,7 @@ class ProjectioMixin:
 
         key = self.get_current_data_key()
         img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
-        cleaned_image = self._decode_cleaned_image(img_data)
+        cleaned_image = self._decode_cleaned_image(img_data, orig_pil=self.current_image_pil, key=key)
         self._apply_base_image(cleaned_image or self.current_image_pil)
         self.typeset_areas = img_data['areas']
         self.redo_stack = img_data['redo']
@@ -669,9 +621,7 @@ class ProjectioMixin:
         return payload
 
     def _read_project_file(self, file_path):
-        with open(file_path, 'r', encoding='utf-8') as handle:
-            data = json.load(handle)
-        return data, 'json'
+        return read_project_archive(file_path)
 
     def _apply_project_payload(self, payload, project_path):
         warnings = []
@@ -1036,39 +986,7 @@ class ProjectioMixin:
 
         # Create a quick snapshot under mutex to avoid races, then perform heavy IO in background
         try:
-            self.paint_mutex.lock()
-            try:
-                serialized_typeset = {}
-                for k, rec in (self.all_typeset_data or {}).items():
-                    try:
-                        areas = rec.get('areas', []) or []
-                        redo = rec.get('redo', []) or []
-                        serialized_typeset[k] = {
-                            'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
-                            'redo': [r.to_payload() if isinstance(r, TypesetArea) else r for r in redo],
-                        }
-                        for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
-                            if rec.get(image_state_key):
-                                serialized_typeset[k][image_state_key] = rec.get(image_state_key)
-                    except Exception:
-                        serialized_typeset[k] = {'areas': [], 'redo': []}
-
-                snapshot = {
-                    'project_dir': self.project_dir,
-                    'current_image_path': self.current_image_path,
-                    'current_pdf_page': int(self.current_pdf_page) if isinstance(self.current_pdf_page, int) else -1,
-                    'typeset_data': serialized_typeset,
-                    'history_entries': list(self.history_entries) if getattr(self, 'history_entries', None) is not None else [],
-                    'proofreader_entries': list(self.proofreader_entries) if getattr(self, 'proofreader_entries', None) is not None else [],
-                    'quality_entries': list(self.quality_entries) if getattr(self, 'quality_entries', None) is not None else [],
-                    'history_counter': int(self.history_counter) if getattr(self, 'history_counter', None) is not None else 0,
-                    'typeset_font': TypesetArea.font_to_dict(self.typeset_font) if getattr(self, 'typeset_font', None) else None,
-                    'typeset_color': self.typeset_color.name() if getattr(self, 'typeset_color', None) else '#000000',
-                    'settings': self._collect_project_settings() if hasattr(self, '_collect_project_settings') else {},
-                    'app_version': APP_VERSION,
-                }
-            finally:
-                self.paint_mutex.unlock()
+            snapshot = self._build_project_snapshot(copy_metadata=True)
         except Exception as exc:
             if not is_auto:
                 self.show_banner("project-save-prepare-error", "Project save failed", f"Failed to prepare project data: {exc}", kind="error")

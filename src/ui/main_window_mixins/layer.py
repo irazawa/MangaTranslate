@@ -273,9 +273,9 @@ class LayerMixin:
             self.typeset_areas.clear()
             self.clear_selected_area()
             key, record = self._current_inpaint_record() if hasattr(self, '_current_inpaint_record') else (None, {})
-            pre_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
-            if key and pre_png:
-                pre_img = self._decode_image_png(pre_png)
+            has_inpaint = self._has_inpaint_state(key, record) if hasattr(self, '_has_inpaint_state') else False
+            if key and has_inpaint:
+                pre_img = self._resolve_pre_inpaint_image(key, record)
                 if pre_img is not None:
                     self._apply_base_image(pre_img)
                 self._update_typeset_record(

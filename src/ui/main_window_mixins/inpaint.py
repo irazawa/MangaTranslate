@@ -198,11 +198,8 @@ class InpaintMixin:
         return Image.fromarray(arr), rect
 
     def _current_pre_inpaint_image(self, fallback_pil):
-        _, record = self._current_inpaint_record()
-        pre_image = self._decode_image_png(record.get('pre_inpaint_image_png')) if record else None
-        if pre_image is not None:
-            return pre_image
-        return fallback_pil
+        key, record = self._current_inpaint_record()
+        return self._resolve_pre_inpaint_image(key, record, fallback_pil=fallback_pil)
 
     def apply_inpaint_brush_selection(self, run_ocr_translate=False):
         if getattr(self, 'original_pixmap', None) is None:
@@ -259,14 +256,38 @@ class InpaintMixin:
         return key, record if isinstance(record, dict) else {}
 
     def _refresh_inpaint_result_controls(self):
-        _, record = self._current_inpaint_record()
-        has_inpaint_state = bool(record.get('cleaned_image_png') and record.get('pre_inpaint_image_png'))
+        key, record = self._current_inpaint_record()
+        has_inpaint_state = self._has_inpaint_state(key, record)
         for button_name in ('inpaint_compare_button', 'inpaint_cancel_button', 'full_cancel_page_inpaint_btn', 'full_restore_area_inpaint_btn'):
             button = getattr(self, button_name, None)
             if button is not None:
                 button.setEnabled(has_inpaint_state)
         if not has_inpaint_state and getattr(self, 'inpaint_compare_button', None) is not None:
             self._set_compare_controls_checked(False)
+
+    def _prepare_inpaint_commit_states(self, key, record, cleaned_pil):
+        """Build minimal `(cleaned_state, pre_inpaint_state)` omitting redundant originals."""
+        rec = record if isinstance(record, dict) else {}
+        explicit_pre = decode_pre_inpaint_image(rec)
+        pre_state = None
+        if explicit_pre is not None:
+            pre_pil = explicit_pre
+        else:
+            source_ok = bool(key and can_resolve_source_for_key(key, pdf_document=getattr(self, 'pdf_document', None)))
+            has_curves = getattr(self, 'active_curves_points', None) is not None
+            if source_ok and not has_curves:
+                pre_pil = open_source_image_for_key(key, pdf_document=getattr(self, 'pdf_document', None))
+                if pre_pil is None:
+                    pre_pil = getattr(self, 'current_image_pil', None)
+                    pre_state = encode_pre_inpaint_state(pre_pil)
+            else:
+                if record_has_cleaned_image(rec) and getattr(self, 'unmodified_image_pil', None) is not None and not has_curves:
+                    pre_pil = self.unmodified_image_pil
+                else:
+                    pre_pil = getattr(self, 'current_image_pil', None)
+                pre_state = encode_pre_inpaint_state(pre_pil)
+        cleaned_state = self._encode_cleaned_state(cleaned_pil, orig_pil=pre_pil)
+        return cleaned_state, pre_state
 
     def _build_area_restore_mask(self, area, img_w, img_h, pad=12):
         mask = np.zeros((img_h, img_w), dtype=np.uint8)
@@ -290,10 +311,9 @@ class InpaintMixin:
         if area is None or getattr(self, 'current_image_pil', None) is None:
             return False
         key, record = self._current_inpaint_record()
-        pre_inpaint_png = record.get('pre_inpaint_image_png') if record else None
-        if not key or not pre_inpaint_png:
+        if not key or not self._has_inpaint_state(key, record):
             return False
-        pre_image = self._decode_image_png(pre_inpaint_png)
+        pre_image = self._resolve_pre_inpaint_image(key, record)
         if pre_image is None or pre_image.size != self.current_image_pil.size:
             return False
 
@@ -324,12 +344,13 @@ class InpaintMixin:
         restored_pil = Image.fromarray(cur_arr)
         self._apply_base_image(restored_pil)
         if commit_record:
+            cleaned_state = self._encode_cleaned_state(restored_pil, orig_pil=pre_image)
             self._update_typeset_record(
                 key,
                 areas=list(self.typeset_areas),
                 redo=list(self.redo_stack),
-                cleaned_image_png=self._encode_cleaned_image(restored_pil),
-                pre_inpaint_image_png=pre_inpaint_png,
+                cleaned_state=cleaned_state,
+                remove_pre_inpaint_image=not bool(cleaned_state),
             )
             self._refresh_inpaint_result_controls()
         return True
@@ -353,9 +374,11 @@ class InpaintMixin:
                 'redo': list(self.redo_stack),
             }
             if restored and getattr(self, 'current_image_pil', None) is not None:
-                kwargs['cleaned_image_png'] = self._encode_cleaned_image(self.current_image_pil)
-                if record.get('pre_inpaint_image_png'):
-                    kwargs['pre_inpaint_image_png'] = record.get('pre_inpaint_image_png')
+                pre_image = self._resolve_pre_inpaint_image(key, record)
+                cleaned_state = self._encode_cleaned_state(self.current_image_pil, orig_pil=pre_image)
+                kwargs['cleaned_state'] = cleaned_state
+                if not cleaned_state:
+                    kwargs['remove_pre_inpaint_image'] = True
             self._update_typeset_record(key, **kwargs)
         self.redraw_all_typeset_areas()
         self._refresh_inpaint_result_controls()
@@ -372,8 +395,8 @@ class InpaintMixin:
 
     def cancel_inpaint_result(self):
         key, record = self._current_inpaint_record()
-        pre_inpaint_png = record.get('pre_inpaint_image_png')
-        if not key or not pre_inpaint_png:
+        has_inpaint = self._has_inpaint_state(key, record) if key else False
+        if not key or not has_inpaint:
             # Tetap matikan live per-area inpaint bila ada area aktif
             changed_any = False
             for area in getattr(self, 'typeset_areas', []):
@@ -387,12 +410,12 @@ class InpaintMixin:
             else:
                 self.show_toast("No Inpaint Result", "No saved inpainting result to cancel on this page.", kind="info")
             return
-        pre_image = self._decode_image_png(pre_inpaint_png)
+        pre_image = self._resolve_pre_inpaint_image(key, record)
         if pre_image is None:
             self.show_banner("inpaint-cancel-error", "Cancel Inpainting Failed", "The saved before-inpaint image could not be restored.", kind="error")
             return
 
-        cleaned_image = self._decode_cleaned_image(record)
+        cleaned_image = self._decode_cleaned_image(record, orig_pil=pre_image, key=key)
         if cleaned_image is not None:
             self._apply_base_image(cleaned_image)
         self._push_undo_snapshot("Cancel Inpaint Clean")
@@ -423,9 +446,7 @@ class InpaintMixin:
         try:
             key = self.get_current_data_key()
             record = self.all_typeset_data.get(key, {}) if key else {}
-            pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
-            if not pre_inpaint_png:
-                pre_inpaint_png = self._encode_cleaned_image(self.current_image_pil)
+            cleaned_state, pre_inpaint_state = self._prepare_inpaint_commit_states(key, record, result_pil)
 
             self._push_undo_snapshot("Inpaint Brush Clean")
             self._set_compare_controls_checked(False)
@@ -435,8 +456,8 @@ class InpaintMixin:
                 key,
                 areas=list(self.typeset_areas),
                 redo=list(self.redo_stack),
-                cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
-                pre_inpaint_image_png=pre_inpaint_png,
+                cleaned_state=cleaned_state,
+                pre_inpaint_state=pre_inpaint_state,
             )
 
             if hasattr(self, 'image_label'):

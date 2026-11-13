@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.8.7
+# Manga OCR & Typeset Tool v14.9.8.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -103,6 +103,26 @@ from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, Inpaint
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
+from src.core.project_archive import (
+    CLEANED_STATE_KEYS,
+    IMAGE_STATE_KEYS,
+    PRE_INPAINT_STATE_KEYS,
+    can_resolve_source_for_key,
+    copy_image_state_fields,
+    decode_cleaned_image,
+    decode_pre_inpaint_image,
+    encode_cleaned_state,
+    encode_pre_inpaint_state,
+    open_source_image_for_key,
+    read_project_archive,
+    record_has_cleaned_image,
+    record_has_pre_inpaint_image,
+    safe_open_pil,
+    serialize_typeset_records,
+    strip_cleaned_state,
+    strip_pre_inpaint_state,
+    write_project_archive,
+)
 from src.core.rfdetr_detector import detect_layout_regions
 
 
@@ -3760,15 +3780,46 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         pil_image.convert('RGB').save(buf, format='PNG')
         return base64.b64encode(buf.getvalue()).decode('ascii')
 
-    def _decode_cleaned_image(self, record):
-        data = record.get('cleaned_image_png') if isinstance(record, dict) else None
-        return self._decode_image_png(data)
+    def _encode_cleaned_state(self, pil_image, orig_pil=None):
+        return encode_cleaned_state(pil_image, orig_pil=orig_pil)
+
+    def _decode_cleaned_image(self, record, orig_pil=None, key=None):
+        return decode_cleaned_image(
+            record,
+            orig_pil=orig_pil,
+            orig_key=key or (self.get_current_data_key() if getattr(self, 'current_image_path', None) else None),
+            pdf_document=getattr(self, 'pdf_document', None),
+        )
+
+    def _resolve_pre_inpaint_image(self, key=None, record=None, fallback_pil=None):
+        target_key = key or (self.get_current_data_key() if getattr(self, 'current_image_path', None) else None)
+        rec = record if isinstance(record, dict) else (self.all_typeset_data.get(target_key, {}) if target_key else {})
+        explicit = decode_pre_inpaint_image(rec)
+        if explicit is not None:
+            return explicit
+        disk_img = open_source_image_for_key(target_key, pdf_document=getattr(self, 'pdf_document', None)) if target_key else None
+        if disk_img is not None:
+            return disk_img
+        return fallback_pil
+
+    def _has_inpaint_state(self, key=None, record=None):
+        target_key = key or (self.get_current_data_key() if getattr(self, 'current_image_path', None) else None)
+        rec = record if isinstance(record, dict) else (self.all_typeset_data.get(target_key, {}) if target_key else {})
+        if not record_has_cleaned_image(rec):
+            return False
+        return record_has_pre_inpaint_image(rec) or can_resolve_source_for_key(
+            target_key,
+            pdf_document=getattr(self, 'pdf_document', None),
+        )
 
     def _decode_image_png(self, data):
         if not data:
             return None
         try:
-            return Image.open(io.BytesIO(base64.b64decode(data))).convert('RGB')
+            raw = data.get('bytes') if isinstance(data, dict) else base64.b64decode(data)
+            if not raw:
+                return None
+            return Image.open(io.BytesIO(raw)).convert('RGB')
         except Exception as exc:
             print(f"Failed to decode image state: {exc}")
             return None
@@ -6121,6 +6172,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             payloads = snapshot.get('areas', []) if isinstance(snapshot, dict) else snapshot
             image_png = snapshot.get('image_png') if isinstance(snapshot, dict) else None
             had_cleaned_image = bool(snapshot.get('had_cleaned_image')) if isinstance(snapshot, dict) else False
+            image_state = snapshot.get('image_state') if isinstance(snapshot, dict) else None
+            base_image_pil = snapshot.get('base_image_pil') if isinstance(snapshot, dict) else None
             pre_inpaint_png = snapshot.get('pre_inpaint_image_png') if isinstance(snapshot, dict) else None
             self.typeset_areas.clear()
             for payload in payloads:
@@ -6131,11 +6184,44 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                     except Exception as e:
                         print(f"[UndoTimeline] Restore area failed: {e}")
 
-            if image_png:
+            key = self.get_current_data_key() if getattr(self, 'current_image_path', None) else None
+            if isinstance(image_state, dict):
+                try:
+                    pre_state = {k: image_state[k] for k in PRE_INPAINT_STATE_KEYS if image_state.get(k)}
+                    if had_cleaned_image:
+                        cleaned_only = {k: image_state[k] for k in CLEANED_STATE_KEYS if image_state.get(k)}
+                        restored_image = self._decode_cleaned_image(image_state, orig_pil=base_image_pil, key=key)
+                        if restored_image is not None:
+                            self._apply_base_image(restored_image)
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            cleaned_state=cleaned_only,
+                            pre_inpaint_state=pre_state,
+                            remove_pre_inpaint_image=not bool(pre_state),
+                        )
+                    else:
+                        current_rec = self.all_typeset_data.get(key, {}) if key else {}
+                        restored_image = base_image_pil.copy() if base_image_pil is not None else None
+                        if restored_image is None and record_has_cleaned_image(current_rec):
+                            restored_image = self._resolve_pre_inpaint_image(key, image_state)
+                        if restored_image is not None:
+                            self._apply_base_image(restored_image)
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            remove_cleaned_image=True,
+                            pre_inpaint_state=pre_state,
+                            remove_pre_inpaint_image=not bool(pre_state),
+                        )
+                except Exception as exc:
+                    print(f"[UndoTimeline] Restore image failed: {exc}")
+            elif image_png:
                 try:
                     restored_image = Image.open(io.BytesIO(base64.b64decode(image_png))).convert('RGB')
                     self._apply_base_image(restored_image)
-                    key = self.get_current_data_key()
                     if had_cleaned_image:
                         self._update_typeset_record(
                             key,
@@ -7431,27 +7517,32 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self._set_compare_controls_checked(checked)
         key, record = self._current_inpaint_record()
         if checked:
-            pre_inpaint_image = self._decode_image_png(record.get('pre_inpaint_image_png')) if record else None
+            pre_inpaint_image = self._resolve_pre_inpaint_image(key, record) if self._has_inpaint_state(key, record) else None
             if pre_inpaint_image is not None:
                 self._apply_base_image(pre_inpaint_image)
-                self.typeset_pixmap = self.original_pixmap.copy()
+                if getattr(self, 'original_pixmap', None) is not None:
+                    self.typeset_pixmap = self.original_pixmap.copy()
                 self.update_display()
-                self.statusBar().showMessage("Compare Mode: Menampilkan gambar sebelum inpainting", 0)
-            elif self.unmodified_original_pixmap and not self.unmodified_original_pixmap.isNull():
+                if hasattr(self, 'statusBar'):
+                    self.statusBar().showMessage("Compare Mode: Menampilkan gambar sebelum inpainting", 0)
+            elif getattr(self, 'unmodified_original_pixmap', None) and not self.unmodified_original_pixmap.isNull():
                 self.typeset_pixmap = self.unmodified_original_pixmap.copy()
                 self.update_display()
-                self.statusBar().showMessage("Compare Mode: Menampilkan gambar asli tanpa typeset", 0)
+                if hasattr(self, 'statusBar'):
+                    self.statusBar().showMessage("Compare Mode: Menampilkan gambar asli tanpa typeset", 0)
             else:
                 self._set_compare_controls_checked(False)
                 self._compare_mode_active = False
-                self.statusBar().showMessage("Tidak ada gambar yang dimuat.", 2000)
+                if hasattr(self, 'statusBar'):
+                    self.statusBar().showMessage("Tidak ada gambar yang dimuat.", 2000)
         else:
-            cleaned_image = self._decode_cleaned_image(record) if record else None
+            cleaned_image = self._decode_cleaned_image(record, key=key) if record else None
             if cleaned_image is not None:
                 self._apply_base_image(cleaned_image)
             # Kembalikan ke tampilan typeset normal
             self.redraw_all_typeset_areas()
-            self.statusBar().showMessage("Compare Mode: Nonaktif", 2000)
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage("Compare Mode: Nonaktif", 2000)
 
     def browse_panel_model(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -9422,20 +9513,18 @@ class BatchFullPageWorker(QThread):
             return ('failed', path, [], None, None)
 
         created_areas = list(worker.last_created_areas or [])
-        cleaned_b64 = None
-        pre_b64 = None
+        cleaned_state = None
         if worker.cleaned_image_pil is not None:
-            cleaned_b64 = self._png_to_b64(worker.cleaned_image_pil)
             try:
-                with Image.open(path) as orig:
-                    pre_b64 = self._png_to_b64(orig)
+                orig_pil = safe_open_pil(path)
             except Exception:
-                pre_b64 = None
+                orig_pil = None
+            cleaned_state = encode_cleaned_state(worker.cleaned_image_pil, orig_pil=orig_pil)
 
         if not created_areas:
             return ('skipped', path, [], None, None)
 
-        return ('done', path, created_areas, cleaned_b64, pre_b64)
+        return ('done', path, created_areas, cleaned_state, None)
 
     def run(self):
         from concurrent.futures import ThreadPoolExecutor, as_completed

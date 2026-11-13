@@ -253,8 +253,7 @@ class BatchMixin:
                 typeset_data_snapshot[key] = {
                     'areas': list(record.get('areas', []))
                 }
-                if record.get('cleaned_image_png'):
-                    typeset_data_snapshot[key]['cleaned_image_png'] = record.get('cleaned_image_png')
+                copy_image_state_fields(record, typeset_data_snapshot[key])
 
         self.batch_save_thread = QThread()
         self.batch_save_worker = BatchSaveWorker(

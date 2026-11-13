@@ -622,8 +622,10 @@ class TypesetMixin:
         *,
         areas=None,
         redo=None,
+        cleaned_state=None,
         cleaned_image_png=None,
         remove_cleaned_image=False,
+        pre_inpaint_state=None,
         pre_inpaint_image_png=None,
         remove_pre_inpaint_image=False,
     ):
@@ -641,12 +643,24 @@ class TypesetMixin:
         else:
             record.setdefault('redo', [])
         if remove_cleaned_image:
-            record.pop('cleaned_image_png', None)
+            strip_cleaned_state(record)
+        elif cleaned_state is not None:
+            strip_cleaned_state(record)
+            for state_key in CLEANED_STATE_KEYS:
+                if cleaned_state.get(state_key):
+                    record[state_key] = dict(cleaned_state[state_key]) if isinstance(cleaned_state[state_key], dict) else cleaned_state[state_key]
         elif cleaned_image_png is not None:
+            strip_cleaned_state(record)
             record['cleaned_image_png'] = cleaned_image_png
         if remove_pre_inpaint_image:
-            record.pop('pre_inpaint_image_png', None)
+            strip_pre_inpaint_state(record)
+        elif pre_inpaint_state is not None:
+            strip_pre_inpaint_state(record)
+            for state_key in PRE_INPAINT_STATE_KEYS:
+                if pre_inpaint_state.get(state_key):
+                    record[state_key] = dict(pre_inpaint_state[state_key]) if isinstance(pre_inpaint_state[state_key], dict) else pre_inpaint_state[state_key]
         elif pre_inpaint_image_png is not None:
+            strip_pre_inpaint_state(record)
             record['pre_inpaint_image_png'] = pre_inpaint_image_png
         self.all_typeset_data[key] = record
         return record
@@ -994,21 +1008,7 @@ class TypesetMixin:
             self.update_undo_redo_buttons_state()
 
     def _serialize_typeset_map(self):
-        serialized = {}
-        for key, payload in self.all_typeset_data.items():
-            if not isinstance(payload, dict):
-                continue
-            areas = payload.get('areas') or []
-            redo = payload.get('redo') or []
-            record = {
-                'areas': [area.to_payload() if isinstance(area, TypesetArea) else area for area in areas],
-                'redo': [area.to_payload() if isinstance(area, TypesetArea) else area for area in redo],
-            }
-            for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
-                if payload.get(image_state_key):
-                    record[image_state_key] = payload.get(image_state_key)
-            serialized[key] = record
-        return serialized
+        return serialize_typeset_records(self.all_typeset_data)
 
     def _deserialize_typeset_map(self, serialized_map, fallback_font, fallback_color, project_dir=None):
         """Deserialize the typeset data map.
@@ -1027,11 +1027,10 @@ class TypesetMixin:
                 warnings.append(f"Ignored invalid typeset block for {key}.")
                 continue
 
-            # --- Schema v4: resolve basename key to full absolute path ---
+            # --- Schema v4/v5: resolve relative key to full absolute path ---
             resolved_key = key
-            if project_dir and os.path.basename(key) == key:
-                # key is a bare filename; reconstruct the full path
-                resolved_key = os.path.join(project_dir, key)
+            if project_dir and key and not os.path.isabs(key):
+                resolved_key = os.path.normpath(os.path.join(project_dir, key))
 
             areas = []
             for area_data in payload.get('areas') or []:
@@ -1054,9 +1053,7 @@ class TypesetMixin:
                 except Exception as exc:
                     warnings.append(f"Failed to load redo entry in {key}: {exc}")
             record = {'areas': areas, 'redo': redo_items}
-            for image_state_key in ('cleaned_image_png', 'pre_inpaint_image_png'):
-                if payload.get(image_state_key):
-                    record[image_state_key] = payload.get(image_state_key)
+            copy_image_state_fields(payload, record)
             result[resolved_key] = record
         return result, warnings
 

@@ -74,6 +74,26 @@ from src.ui.texts import ActionText, DialogText, NavText, StartupText, Workspace
 from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
+from src.core.project_archive import (
+    CLEANED_STATE_KEYS,
+    IMAGE_STATE_KEYS,
+    PRE_INPAINT_STATE_KEYS,
+    can_resolve_source_for_key,
+    copy_image_state_fields,
+    decode_cleaned_image,
+    decode_pre_inpaint_image,
+    encode_cleaned_state,
+    encode_pre_inpaint_state,
+    open_source_image_for_key,
+    read_project_archive,
+    record_has_cleaned_image,
+    record_has_pre_inpaint_image,
+    safe_open_pil,
+    serialize_typeset_records,
+    strip_cleaned_state,
+    strip_pre_inpaint_state,
+    write_project_archive,
+)
 
 
 def OpenAI(*args, **kwargs):

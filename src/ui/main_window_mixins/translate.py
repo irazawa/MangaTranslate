@@ -912,14 +912,13 @@ class TranslateMixin:
         # image — mekanisme yang sama dengan Inpaint Brush (cleaned/pre_inpaint
         # record), jadi Undo/Cancel Inpaint tetap bekerja seperti biasa.
         page_cleaned = False
-        pre_inpaint_png = None
+        cleaned_state = None
+        pre_inpaint_state = None
         record_key = self.get_current_data_key()
         if cleaned_pil is not None:
             try:
                 record = self.all_typeset_data.get(record_key, {}) if record_key else {}
-                pre_inpaint_png = record.get('pre_inpaint_image_png') if isinstance(record, dict) else None
-                if not pre_inpaint_png:
-                    pre_inpaint_png = self._encode_cleaned_image(self.current_image_pil)
+                cleaned_state, pre_inpaint_state = self._prepare_inpaint_commit_states(record_key, record, cleaned_pil)
                 self._apply_base_image(cleaned_pil)
                 page_cleaned = True
             except Exception as e:
@@ -960,8 +959,8 @@ class TranslateMixin:
                     record_key,
                     areas=list(self.typeset_areas),
                     redo=list(self.redo_stack),
-                    cleaned_image_png=self._encode_cleaned_image(self.current_image_pil),
-                    pre_inpaint_image_png=pre_inpaint_png,
+                    cleaned_state=cleaned_state,
+                    pre_inpaint_state=pre_inpaint_state,
                 )
                 self._refresh_inpaint_result_controls()
             else:
@@ -1258,12 +1257,12 @@ class TranslateMixin:
         dialog.show()
         batch_worker.start()
 
-    def _on_batch_page_finished(self, path, created_areas, cleaned_b64, pre_b64):
+    def _on_batch_page_finished(self, path, created_areas, cleaned_payload, pre_payload=None):
         """Terapkan hasil satu halaman batch ke record data (bukan canvas)."""
         if self._is_page_already_typeset(path):
             return  # sudah di-typeset / punya pasangan _typeset — jangan menimpa (penjaga race)
         key = self.get_current_data_key(path)
-        page_cleaned = cleaned_b64 is not None
+        page_cleaned = bool(cleaned_payload)
         new_areas = []
         for payload in created_areas:
             try:
@@ -1283,13 +1282,16 @@ class TranslateMixin:
                 new_areas.append(area)
             except Exception as e:
                 print(f"Gagal membuat area typeset ({os.path.basename(path)}): {e}")
-        self._update_typeset_record(
-            key,
-            areas=new_areas,
-            redo=[],
-            cleaned_image_png=cleaned_b64,
-            pre_inpaint_image_png=pre_b64,
-        )
+        update_kwargs = {'areas': new_areas, 'redo': []}
+        if isinstance(cleaned_payload, dict):
+            update_kwargs['cleaned_state'] = cleaned_payload
+        elif isinstance(cleaned_payload, str) and cleaned_payload:
+            update_kwargs['cleaned_image_png'] = cleaned_payload
+        if isinstance(pre_payload, dict):
+            update_kwargs['pre_inpaint_state'] = pre_payload
+        elif isinstance(pre_payload, str) and pre_payload:
+            update_kwargs['pre_inpaint_image_png'] = pre_payload
+        self._update_typeset_record(key, **update_kwargs)
         if key == self.get_current_data_key():
             self.typeset_areas = list(new_areas)
             self.redo_stack = []

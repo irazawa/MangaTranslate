@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.8.7
+# Manga OCR & Typeset Tool v14.9.8.8
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -34,6 +34,7 @@ from src.utils.helpers import *
 from src.utils.geometry import *
 from src.core.models import EnhancedResult
 from src.core.cache import ocr_translation_cache, ResultCache
+from src.core.project_archive import decode_cleaned_image, safe_open_pil, write_project_archive
 
 class WorkerSignals(QObject):
     finished = pyqtSignal()      # Sinyal jika proses selesai
@@ -82,78 +83,10 @@ class ProjectSaveWorker(QObject):
         self._is_cancelled = False
 
     def run(self):
-        tmp_path = self.target_path + '.tmp'
         try:
-            # Determine the directory of the .manga_proj file for relative path calculation
-            project_file_dir = os.path.dirname(os.path.abspath(self.target_path))
-
-            # Convert absolute paths to relative paths for portability
-            abs_project_dir = os.path.abspath(self.snapshot.get('project_dir')) if self.snapshot.get('project_dir') else None
-            abs_image_path = self.snapshot.get('current_image_path')
-
-            rel_project_dir = None
-            rel_image_path = None
-            if abs_project_dir:
-                try:
-                    rel_project_dir = os.path.relpath(abs_project_dir, project_file_dir)
-                except ValueError:
-                    # os.path.relpath fails across drives on Windows; keep absolute
-                    rel_project_dir = None
-            if abs_image_path:
-                try:
-                    rel_image_path = os.path.relpath(abs_image_path, project_file_dir)
-                except ValueError:
-                    rel_image_path = None
-
-            # --- Schema v4: store typeset_data with basename keys ---
-            # Keys were previously full absolute paths (100+ chars each).
-            # In v4 we use just the filename (e.g. "2.webp") and record the
-            # canonical order in image_order so load can reconstruct full paths.
-            raw_typeset = self.snapshot.get('typeset_data', {})
-            compact_typeset = {}
-            image_order = []
-            for abs_key, record in raw_typeset.items():
-                basename = os.path.basename(abs_key)
-                compact_typeset[basename] = record
-                image_order.append(basename)
-
-            # Build payload from already-serialized snapshot (snapshot['typeset_data'] contains primitive dicts)
-            payload = {
-                'schema_version': 4,
-                # Relative paths (primary — used for portability)
-                'project_dir_rel': rel_project_dir,
-                'current_image_path_rel': rel_image_path,
-                # Absolute paths (fallback — backward compatibility)
-                'project_dir': abs_project_dir,
-                'current_image_path': abs_image_path,
-                'current_pdf_page': int(self.snapshot.get('current_pdf_page', -1)) if isinstance(self.snapshot.get('current_pdf_page'), int) else int(self.snapshot.get('current_pdf_page', -1)),
-                'image_order': image_order,
-                'typeset_data': copy.deepcopy(compact_typeset),
-                'history_entries': copy.deepcopy(self.snapshot.get('history_entries', [])),
-                'proofreader_entries': copy.deepcopy(self.snapshot.get('proofreader_entries', [])),
-                'quality_entries': copy.deepcopy(self.snapshot.get('quality_entries', [])),
-                'history_counter': int(self.snapshot.get('history_counter', 0)),
-                'typeset_font': self.snapshot.get('typeset_font'),
-                'typeset_color': self.snapshot.get('typeset_color'),
-                'settings': copy.deepcopy(self.snapshot.get('settings', {})),
-                'saved_at': time.time(),
-                'app_version': self.snapshot.get('app_version', APP_VERSION),
-            }
-
-            # Write to temporary file then replace atomically.
-            # Use indent=1 (vs legacy indent=2) for slightly more compact output.
-            # The major savings come from compact polygon encoding in the area payloads.
-            with open(tmp_path, 'w', encoding='utf-8') as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=1)
-            os.replace(tmp_path, self.target_path)
-
+            write_project_archive(self.target_path, self.snapshot, convert_legacy=True)
             self.finished.emit(True, "Project saved.")
         except Exception as exc:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
             self.error.emit(str(exc))
             self.finished.emit(False, f"Failed to save project: {exc}")
 
@@ -841,14 +774,13 @@ class BatchSaveWorker(QObject):
                 typeset_data = self.typeset_data.get(data_key, {'areas': []})
                 areas = typeset_data['areas']
 
-                cleaned_png = typeset_data.get('cleaned_image_png') if isinstance(typeset_data, dict) else None
-                if cleaned_png:
-                    try:
-                        pil_image = Image.open(BytesIO(base64.b64decode(cleaned_png))).convert('RGB')
-                    except Exception:
-                        pil_image = Image.open(file_path).convert('RGB')
-                else:
-                    pil_image = Image.open(file_path).convert('RGB')
+                pil_image = decode_cleaned_image(
+                    typeset_data,
+                    orig_key=data_key,
+                    orig_path=file_path,
+                )
+                if pil_image is None:
+                    pil_image = safe_open_pil(file_path)
 
                 # Konversi PIL.Image ke QImage (lebih aman untuk digunakan dari thread)
                 data = pil_image.tobytes('raw', 'RGB')

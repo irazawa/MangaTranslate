@@ -393,13 +393,23 @@ class HistoryMixin:
                     snapshot.append(_copy.deepcopy(area))
             current_key = self.get_current_data_key() if self.current_image_path else None
             current_record = self.all_typeset_data.get(current_key, {}) if current_key else {}
-            image_png = self._encode_cleaned_image(self.current_image_pil) if self.current_image_pil is not None else None
-            pre_inpaint_png = current_record.get('pre_inpaint_image_png') if isinstance(current_record, dict) else None
+            image_state = copy_image_state_fields(current_record)
+            had_cleaned_image = record_has_cleaned_image(current_record)
+            base_image_pil = None
+            if (
+                not had_cleaned_image
+                and getattr(self, 'current_image_pil', None) is not None
+                and (
+                    getattr(self, 'active_curves_points', None) is not None
+                    or not can_resolve_source_for_key(current_key, pdf_document=getattr(self, 'pdf_document', None))
+                )
+            ):
+                base_image_pil = self.current_image_pil.copy()
             snapshot_payload = {
                 'areas': snapshot,
-                'image_png': image_png,
-                'had_cleaned_image': bool(isinstance(current_record, dict) and current_record.get('cleaned_image_png')),
-                'pre_inpaint_image_png': pre_inpaint_png,
+                'had_cleaned_image': had_cleaned_image,
+                'image_state': image_state,
+                'base_image_pil': base_image_pil,
             }
 
             # Potong redo branch (state setelah posisi aktif)
