@@ -8,7 +8,13 @@ keluar. Itulah hasil nyata Fase 2 untuk domain font.
 import pytest
 from PyQt5.QtGui import QFont
 
-from src.core.fonts import build_font, fonts_in_group
+from src.core.fonts import (
+    DEFAULT_FONT_GROUPS,
+    FontManager,
+    build_font,
+    fonts_in_group,
+    merge_default_font_groups,
+)
 
 
 class StubManager:
@@ -83,3 +89,34 @@ def test_anggota_grup_yang_tidak_terpasang_diabaikan():
 @pytest.mark.parametrize("grup", [None, []])
 def test_grup_kosong_menghasilkan_daftar_kosong(grup):
     assert fonts_in_group(["Arial", "Comic Sans"], grup) == []
+
+
+def test_default_font_groups_resolve_all_installed_manga_fonts(qapp):
+    fm = FontManager("src/fonts")
+    all_fonts = fm.list_fonts()
+    installed = set(all_fonts) - {fm.default_display}
+    covered = set()
+
+    for group_name, entries in DEFAULT_FONT_GROUPS.items():
+        resolved = fonts_in_group(all_fonts, entries, font_manager=fm)
+        assert resolved, f"Group {group_name!r} resolved no fonts"
+        missing = [e for e in entries if not fm.resolve_font_names(e)]
+        assert not missing, f"Group {group_name!r} has missing fonts: {missing}"
+        covered.update(resolved)
+
+    assert installed - covered == set()
+
+
+def test_merge_default_font_groups_upgrades_legacy_and_keeps_custom():
+    legacy = {
+        "Dialog Normal": ["CC Wild Words", "MyCustomComicFont"],
+        "Grup Spesial Ku": ["Arial", "MyCustomComicFont"],
+    }
+    merged = merge_default_font_groups(legacy)
+
+    assert "Dialog Normal" in merged
+    assert "Cute / Shoujo / Chibi" in merged
+    assert "Narasi / Sistem / Kotak Info" in merged
+    assert "CC Wild Words" not in merged["Dialog Normal"]
+    assert "MyCustomComicFont" in merged["Dialog Normal"]
+    assert merged["Grup Spesial Ku"] == ["Arial", "MyCustomComicFont"]

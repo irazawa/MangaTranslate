@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.1
+# Manga OCR & Typeset Tool v14.9.9.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QColor, QFont, QPolygon, QPainterPath, QPolygonF,
-    QBrush, QTransform, QImage, QFontMetrics, QTextDocument,
+    QBrush, QTransform, QImage, QFontMetrics, QFontMetricsF, QTextDocument,
     QTextCursor, QTextCharFormat, QTextBlockFormat
 )
 from PyQt5.QtCore import (
@@ -99,6 +99,238 @@ def _measure_wrapped_segments(
     return float(size.width()), float(size.height()), max_word_w
 
 
+def layout_vertical_upright_columns(
+    segments,
+    rect,
+    line_spacing=1.1,
+    char_spacing=100.0,
+    alignment='center',
+    wrap_to_height=True,
+    scale=1.0,
+):
+    """Arrange rich-text segments into top-to-bottom upright glyph columns inside ``rect``.
+
+    Characters remain horizontally upright and stack downward; explicit newlines or
+    overflowing columns flow into subsequent columns left-to-right. Returns a dict
+    with placed ``glyphs``, ``total_width``, ``total_height``, ``content_rect``, and
+    ``had_forced_break``.
+    """
+    qrect = QRectF(to_qrect(rect)) if not isinstance(rect, (QRect, QRectF)) else QRectF(rect)
+    ls = max(0.55, float(line_spacing if line_spacing is not None else 1.1))
+    ls_ratio = ls / 1.1
+    cs = float(char_spacing if char_spacing is not None else 100.0)
+    sc = max(0.05, float(scale if scale is not None else 1.0))
+
+    # Build normalized token stream of breaks, word gaps, and non-space word runs.
+    units = []
+    cur_word = []
+
+    def _flush_word():
+        if cur_word:
+            units.append({'kind': 'word', 'glyphs': list(cur_word)})
+            cur_word.clear()
+
+    for seg in (segments or []):
+        if isinstance(seg, dict):
+            seg_font = QFont(seg['font'])
+            seg_color = seg.get('color')
+            seg_underline = bool(seg.get('underline', seg_font.underline()))
+            seg_text = seg.get('text', '') or ''
+        else:
+            # Supports (font, text) or (font, color, underline, text)
+            if len(seg) == 2:
+                seg_font, seg_text = QFont(seg[0]), (seg[1] or '')
+                seg_color, seg_underline = None, seg_font.underline()
+            else:
+                seg_font = QFont(seg[0])
+                seg_color = seg[1]
+                seg_underline = bool(seg[2])
+                seg_text = seg[3] or ''
+
+        if not seg_text:
+            continue
+
+        base_pt = seg_font.pointSizeF() if seg_font.pointSizeF() > 0 else float(max(1, seg_font.pointSize() or 14))
+        glyph_font = QFont(seg_font)
+        glyph_font.setPointSizeF(max(1.0, base_pt * sc))
+        glyph_font.setUnderline(seg_underline)
+        glyph_font.setLetterSpacing(QFont.PercentageSpacing, cs)
+
+        fm = QFontMetricsF(glyph_font)
+        ref_cap = max(float(fm.capHeight()), float(fm.tightBoundingRect('A').height()), float(fm.ascent()) * 0.72, 6.0)
+        space_h = max(4.0, ref_cap * 0.58 * ls_ratio)
+        space_w = max(2.0, ref_cap * 0.55)
+
+        for ch in seg_text:
+            if ch == '\r':
+                continue
+            if ch == '\n':
+                _flush_word()
+                units.append({'kind': 'break'})
+                continue
+            if ch.isspace():
+                _flush_word()
+                units.append({'kind': 'space', 'slot_h': space_h, 'col_w': space_w})
+                continue
+
+            tb = fm.tightBoundingRect(ch)
+            adv = max(1.0, float(fm.horizontalAdvance(ch)))
+            ink_h = float(tb.height()) if tb.isValid() and tb.height() > 0.5 else ref_cap * 0.75
+            ink_w = float(tb.width()) if tb.isValid() and tb.width() > 0.3 else adv
+            is_small_mark = ch in ".,'`~-_:" and ink_h < ref_cap * 0.45
+            if is_small_mark:
+                slot_h = max(ink_h + ref_cap * 0.24, ref_cap * 0.42) * ls_ratio
+            else:
+                slot_h = max(ref_cap * 1.08, ink_h + ref_cap * 0.16) * ls_ratio
+
+            if tb.isValid() and tb.height() > 0.5:
+                baseline_in_slot = (slot_h - ink_h) / 2.0 - float(tb.top())
+            else:
+                baseline_in_slot = slot_h * 0.8
+
+            x_from_center = -float(tb.center().x()) if (tb.isValid() and tb.width() > 0.2) else (-adv / 2.0)
+            col_w = max(ink_w + 2.0, adv, ref_cap * 0.58)
+            cur_word.append({
+                'kind': 'glyph',
+                'char': ch,
+                'font': glyph_font,
+                'color': seg_color,
+                'underline': seg_underline,
+                'slot_h': slot_h,
+                'col_w': col_w,
+                'adv': adv,
+                'baseline_in_slot': baseline_in_slot,
+                'x_from_center': x_from_center,
+                'ink_top_offset': float(tb.top()) if tb.isValid() else -ref_cap,
+                'ink_bottom_offset': float(tb.bottom()) if tb.isValid() else 0.0,
+            })
+
+    _flush_word()
+    if not any(u['kind'] == 'word' for u in units):
+        return {
+            'glyphs': [],
+            'total_width': 0.0,
+            'total_height': 0.0,
+            'content_rect': QRectF(qrect.center().x(), qrect.center().y(), 0.0, 0.0),
+            'had_forced_break': False,
+        }
+
+    avail_h = max(1.0, float(qrect.height())) if wrap_to_height else float('inf')
+    columns = []
+    cur_col = []
+    cur_h = 0.0
+    pending_space = None
+    had_forced_break = False
+
+    for unit in units:
+        kind = unit['kind']
+        if kind == 'break':
+            if cur_col:
+                columns.append(cur_col)
+                cur_col = []
+                cur_h = 0.0
+            pending_space = None
+            continue
+        if kind == 'space':
+            if cur_col:
+                pending_space = unit
+            continue
+
+        word_glyphs = unit['glyphs']
+        word_h = sum(g['slot_h'] for g in word_glyphs)
+        gap_h = pending_space['slot_h'] if (cur_col and pending_space is not None) else 0.0
+
+        if cur_col and wrap_to_height and (cur_h + gap_h + word_h > avail_h):
+            columns.append(cur_col)
+            cur_col = []
+            cur_h = 0.0
+            pending_space = None
+        elif cur_col and pending_space is not None:
+            cur_col.append(pending_space)
+            cur_h += pending_space['slot_h']
+            pending_space = None
+
+        for g in word_glyphs:
+            if cur_col and wrap_to_height and (cur_h + g['slot_h'] > avail_h):
+                columns.append(cur_col)
+                cur_col = []
+                cur_h = 0.0
+                had_forced_break = True
+            cur_col.append(g)
+            cur_h += g['slot_h']
+
+    if cur_col:
+        columns.append(cur_col)
+
+    if not columns:
+        return {
+            'glyphs': [],
+            'total_width': 0.0,
+            'total_height': 0.0,
+            'content_rect': QRectF(qrect.center().x(), qrect.center().y(), 0.0, 0.0),
+            'had_forced_break': had_forced_break,
+        }
+
+    col_widths = [max((item['col_w'] for item in col), default=1.0) for col in columns]
+    col_heights = [sum(item['slot_h'] for item in col) for col in columns]
+    avg_w = sum(col_widths) / max(1, len(col_widths))
+    col_gap = max(3.0, avg_w * 0.35) if len(columns) > 1 else 0.0
+    total_width = sum(col_widths) + col_gap * max(0, len(columns) - 1)
+    total_height = max(col_heights, default=0.0)
+
+    align = str(alignment or 'center').lower()
+    if align == 'left':
+        block_x = qrect.left()
+    elif align == 'right':
+        block_x = qrect.right() - total_width
+    else:
+        block_x = qrect.left() + (qrect.width() - total_width) / 2.0
+    block_y = qrect.top() + (qrect.height() - total_height) / 2.0
+
+    placed_glyphs = []
+    min_x = min_y = float('inf')
+    max_x = max_y = float('-inf')
+
+    col_x = block_x
+    single_col = len(columns) == 1
+    for col, cw, ch_sum in zip(columns, col_widths, col_heights):
+        col_center_x = col_x + cw / 2.0
+        # When single column fits smaller than total height (single column is already centered at block_y),
+        # multi-column stacks share a uniform top edge at block_y for clean columnar reading.
+        y_cursor = block_y if not single_col else qrect.top() + (qrect.height() - ch_sum) / 2.0
+        for item in col:
+            if item['kind'] == 'glyph':
+                gx = col_center_x + item['x_from_center']
+                gy = y_cursor + item['baseline_in_slot']
+                placed_glyphs.append({
+                    'char': item['char'],
+                    'font': item['font'],
+                    'color': item['color'],
+                    'underline': item['underline'],
+                    'pos': QPointF(gx, gy),
+                    'adv': item['adv'],
+                })
+                min_x = min(min_x, col_x, gx)
+                max_x = max(max_x, col_x + cw, gx + item['adv'])
+                min_y = min(min_y, y_cursor, gy + item['ink_top_offset'])
+                max_y = max(max_y, y_cursor + item['slot_h'], gy + item['ink_bottom_offset'])
+            y_cursor += item['slot_h']
+        col_x += cw + col_gap
+
+    content_rect = (
+        QRectF(min_x, min_y, max(1.0, max_x - min_x), max(1.0, max_y - min_y))
+        if placed_glyphs and max_x > min_x and max_y > min_y
+        else QRectF(block_x, block_y, max(1.0, total_width), max(1.0, total_height))
+    )
+    return {
+        'glyphs': placed_glyphs,
+        'total_width': float(total_width),
+        'total_height': float(total_height),
+        'content_rect': content_rect,
+        'had_forced_break': had_forced_break,
+    }
+
+
 def _compute_usable_text_box(rect, margins=None, fill_ratio=0.84):
     """Return usable (width, height) after subtracting margins and bubble inset."""
     qrect = QRectF(to_qrect(rect)) if not isinstance(rect, (QRect, QRectF)) else QRectF(rect)
@@ -142,7 +374,8 @@ def compute_auto_font_size(
     if avail_w < 8.0 or avail_h < 8.0:
         return fallback_pt
 
-    is_vertical = str(orientation or 'horizontal').lower() == 'vertical'
+    orient_mode = str(orientation or 'horizontal').lower()
+    is_vertical = orient_mode == 'vertical'
     target_w = avail_h if is_vertical else avail_w
     max_h = avail_w if is_vertical else avail_h
 
@@ -164,16 +397,33 @@ def compute_auto_font_size(
     best_scale = lo_scale
     for _ in range(12):
         mid = (lo_scale + hi_scale) / 2.0
-        mw, mh, max_word_w = _measure_wrapped_segments(
-            segments,
-            scale=mid,
-            target_width=target_w,
-            line_spacing=line_spacing,
-            char_spacing=char_spacing,
-            alignment=alignment,
-        )
-        word_ok = (max_word_w <= target_w * 1.02) or ((mid * 10.0) <= eff_min + 0.5)
-        if word_ok and mh <= max_h and mw <= target_w * 1.03:
+        if orient_mode == 'vertical_upright':
+            layout = layout_vertical_upright_columns(
+                segments,
+                QRectF(0.0, 0.0, avail_w, avail_h),
+                line_spacing=line_spacing,
+                char_spacing=char_spacing,
+                alignment=alignment,
+                wrap_to_height=True,
+                scale=mid,
+            )
+            fits = (
+                (not layout['had_forced_break'] or (mid * 10.0) <= eff_min + 0.5)
+                and layout['total_width'] <= avail_w * 1.03
+                and layout['total_height'] <= avail_h * 1.02
+            )
+        else:
+            mw, mh, max_word_w = _measure_wrapped_segments(
+                segments,
+                scale=mid,
+                target_width=target_w,
+                line_spacing=line_spacing,
+                char_spacing=char_spacing,
+                alignment=alignment,
+            )
+            word_ok = (max_word_w <= target_w * 1.02) or ((mid * 10.0) <= eff_min + 0.5)
+            fits = word_ok and mh <= max_h and mw <= target_w * 1.03
+        if fits:
             best_scale = mid
             lo_scale = mid
         else:
@@ -199,7 +449,8 @@ def compute_auto_font_scale(rect, area, min_scale=0.15, max_scale=4.0, fill_rati
     ratio = max(0.5, min(1.0, float(fill_ratio)))
     avail_w = float(qrect.width()) * ratio if qrect.width() >= 36.0 else float(qrect.width())
     avail_h = float(qrect.height()) * ratio if qrect.height() >= 36.0 else float(qrect.height())
-    is_vertical = str(area.get_orientation()).lower() == 'vertical'
+    orient_mode = str(area.get_orientation()).lower()
+    is_vertical = orient_mode == 'vertical'
     target_w = avail_h if is_vertical else avail_w
     max_h = avail_w if is_vertical else avail_h
     line_spacing = area.get_line_spacing()
@@ -212,16 +463,33 @@ def compute_auto_font_scale(rect, area, min_scale=0.15, max_scale=4.0, fill_rati
     found_fit = False
     for _ in range(10):
         mid = (lo + hi) / 2.0
-        mw, mh, max_word_w = _measure_wrapped_segments(
-            segments,
-            scale=mid,
-            target_width=target_w,
-            line_spacing=line_spacing,
-            char_spacing=char_spacing,
-            alignment=alignment,
-        )
-        word_ok = (max_word_w <= target_w * 1.02) or (mid <= min_scale + 0.05)
-        if word_ok and mh <= max_h and mw <= target_w * 1.03:
+        if orient_mode == 'vertical_upright':
+            layout = layout_vertical_upright_columns(
+                segments,
+                QRectF(0.0, 0.0, avail_w, avail_h),
+                line_spacing=line_spacing,
+                char_spacing=char_spacing,
+                alignment=alignment,
+                wrap_to_height=True,
+                scale=mid,
+            )
+            fits = (
+                (not layout['had_forced_break'] or mid <= min_scale + 0.05)
+                and layout['total_width'] <= avail_w * 1.03
+                and layout['total_height'] <= avail_h * 1.02
+            )
+        else:
+            mw, mh, max_word_w = _measure_wrapped_segments(
+                segments,
+                scale=mid,
+                target_width=target_w,
+                line_spacing=line_spacing,
+                char_spacing=char_spacing,
+                alignment=alignment,
+            )
+            word_ok = (max_word_w <= target_w * 1.02) or (mid <= min_scale + 0.05)
+            fits = word_ok and mh <= max_h and mw <= target_w * 1.03
+        if fits:
             best = mid
             found_fit = True
             lo = mid

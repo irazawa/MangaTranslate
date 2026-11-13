@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.1
+# Manga OCR & Typeset Tool v14.9.9.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -81,7 +81,7 @@ from PyQt5.QtGui import (
     QPixmap, QPainter, QPen, QColor, QFont, QKeySequence, QPolygon,
     QPainterPath, QPolygonF, QImage, QIcon, QWheelEvent, QTextDocument,
     QTextCharFormat, QTextCursor, QBrush, QFontMetrics, QTransform, QTextBlockFormat,
-    QFontDatabase, QPalette
+    QFontDatabase, QPalette, QLinearGradient
 )
 from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import (
@@ -502,70 +502,23 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         # Initial font grouping mapping (group name -> list of font family names)
         # Populated with the example fonts the user requested. These are used
+        # Font group mappings to organize available fonts by situation and allow user
         # to filter the font dropdown in Typeset and Advanced Text Edit.
-        default_font_groups = {
-            "Dialog Normal": [
-                "CC Wild Words",
-                "Anime Ace 3",
-            ],
-            "Marah / Berteriak": [
-                "Badaboom BB",
-                "Komika Axis Bold",
-            ],
-            "Berbisik / Pelan": [
-                "Patrick Hand",
-                "Shadows Into Light",
-            ],
-            "Santai / Ke-enakan": [
-                "Amatic SC",
-                "Caveat",
-            ],
-            "Sexy / Intim": [
-                "Sacramento",
-                "Great Vibes",
-            ],
-            "Kaget / Shock": [
-                "SF Comic Script Bold",
-                "Komika Slick",
-            ],
-            "Tegang / Horor": [
-                "Creepster",
-                "Feast of Flesh BB",
-            ],
-            "Aksi / SFX": [
-                "Komika Display",
-            ],
-        }
-        self.font_groups = copy.deepcopy(default_font_groups)
+        from src.core.fonts import (
+            DEFAULT_FONT_GROUPS,
+            FONT_GROUPS_VERSION,
+            merge_default_font_groups,
+            normalize_font_groups,
+        )
 
         settings_font_groups = SETTINGS.get('font_groups')
-        if isinstance(settings_font_groups, dict):
-            normalized_groups = {}
-            for group_name, fonts in settings_font_groups.items():
-                if not isinstance(group_name, str):
-                    continue
-                cleaned_fonts = []
-                seen_fonts = set()
-                if isinstance(fonts, (list, tuple)):
-                    iterator = fonts
-                elif isinstance(fonts, set):
-                    iterator = sorted(fonts)
-                elif isinstance(fonts, str):
-                    iterator = [fonts]
-                else:
-                    iterator = []
-                for font_name in iterator:
-                    if not isinstance(font_name, str):
-                        continue
-                    normalized = font_name.strip()
-                    if not normalized or normalized in seen_fonts:
-                        continue
-                    seen_fonts.add(normalized)
-                    cleaned_fonts.append(normalized)
-                normalized_groups[group_name] = cleaned_fonts
-            self.font_groups = normalized_groups
+        groups_ver = SETTINGS.get('font_groups_version', 0)
+        if not isinstance(settings_font_groups, dict) or not isinstance(groups_ver, (int, float)) or groups_ver < FONT_GROUPS_VERSION:
+            self.font_groups = merge_default_font_groups(settings_font_groups, DEFAULT_FONT_GROUPS)
             SETTINGS['font_groups'] = copy.deepcopy(self.font_groups)
+            SETTINGS['font_groups_version'] = FONT_GROUPS_VERSION
         else:
+            self.font_groups = normalize_font_groups(settings_font_groups)
             SETTINGS['font_groups'] = copy.deepcopy(self.font_groups)
 
         # Path for persisting user-defined translation styles
@@ -1117,7 +1070,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         for attr in (
             'bold_toggle', 'italic_toggle', 'underline_toggle', 'outline_toggle',
             'align_left_button', 'align_center_button', 'align_right_button',
-            'orientation_horizontal_button', 'orientation_vertical_button',
+            'orientation_horizontal_button', 'orientation_vertical_button', 'orientation_vertical_upright_button',
         ):
             widget = getattr(self, attr, None)
             if widget is not None:
@@ -4117,6 +4070,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         if mode == 'horizontal':
             for offset in (8, 16, 24):
                 painter.drawLine(QPointF(6, offset), QPointF(26, offset))
+        elif mode == 'vertical_upright':
+            glyph_font = QFont('Segoe UI', 8, QFont.Bold)
+            painter.setFont(glyph_font)
+            for idx, letter in enumerate(('A', 'B', 'C')):
+                painter.drawText(QRectF(0, 2 + idx * 9, 32, 10), Qt.AlignCenter, letter)
         else:
             for offset in (8, 16, 24):
                 painter.drawLine(QPointF(offset, 6), QPointF(offset, 26))
@@ -4236,6 +4194,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             'horizontal': self.orientation_horizontal_button,
             'vertical': self.orientation_vertical_button,
         }
+        if getattr(self, 'orientation_vertical_upright_button', None) is not None:
+            mapping['vertical_upright'] = self.orientation_vertical_upright_button
         for mode, button in mapping.items():
             with QSignalBlocker(button):
                 button.setChecked(self.typeset_orientation == mode)
@@ -5154,7 +5114,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         painter.end()
         return expanded
 
-    def _render_text_glyph(self, painter: QPainter, char: str, font: QFont, color: QColor | str, position: QPointF, area=None, draw_mode='both'):
+    def _render_text_glyph(self, painter: QPainter, char: str, font: QFont, color: QColor | str, position: QPointF, area=None, draw_mode='both', gradient_rect: QRectF | None = None):
         if not char:
             return
         if char.isspace():
@@ -5215,24 +5175,34 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 elif getattr(area, 'has_text_outline', None) and area.has_text_outline():
                     use_auto_color = self._area_uses_auto_text_color(area)
                     area_outline_color = area.get_text_outline_color()
-                    if use_auto_color and (area_outline_color.name() == '#000000' or not area_outline_color.isValid()):
+                    if (
+                        use_auto_color
+                        and not getattr(area, 'gradient_enabled', False)
+                        and (area_outline_color.name() == '#000000' or not area_outline_color.isValid())
+                    ):
                         outline_color = self._outline_for_text_color(qcolor)
                     else:
                         outline_color = area_outline_color
                         if not outline_color.isValid():
                             outline_color = self._outline_for_text_color(qcolor)
-                    outline_pen = QPen(outline_color)
                     width = max(0.2, float(area.get_text_outline_width()))
                     style = area.get_text_outline_style()
                     if style == 'glow':
-                        outline_color.setAlpha(max(80, min(255, int(outline_color.alpha() * 0.7))))
-                        outline_pen.setColor(outline_color)
-                        outline_pen.setWidthF(width * 1.6)
+                        for ring in (1.9, 1.45, 1.0):
+                            glow_col = QColor(outline_color)
+                            alpha_scale = 0.25 if ring > 1.6 else (0.45 if ring > 1.2 else 0.72)
+                            glow_col.setAlpha(max(30, min(255, int(outline_color.alpha() * alpha_scale))))
+                            glow_pen = QPen(glow_col)
+                            glow_pen.setWidthF(width * ring)
+                            glow_pen.setJoinStyle(Qt.RoundJoin)
+                            glow_pen.setCapStyle(Qt.RoundCap)
+                            painter.strokePath(path, glow_pen)
                     else:
+                        outline_pen = QPen(outline_color)
                         outline_pen.setWidthF(width)
-                    outline_pen.setJoinStyle(Qt.RoundJoin)
-                    outline_pen.setCapStyle(Qt.RoundCap)
-                    painter.strokePath(path, outline_pen)
+                        outline_pen.setJoinStyle(Qt.RoundJoin)
+                        outline_pen.setCapStyle(Qt.RoundCap)
+                        painter.strokePath(path, outline_pen)
                     
         if draw_mode not in ('both', 'fill'):
             return
@@ -5273,60 +5243,102 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             brush = QBrush(pixmap)
         elif area and getattr(area, 'gradient_enabled', False):
             grad_colors = getattr(area, 'gradient_colors', None)
-            if grad_colors and len(grad_colors) >= 2:
-                import math
-                rect = getattr(area, 'rect', None)
-                if rect and hasattr(rect, 'center'):
-                     angle = getattr(area, 'gradient_angle', 0.0)
-                     rad = math.radians(angle)
-                     cx, cy = rect.center().x(), rect.center().y()
-                     r = math.hypot(rect.width(), rect.height()) / 1.5
-                     
-                     dx = math.cos(rad) * r
-                     dy = math.sin(rad) * r
-                     
-                     start = QPointF(cx - dx, cy - dy)
-                     end = QPointF(cx + dx, cy + dy)
-                     
-                     gradient = QLinearGradient(start, end)
-                     step = 1.0 / (len(grad_colors) - 1)
-                     for i, c in enumerate(grad_colors):
-                         gradient.setColorAt(min(1.0, i * step), QColor(c))
-                     brush = QBrush(gradient)
+            valid_colors = [QColor(c) for c in (grad_colors or []) if QColor(c).isValid()]
+            if len(valid_colors) >= 2:
+                grect = QRectF(gradient_rect) if gradient_rect is not None and gradient_rect.isValid() else None
+                if grect is None or grect.width() <= 0 or grect.height() <= 0:
+                    raw_rect = area.get_text_rect() if hasattr(area, 'get_text_rect') else getattr(area, 'rect', None)
+                    grect = QRectF(raw_rect) if raw_rect is not None else QRectF()
+                if grect.width() > 0 and grect.height() > 0:
+                    angle = float(getattr(area, 'gradient_angle', 0.0) or 0.0)
+                    if hasattr(area, 'get_orientation') and area.get_orientation() == 'vertical':
+                        # Vertical text draws rotated +90 deg clockwise; compensate angle so screen directions stay exact.
+                        angle -= 90.0
+                    rad = math.radians(angle)
+                    cx, cy = grect.center().x(), grect.center().y()
+                    half_span = max(
+                        1.0,
+                        (abs(math.cos(rad)) * grect.width() + abs(math.sin(rad)) * grect.height()) / 2.0,
+                    )
+                    dx = math.cos(rad) * half_span
+                    dy = math.sin(rad) * half_span
+                    gradient = QLinearGradient(QPointF(cx - dx, cy - dy), QPointF(cx + dx, cy + dy))
+                    step = 1.0 / (len(valid_colors) - 1)
+                    for i, c in enumerate(valid_colors):
+                        gradient.setColorAt(min(1.0, i * step), c)
+                    brush = QBrush(gradient)
 
         painter.fillPath(path, brush)
+        if font.underline():
+            fm = QFontMetrics(font)
+            adv = max(0.0, float(fm.horizontalAdvance(char)))
+            if adv > 0.0:
+                ul_y = position.y() + max(1.0, fm.underlinePos())
+                ul_h = max(1.0, float(fm.lineWidth()))
+                painter.fillRect(QRectF(position.x(), ul_y, adv, ul_h), brush)
 
-    def draw_area_text_plain(self, painter: QPainter, area):
-        """Render text directly on the image without drawing any background boxes or fills.
+    def _layout_glyph_lines(self, area, max_width=None):
+        """Extract glyph lines from area segments, optionally wrapping to max_width."""
+        if max_width is not None and max_width > 0:
+            doc = self._create_document_from_segments(area)
+            if not doc.isEmpty():
+                doc.setTextWidth(max(1.0, float(max_width)))
+                doc.documentLayout()
+                use_auto = self._area_uses_auto_text_color(area)
+                auto_color = (
+                    area._auto_text_color
+                    if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor)
+                    else None
+                )
+                char_spacing = area.get_char_spacing()
+                wrapped_lines = []
+                block = doc.begin()
+                while block != doc.end():
+                    block_glyphs = []
+                    it = block.begin()
+                    while not it.atEnd():
+                        fragment = it.fragment()
+                        if fragment.isValid():
+                            frag_text = fragment.text() or ''
+                            if frag_text:
+                                fmt = fragment.charFormat()
+                                gfont = QFont(fmt.font())
+                                gfont.setLetterSpacing(QFont.PercentageSpacing, char_spacing)
+                                gcolor = auto_color if auto_color is not None else fmt.foreground().color()
+                                if not gcolor.isValid():
+                                    gcolor = area.get_color()
+                                for ch in frag_text:
+                                    block_glyphs.append({'char': ch, 'font': gfont, 'color': QColor(gcolor)})
+                        it += 1
+                    layout = block.layout()
+                    lcount = layout.lineCount() if layout else 0
+                    if lcount > 0:
+                        for li in range(lcount):
+                            tline = layout.lineAt(li)
+                            start = tline.textStart()
+                            length = tline.textLength()
+                            seg_glyphs = list(block_glyphs[start : start + length])
+                            if li < lcount - 1:
+                                while seg_glyphs and seg_glyphs[-1]['char'] in (' ', '\t'):
+                                    seg_glyphs.pop()
+                            wrapped_lines.append(seg_glyphs)
+                    else:
+                        wrapped_lines.append(block_glyphs)
+                    block = block.next()
+                return wrapped_lines
 
-        This uses QPainter.drawText (via glyph rendering) and respects area._auto_text_color for
-        overriding segment colors when present.
-        """
-        rect = QRectF(area.get_text_rect() if hasattr(area, 'get_text_rect') else area.rect)
-        margins = area.get_margins()
-        rect = rect.adjusted(margins['left'], margins['top'], -margins['right'], -margins['bottom'])
-        if rect.width() <= 0 or rect.height() <= 0:
-            return
-        if area and getattr(area, 'has_text_outline', None) and area.has_text_outline():
-            try:
-                if area.get_text_outline_style() == 'glow':
-                    self._draw_rich_text_document(painter, rect, area, area.get_orientation())
-                    return
-            except Exception:
-                pass
-
-        # Flatten segments into lines similar to _flatten_segments_to_lines but use the effective color
         lines = []
         current_line = []
+        use_auto = self._area_uses_auto_text_color(area)
+        auto_color = (
+            area._auto_text_color
+            if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor)
+            else None
+        )
         for segment in area.get_segments():
             text_value = segment.get('text', '') or ''
             seg_font = area.segment_to_qfont(segment)
-            seg_color = area.segment_to_color(segment)
-            use_auto = self._area_uses_auto_text_color(area)
-            if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor):
-                seg_color = area._auto_text_color
-
-            # iterate chars
+            seg_color = auto_color if auto_color is not None else area.segment_to_color(segment)
             for ch in text_value:
                 if ch == '\n':
                     lines.append(current_line)
@@ -5337,39 +5349,140 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 current_line.append({'char': ch, 'font': glyph_font, 'color': QColor(seg_color)})
         if current_line:
             lines.append(current_line)
+        return lines
 
+    def _build_upright_segment_specs(self, area):
+        use_auto = self._area_uses_auto_text_color(area)
+        auto_color = (
+            area._auto_text_color
+            if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor)
+            else None
+        )
+        specs = []
+        for segment in area.get_segments():
+            text_value = segment.get('text', '') or ''
+            if not text_value:
+                continue
+            seg_font = area.segment_to_qfont(segment)
+            seg_color = auto_color if auto_color is not None else area.segment_to_color(segment)
+            underline = bool(segment.get('underline', seg_font.underline()))
+            specs.append((seg_font, QColor(seg_color), underline, text_value))
+        return specs
+
+    def draw_area_text_plain(self, painter: QPainter, area, wrap_to_rect=False):
+        """Render vector glyphs with full gradient, screentone, outline layers, and drop shadow support."""
+        rect = QRectF(area.get_text_rect() if hasattr(area, 'get_text_rect') else area.rect)
+        margins = area.get_margins()
+        rect = rect.adjusted(margins['left'], margins['top'], -margins['right'], -margins['bottom'])
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        has_special_fill = (
+            getattr(area, 'gradient_enabled', False)
+            or getattr(area, 'pattern_fill_enabled', False)
+            or bool(getattr(area, 'outline_layers', None))
+        )
+        if not has_special_fill and area and getattr(area, 'has_text_outline', None) and area.has_text_outline():
+            try:
+                if area.get_text_outline_style() == 'glow':
+                    self._draw_rich_text_document(painter, rect, area, area.get_orientation())
+                    return
+            except Exception:
+                pass
+
+        orientation = area.get_orientation() if hasattr(area, 'get_orientation') else 'horizontal'
+        if orientation == 'vertical_upright':
+            layout = layout_vertical_upright_columns(
+                self._build_upright_segment_specs(area),
+                rect,
+                line_spacing=area.get_line_spacing(),
+                char_spacing=area.get_char_spacing(),
+                alignment=area.get_alignment(),
+                wrap_to_height=bool(wrap_to_rect),
+            )
+            placed = layout['glyphs']
+            if not placed:
+                return
+            gradient_rect = layout['content_rect']
+            painter.save()
+            try:
+                for g in placed:
+                    self._render_text_glyph(painter, g['char'], g['font'], g['color'], g['pos'], area, draw_mode='outline', gradient_rect=gradient_rect)
+                for g in placed:
+                    self._render_text_glyph(painter, g['char'], g['font'], g['color'], g['pos'], area, draw_mode='fill', gradient_rect=gradient_rect)
+            finally:
+                painter.restore()
+            return
+
+        is_vertical = (orientation == 'vertical')
+        layout_rect = (
+            QRectF(
+                rect.center().x() - rect.height() / 2.0,
+                rect.center().y() - rect.width() / 2.0,
+                rect.height(),
+                rect.width(),
+            )
+            if is_vertical
+            else rect
+        )
+        lines = self._layout_glyph_lines(area, max_width=layout_rect.width() if wrap_to_rect else None)
         if not lines:
             return
 
-        # Compute line metrics and draw each glyph sequentially
         metrics = self._compute_line_metrics(lines, area)
         total_height = sum(m['height'] for m in metrics)
-        y_offset = rect.top() + max(0.0, (rect.height() - total_height) / 2.0)
+        y_offset = layout_rect.top() + max(0.0, (layout_rect.height() - total_height) / 2.0)
         baseline = y_offset + (metrics[0]['ascent'] if metrics else 0.0)
         alignment = area.get_alignment()
 
+        positioned = []
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
         for idx, glyphs in enumerate(lines):
             if not glyphs:
                 baseline += metrics[idx]['height']
                 continue
-            total_width = sum(QFontMetrics(g['font']).horizontalAdvance(g['char']) for g in glyphs)
+            advances = [QFontMetrics(g['font']).horizontalAdvance(g['char']) for g in glyphs]
+            total_width = sum(advances)
             if alignment == 'left':
-                x_start = rect.left()
+                x = layout_rect.left()
             elif alignment == 'right':
-                x_start = rect.right() - total_width
+                x = layout_rect.right() - total_width
             else:
-                x_start = rect.left() + (rect.width() - total_width) / 2.0
-
-            x = x_start
-            for g in glyphs:
-                ch = g['char']
-                f = g['font']
-                color = g['color']
-                # Render glyph: we use _render_text_glyph which respects outline if enabled
-                self._render_text_glyph(painter, ch, f, color, QPointF(x, baseline), area)
-                x += QFontMetrics(f).horizontalAdvance(ch)
-
+                x = layout_rect.left() + (layout_rect.width() - total_width) / 2.0
+            line_top = baseline - metrics[idx]['ascent']
+            line_bottom = baseline + metrics[idx]['descent']
+            min_x = min(min_x, x)
+            max_x = max(max_x, x + total_width)
+            min_y = min(min_y, line_top)
+            max_y = max(max_y, line_bottom)
+            for g, adv in zip(glyphs, advances):
+                positioned.append((g['char'], g['font'], g['color'], QPointF(x, baseline)))
+                x += adv
             baseline += metrics[idx]['height']
+
+        if not positioned:
+            return
+        gradient_rect = (
+            QRectF(min_x, min_y, max(1.0, max_x - min_x), max(1.0, max_y - min_y))
+            if max_x > min_x and max_y > min_y
+            else layout_rect
+        )
+
+        painter.save()
+        try:
+            if is_vertical:
+                painter.translate(rect.center())
+                painter.rotate(90)
+                painter.translate(-rect.center())
+            # Pass 1: Shadows and outlines behind every glyph
+            for ch, f, color, pos in positioned:
+                self._render_text_glyph(painter, ch, f, color, pos, area, draw_mode='outline', gradient_rect=gradient_rect)
+            # Pass 2: Fills (solid, gradient, screentone) on top of outlines
+            for ch, f, color, pos in positioned:
+                self._render_text_glyph(painter, ch, f, color, pos, area, draw_mode='fill', gradient_rect=gradient_rect)
+        finally:
+            painter.restore()
 
     def draw_area_text(self, painter, area):
         rect = QRectF(area.get_text_rect() if hasattr(area, 'get_text_rect') else area.rect)
@@ -5399,14 +5512,18 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             effect = area.get_effect().lower()
             orientation = area.get_orientation()
 
-            if orientation == 'vertical' and effect != 'none':
+            if orientation in ('vertical', 'vertical_upright') and effect != 'none':
                 effect = 'none'
 
             if effect == 'none':
-                if getattr(area, 'gradient_enabled', False) or getattr(area, 'pattern_fill_enabled', False):
-                     self.draw_area_text_plain(painter, area)
+                if (
+                    getattr(area, 'gradient_enabled', False)
+                    or getattr(area, 'pattern_fill_enabled', False)
+                    or bool(getattr(area, 'outline_layers', None))
+                ):
+                    self.draw_area_text_plain(painter, area, wrap_to_rect=True)
                 else:
-                     self._draw_rich_text_document(painter, rect, area, orientation)
+                    self._draw_rich_text_document(painter, rect, area, orientation)
             else:
                 self._draw_effect_text(painter, rect, area, effect)
         finally:
@@ -5434,6 +5551,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         block_format.setAlignment(option.alignment())
         cursor.setBlockFormat(block_format)
 
+        char_spacing = area.get_char_spacing()
         first_segment = True
         for segment in area.get_segments():
             text_value = segment.get('text', '')
@@ -5441,6 +5559,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 continue
             fmt = QTextCharFormat()
             seg_font = area.segment_to_qfont(segment)
+            seg_font.setLetterSpacing(QFont.PercentageSpacing, char_spacing)
             fmt.setFont(seg_font)
             # Allow area to inject an override color (auto-detection) via attribute
             seg_color = area.segment_to_color(segment)
@@ -5465,23 +5584,56 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         return doc
 
     def _draw_rich_text_document(self, painter, rect, area, orientation):
-        doc = self._create_document_from_segments(area)
-        if doc.isEmpty():
-            return
+        target_center = rect.center()
+        if orientation == 'vertical_upright':
+            layout = layout_vertical_upright_columns(
+                self._build_upright_segment_specs(area),
+                rect,
+                line_spacing=area.get_line_spacing(),
+                char_spacing=area.get_char_spacing(),
+                alignment=area.get_alignment(),
+                wrap_to_height=True,
+            )
+            placed = layout['glyphs']
+            if not placed:
+                return
+            pad = 4.0
+            bounds = layout['content_rect'].adjusted(-pad, -pad, pad, pad)
+            image_width = max(1, int(math.ceil(bounds.width())))
+            image_height = max(1, int(math.ceil(bounds.height())))
+            image = QImage(image_width, image_height, QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.transparent)
+            doc_painter = QPainter(image)
+            doc_painter.setRenderHint(QPainter.Antialiasing)
+            doc_painter.setRenderHint(QPainter.TextAntialiasing)
+            origin = bounds.topLeft()
+            for g in placed:
+                gfont = g['font']
+                gcolor = g['color']
+                lpos = g['pos'] - origin
+                doc_painter.setFont(gfont)
+                doc_painter.setPen(gcolor)
+                doc_painter.drawText(lpos, g['char'])
+            doc_painter.end()
+            target_center = bounds.center()
+        else:
+            doc = self._create_document_from_segments(area)
+            if doc.isEmpty():
+                return
 
-        target_width = rect.height() if orientation == 'vertical' else rect.width()
-        doc.setTextWidth(max(1.0, target_width))
-        doc_size = doc.size()
-        if doc_size.isEmpty():
-            return
+            target_width = rect.height() if orientation == 'vertical' else rect.width()
+            doc.setTextWidth(max(1.0, target_width))
+            doc_size = doc.size()
+            if doc_size.isEmpty():
+                return
 
-        image_width = max(1, int(math.ceil(doc_size.width())))
-        image_height = max(1, int(math.ceil(doc_size.height())))
-        image = QImage(image_width, image_height, QImage.Format_ARGB32_Premultiplied)
-        image.fill(Qt.transparent)
-        doc_painter = QPainter(image)
-        doc.drawContents(doc_painter)
-        doc_painter.end()
+            image_width = max(1, int(math.ceil(doc_size.width())))
+            image_height = max(1, int(math.ceil(doc_size.height())))
+            image = QImage(image_width, image_height, QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.transparent)
+            doc_painter = QPainter(image)
+            doc.drawContents(doc_painter)
+            doc_painter.end()
 
         if area and getattr(area, 'has_text_outline', None) and area.has_text_outline():
             doc_color = None
@@ -5521,7 +5673,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         pixmap = QPixmap.fromImage(image)
         painter.save()
-        painter.translate(rect.center())
+        painter.translate(target_center)
         if orientation == 'vertical':
             transform = QTransform()
             transform.rotate(90)

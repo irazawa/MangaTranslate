@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.1
+# Manga OCR & Typeset Tool v14.9.9.2
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -363,3 +363,303 @@ def set_global_font_manager(manager: FontManager):
 
 def get_font_manager() -> FontManager | None:
     return GLOBAL_FONT_MANAGER
+
+
+FONT_GROUPS_VERSION = 2
+
+_LEGACY_FONT_ALIASES = frozenset({
+    "CC Wild Words",
+    "Anime Ace 3",
+    "Badaboom BB",
+    "Komika Axis Bold",
+    "Patrick Hand",
+    "Shadows Into Light",
+    "Amatic SC",
+    "Caveat",
+    "Sacramento",
+    "Great Vibes",
+    "SF Comic Script Bold",
+    "Komika Slick",
+    "Creepster",
+    "Feast of Flesh BB",
+    "Komika Display",
+})
+
+DEFAULT_FONT_GROUPS: dict[str, list[str]] = {
+    "Dialog Normal": [
+        "CC Wild Words Roman",
+        "CC Wild Words Italic",
+        "CC Wild Words Bold Italic",
+        "mangat",
+        "mangatb",
+        "mangati",
+        "animeace2_reg",
+        "animeace2_bld",
+        "animeace2_ital",
+        "ComicNeue-Regular",
+        "ComicNeue-Bold",
+        "ComicNeue-Italic",
+        "ComicNeueSansID",
+        "BalsamiqSans-Regular",
+        "BalsamiqSans-Bold",
+        "BalsamiqSans-Italic",
+        "KOMTXT__",
+        "KOMTXTB_",
+        "KOMTXTI_",
+        "KOMTXTBI",
+        "KOMTXTT_",
+        "KOMTXTTI",
+        "KOMTXTK_",
+        "KOMTXTKB",
+        "KOMTXTKI",
+        "KOMTXKBI",
+        "Comic Book",
+        "Comic Book Bold",
+        "Comic Book Italic",
+        "Comic Book Bold Italic",
+        "adam",
+        "adamb",
+        "adambital",
+        "manga_speak",
+        "manga_speak_bold",
+        "ArchitectsDaughter-Regular",
+        "Gilles_Handwriting",
+    ],
+    "Marah / Berteriak": [
+        "BADABB__",
+        "Bangers-Regular",
+        "LuckiestGuy-Regular",
+        "mouthbrebb",
+        "mouthbrebb_b",
+        "deathrattlebb_reg",
+        "KOMIKAX_",
+        "Action Comics",
+        "Action Comics Black",
+        "Ka Blam",
+        "Ka Blam Under",
+        "Ka-Boing!",
+        "Bigdex",
+        "AVENGEANCE MIGHTIEST AVENGER",
+        "intsh",
+        "intshc",
+        "intshe",
+        "intshl",
+        "intsho",
+        "iwantv2",
+        "iwantv2b",
+        "iwantv2c",
+        "iwantv2e",
+        "iwantv2s",
+        "KOMIKJ__",
+        "KOMIKJI_",
+    ],
+    "Berbisik / Pelan": [
+        "PatrickHand-Regular",
+        "ShadowsIntoLight-Regular",
+        "Kalam-Regular",
+        "Kalam-Bold",
+        "IndieFlower-Regular",
+        "KOMIKAH_",
+        "KOMIKAHB",
+        "KOMIKHI_",
+        "KOMIKHBI",
+        "KOMIKASL",
+        "KOMIKSLI",
+        "left hand comic",
+        "arfmoochikncheez",
+        "dnk",
+        "The Kids Mraker",
+        "The Last Comic On Earth",
+        "Think Smart ",
+        "Wigglye",
+        "SketchyComic",
+    ],
+    "Santai / Ke-enakan": [
+        "ShortStack-Regular",
+        "Mali-Regular",
+        "Mali-Bold",
+        "AmaticSC-Regular",
+        "AmaticSC-Bold",
+        "Caveat-Regular",
+        "Caveat-Medium",
+        "Caveat-SemiBold",
+        "Caveat-Bold",
+        "Caveat-VariableFont_wght",
+        "Comico",
+        "Smile Candy",
+        "Poppin-Story",
+        "Happy Night",
+        "Autumn Crush",
+        "Really Big",
+        "Trailer Park Girl",
+    ],
+    "Cute / Shoujo / Chibi": [
+        "Mali-Regular",
+        "Mali-Bold",
+        "ShortStack-Regular",
+        "Courgette-Regular",
+        "IndieFlower-Regular",
+        "Smile Candy",
+        "Poppin-Story",
+        "Happy Night",
+        "Autumn Crush",
+        "BalsamiqSans-Regular",
+        "BalsamiqSans-Italic",
+        "AmaticSC-Regular",
+        "Caveat-Regular",
+    ],
+    "Sexy / Intim": [
+        "Love Marker",
+        "Love Marker Italic",
+        "Courgette-Regular",
+        "Sacramento-Regular",
+        "GreatVibes-Regular",
+        "PlayfairDisplay-VariableFont_wght",
+        "PlayfairDisplay-Italic-VariableFont_wght",
+    ],
+    "Kaget / Shock": [
+        "SF Comic Script Bold",
+        "SF Comic Script",
+        "SF Comic Script Condensed",
+        "SF Comic Script Extended",
+        "SF Comic Script Outline",
+        "SF Comic Script Shaded",
+        "SF Slapstick Comic",
+        "SF Slapstick Comic Bold",
+        "SF Slapstick Comic Oblique",
+        "SF Slapstick Comic Bold Oblique",
+        "SF Slapstick Comic Shaded",
+        "SF Slapstick Comic Shaded Oblique",
+        "KOMIKASK",
+        "KOMIKSKI",
+        "KOMIKSLI",
+        "Outrun future",
+        "Outrun future Bold",
+        "Outrun future Bold Italic",
+        "Ka-Boing!",
+        "Bangers-Regular",
+    ],
+    "Tegang / Horor": [
+        "Creepster-Regular",
+        "Nosifer-Regular",
+        "FEASFBRG",
+        "FEASFBI_",
+        "deathrattlebb_reg",
+        "KOMIKAB_",
+        "KOMIKAP_",
+        "KOMIKAGL",
+        "Danger Diabolik",
+        "Night Shift - Demo",
+        "Ape Shit ",
+        "DirtyBrush",
+        "LaPicaDemo-LaPicaDemo",
+        "#44v2",
+        "#44v2c",
+        "#44v2e",
+        "#44v2i",
+        "#44v2s",
+    ],
+    "Aksi / SFX": [
+        "PermanentMarker-Regular",
+        "Shojumaru-Regular",
+        "soundfx",
+        "Komigo3D-Regular",
+        "Heroes Legend",
+        "Heroes Legend Hollow",
+        "Indiana-Jonas-48p",
+        "Indiana-Jonas-48ip",
+        "KMKDSP__",
+        "KMKDSPB_",
+        "KMKDSPT_",
+        "KMKDSPW_",
+        "KMKDSPBW",
+        "KMKDSPK_",
+        "KMKDSPKB",
+        "KMKDSPKW",
+        "KMKDSKBW",
+        "KMKDSPSH",
+        "KOMTIT__",
+        "KOMTITA_",
+        "KOMTITBR",
+        "KOMTITE_",
+        "KOMTITG_",
+        "KOMTITK_",
+        "KOMTITP_",
+        "KOMTITS_",
+        "KOMTITTL",
+        "KOMTITT_",
+        "KOMTITWR",
+        "KOMTITW_",
+    ],
+    "Narasi / Sistem / Kotak Info": [
+        "ShareTechMono-Regular",
+        "SpecialElite-Regular",
+        "Inter-VariableFont_opsz,wght",
+        "Inter-Italic-VariableFont_opsz,wght",
+        "Cinzel-Bold",
+        "PlayfairDisplay-VariableFont_wght",
+        "PlayfairDisplay-Italic-VariableFont_wght",
+    ],
+}
+
+
+def _clean_font_entries(raw_entries) -> list[str]:
+    if isinstance(raw_entries, (list, tuple)):
+        iterator = raw_entries
+    elif isinstance(raw_entries, set):
+        iterator = sorted(raw_entries)
+    elif isinstance(raw_entries, str):
+        iterator = [raw_entries]
+    else:
+        iterator = []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for entry in iterator:
+        if not isinstance(entry, str):
+            continue
+        trimmed = entry.strip()
+        if not trimmed or trimmed in seen:
+            continue
+        seen.add(trimmed)
+        cleaned.append(trimmed)
+    return cleaned
+
+
+def normalize_font_groups(raw_groups) -> dict[str, list[str]]:
+    """Normalize a user/config font_groups mapping into ordered unique strings."""
+    if not isinstance(raw_groups, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for group_name, entries in raw_groups.items():
+        if not isinstance(group_name, str) or not group_name.strip():
+            continue
+        normalized[group_name.strip()] = _clean_font_entries(entries)
+    return normalized
+
+
+def merge_default_font_groups(
+    existing_groups,
+    default_groups: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    """Populate curated manga font groups while preserving custom user groups/fonts."""
+    defaults = default_groups if default_groups is not None else DEFAULT_FONT_GROUPS
+    existing = normalize_font_groups(existing_groups)
+    merged: dict[str, list[str]] = {}
+
+    for group_name, curated in defaults.items():
+        items = list(curated)
+        seen_norm = {_normalize_font_token(x) for x in items}
+        for custom in existing.get(group_name, []):
+            if custom in _LEGACY_FONT_ALIASES:
+                continue
+            tok = _normalize_font_token(custom)
+            if tok and tok not in seen_norm:
+                items.append(custom)
+                seen_norm.add(tok)
+        merged[group_name] = items
+
+    for group_name, entries in existing.items():
+        if group_name not in merged:
+            merged[group_name] = list(entries)
+
+    return merged

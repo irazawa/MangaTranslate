@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.1
+# Manga OCR & Typeset Tool v14.9.9.2
 """Compact `.manga_proj` ZIP + sparse lossless WebP patch storage and helpers."""
 
 from __future__ import annotations

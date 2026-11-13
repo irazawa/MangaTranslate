@@ -304,12 +304,124 @@ class FullPageBatchText:
 class TypesetText:
     """Teks kontrol typesetting & auto font size (tab Typeset)."""
 
+    TIP_ORIENTATION_HORIZONTAL = "Teks mendatar normal (kiri ke kanan)."
+    TIP_ORIENTATION_VERTICAL = "Teks vertikal diputar 90° ke samping."
+    TIP_ORIENTATION_UPRIGHT = "Teks tersusun vertikal ke bawah dengan huruf tetap tegak horizontal."
+
     AUTO_FONT_SIZE_LABEL = "Auto Font Size (Fit Box)"
     AUTO_FONT_SIZE_TIP = "Otomatis menyesuaikan ukuran font dengan besar bubble/area teks hasil deteksi."
     FIT_FONT_SIZE_BTN = "Fit Box"
     FIT_FONT_SIZE_TIP = "Sesuaikan ukuran font area terpilih agar pas mengisi kotak bubble."
     FIT_FONT_SIZE_NO_SELECTION = "Pilih area teks terlebih dahulu untuk menyesuaikan ukuran font."
     FIT_FONT_SIZE_APPLIED_FMT = "Ukuran font disesuaikan ke {size:.1f} pt."
+
+
+class AdvancedEditorText:
+    """Teks UI untuk dialog Advanced Text Editor."""
+
+    WINDOW_TITLE = "Advanced Text Editor"
+    HERO_TITLE = "Advanced Text Editor"
+    HERO_SUBTITLE = (
+        "Atur format teks, warna gradasi, pola screentone, outline, bayangan, "
+        "dan bentuk lengkungan dengan pratinjau langsung."
+    )
+    HERO_BADGE_AREA = "Rich Text & Effects"
+
+    EDITOR_TITLE = "Editor Teks"
+    EDITOR_HINT = "Blok sebagian teks untuk styling parsial, atau Ctrl+A untuk mengubah seluruh bubble."
+    PREVIEW_TITLE = "Live Preview Bubble"
+    PREVIEW_HINT = "Pratinjau render mendekati tampilan di kanvas."
+
+    PREVIEW_BG_PAPER = "Putih"
+    PREVIEW_BG_DARK = "Gelap"
+    PREVIEW_BG_CHECKER = "Transparan"
+
+    BTN_AI_TRANSLATE = "AI Translate"
+    BTN_TRANSLATING = "Menerjemahkan..."
+    TIP_AI_TRANSLATE = "Terjemahkan teks terseleksi (atau seluruh isi editor) menggunakan model AI aktif."
+    BTN_RECENT = "Riwayat"
+    TIP_RECENT = "Tempel salah satu hasil terjemahan terbaru ke editor ini."
+    BTN_SYMBOLS = "Simbol"
+    TIP_SYMBOLS = "Sisipkan simbol cinta (love), bintang, musik, atau ekspresi manga terkelompok ke posisi kursor."
+    SYM_SECTION_QUICK_LOVE = "Akses Cepat: Love"
+    SYM_SECTION_CATEGORIES = "Kategori Simbol"
+    SYM_CAT_LOVE_CLASSIC = "Love & Hati: Klasik Manga"
+    SYM_CAT_LOVE_VARIATIONS = "Love & Hati: Variasi Warna & Efek"
+    SYM_CAT_LOVE_KAOMOJI = "Love & Hati: Kaomoji Romantis"
+    SYM_CAT_SPARKLES_STARS = "Kilau, Bintang & Bunga"
+    SYM_CAT_MUSIC = "Musik & Nada"
+    SYM_CAT_MANGA_FX = "Ekspresi & Reaksi Manga"
+    SYM_CAT_PUNCTUATION = "Tanda Baca & Kurung Manga"
+
+    CONTRAST_LIGHT_PILL = "Kontras Editor: Kertas Terang (teks gelap)"
+    CONTRAST_DARK_PILL = "Kontras Editor: Gelap (teks terang)"
+
+    TAB_LAYOUT = "Layout"
+    ORIENTATION_HORIZONTAL = "Horizontal"
+    ORIENTATION_VERTICAL = "Vertical (Putar 90°)"
+    ORIENTATION_UPRIGHT = "Vertical (Huruf Tegak)"
+    TAB_FILL = "Fill && Color"
+    TAB_OUTLINE = "Outline && FX"
+    TAB_WARP = "Warp && Curve"
+
+    CARD_LAYOUT_TITLE = "Orientasi, Perataan & Jarak"
+    CARD_LAYOUT_DESC = "Tentukan arah baca horizontal/vertikal, perataan teks, spasi baris, dan jarak antar huruf."
+    CARD_FIT_BUBBLE_TITLE = "Smart Auto-Fit & Bubble"
+    CARD_FIT_BUBBLE_DESC = "Sesuaikan ukuran font otomatis agar pas di kotak area atau aktifkan kotak bubble latar putih."
+    CARD_MARGINS_TITLE = "Batas Dalam / Inner Margins (px)"
+    CARD_MARGINS_DESC = (
+        "Memberi jarak padding di sisi dalam kotak teks (Atas, Kanan, Bawah, Kiri) "
+        "supaya huruf tidak terlalu mepet atau menyentuh garis tepi bubble."
+    )
+
+    CARD_GRADIENT_TITLE = "Gradient Fill (Gradasi Warna)"
+    CARD_GRADIENT_DESC = (
+        "Mewarnai isi huruf dengan perpaduan dua warna atau lebih. "
+        "Saat aktif, gradient menggantikan warna solid pada seluruh teks."
+    )
+    BTN_SWAP_COLORS = "Tukar"
+    BTN_ADD_STOP = "+ Warna"
+    BTN_REMOVE_STOP = "- Hapus"
+
+    CARD_SCREENTONE_TITLE = "Manga Screentone Fill (Arsir Komik)"
+    CARD_SCREENTONE_DESC = (
+        "Mengisi bagian dalam teks dengan pola tekstur ala komik/manga (titik, garis, silang, atau gelombang). "
+        "Paling jelas terlihat pada font berukuran besar dan tebal (SFX / judul)."
+    )
+
+    CARD_OUTLINE_TITLE = "Text Outline & Glow"
+    CARD_OUTLINE_DESC = (
+        "Stroke memberi garis tepi tajam agar teks terbaca di atas latar ramai; "
+        "Glow memberi pendar cahaya lembut di sekeliling huruf."
+    )
+    CARD_LAYERS_TITLE = "Concentric Outline Layers (Lapisan Bertumpuk)"
+    CARD_LAYERS_DESC = (
+        "Menumpuk beberapa lapis outline sekaligus dari dalam ke luar "
+        "(misalnya layer putih + layer hitam luar untuk efek teks komik berlapis)."
+    )
+    CARD_SHADOW_TITLE = "Drop Shadow (Bayangan Jatuh)"
+    CARD_SHADOW_DESC = (
+        "Menambahkan bayangan ber-blur di belakang huruf dengan arah offset X/Y dan tingkat transparansi (opacity)."
+    )
+
+    CARD_WARP_TITLE = "Warp Effect (Efek Bentuk Teks)"
+    CARD_WARP_DESC = (
+        "Melengkungkan atau mendistorsi jalur teks (Curved, Wavy, Jagged Shout, Arc, Arch, Flag). "
+        "Atur kekuatan efek untuk mengontrol seberapa ekstrem bentuknya."
+    )
+    CARD_BEZIER_TITLE = "Bezier Control Points (0.0 - 1.0)"
+    CARD_BEZIER_DESC = (
+        "Khusus saat Effect = Curved: geser dua titik kontrol biru pada grafik untuk membentuk kurva lengkung kustom. "
+        "Angka X/Y (0.0 sampai 1.0) adalah koordinat ternormalisasi titik kontrol."
+    )
+    BEZIER_USE_CURVED_BTN = "Aktifkan Mode Curved"
+    BEZIER_RESET_BTN = "Reset Kurva"
+
+    BTN_REVERT = "Revert to Global Defaults"
+    TIP_REVERT = "Hapus override khusus area ini agar kembali mengikuti pengaturan global."
+    BTN_CANCEL = "Batal"
+    BTN_APPLY = "Terapkan"
+    TIP_APPLY = "Simpan semua perubahan dan render ulang teks di kanvas."
 
 
 def welcome_subtitle_html() -> str:

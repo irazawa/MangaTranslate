@@ -6,6 +6,7 @@ atribut yang dibuat di MangaOCRApp.__init__.
 """
 
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
+from src.ui.texts import TypesetText
 
 
 class TypesetMixin:
@@ -489,9 +490,20 @@ class TypesetMixin:
         orientation_row.setSpacing(6)
         self.orientation_group = QButtonGroup(self)
         self.orientation_group.setExclusive(True)
-        self.orientation_horizontal_button = self._create_tool_toggle(self._make_orientation_icon('horizontal'), "Horizontal text")
-        self.orientation_vertical_button = self._create_tool_toggle(self._make_orientation_icon('vertical'), "Vertical text")
-        for mode, button in (('horizontal', self.orientation_horizontal_button), ('vertical', self.orientation_vertical_button)):
+        self.orientation_horizontal_button = self._create_tool_toggle(
+            self._make_orientation_icon('horizontal'), TypesetText.TIP_ORIENTATION_HORIZONTAL
+        )
+        self.orientation_vertical_button = self._create_tool_toggle(
+            self._make_orientation_icon('vertical'), TypesetText.TIP_ORIENTATION_VERTICAL
+        )
+        self.orientation_vertical_upright_button = self._create_tool_toggle(
+            self._make_orientation_icon('vertical_upright'), TypesetText.TIP_ORIENTATION_UPRIGHT
+        )
+        for mode, button in (
+            ('horizontal', self.orientation_horizontal_button),
+            ('vertical', self.orientation_vertical_button),
+            ('vertical_upright', self.orientation_vertical_upright_button),
+        ):
             button.setCheckable(True)
             button.setProperty('orientation-mode', mode)
             self.orientation_group.addButton(button)
@@ -881,8 +893,8 @@ class TypesetMixin:
             doc.setDefaultFont(self.typeset_font)
 
             sample_text = self.preview_sample_text
-            if self.typeset_orientation == 'vertical':
-                vertical_chars = [ch for ch in self.preview_sample_text if ch.strip()]
+            if self.typeset_orientation == 'vertical_upright':
+                vertical_chars = [ch if ch.strip() else '' for ch in self.preview_sample_text]
                 sample_text = '\n'.join(vertical_chars)
             doc.setPlainText(sample_text)
 

@@ -544,15 +544,56 @@ def advanced_text_editor_stylesheet() -> str:
         border: 1px solid {COLORS["border"]};
         border-radius: {RADIUS["md"]}px;
         background: {COLORS["panel"]};
-        padding: 10px;
     }}
     #ate-title {{
         font-size: 16px;
-        font-weight: 700;
+        font-weight: 800;
         color: {COLORS["text"]};
+        background: transparent;
     }}
     #ate-subtitle {{
         color: {COLORS["muted"]};
+        font-size: 11px;
+        background: transparent;
+    }}
+    #ate-badge {{
+        background: {COLORS["card_alt"]};
+        color: {COLORS["accent"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: 10px;
+        padding: 3px 10px;
+        font-size: 10px;
+        font-weight: 700;
+    }}
+    QFrame#ate-toolbar-bar {{
+        background: {COLORS["panel"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: {RADIUS["md"]}px;
+    }}
+    QFrame#ate-card {{
+        background: {COLORS["panel"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: {RADIUS["md"]}px;
+    }}
+    #ate-card-title {{
+        color: {COLORS["accent"]};
+        font-weight: 700;
+        font-size: 12px;
+        background: transparent;
+    }}
+    #ate-card-desc {{
+        color: {COLORS["muted"]};
+        font-size: 11px;
+        background: transparent;
+    }}
+    #ate-pill {{
+        background: {COLORS["card_alt"]};
+        color: {COLORS["muted"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: 9px;
+        padding: 2px 8px;
+        font-size: 10px;
+        font-weight: 600;
     }}
     QGroupBox {{
         background: {COLORS["panel"]};
@@ -564,7 +605,7 @@ def advanced_text_editor_stylesheet() -> str:
     QGroupBox::title {{
         color: {COLORS["accent"]};
         padding: 0 8px;
-        font-weight: 600;
+        font-weight: 700;
     }}
     QLabel {{
         color: {COLORS["text"]};
@@ -574,7 +615,7 @@ def advanced_text_editor_stylesheet() -> str:
         background: {COLORS["card_alt"]};
         border: 1px solid {COLORS["border"]};
         border-radius: {RADIUS["sm"]}px;
-        padding: 6px 8px;
+        padding: 5px 8px;
         color: {COLORS["text"]};
         selection-background-color: {COLORS["accent"]};
         selection-color: {COLORS["bg"]};
@@ -582,17 +623,40 @@ def advanced_text_editor_stylesheet() -> str:
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
         border-color: {COLORS["accent"]};
     }}
+    QComboBox::drop-down {{
+        width: 22px;
+        border-left: 1px solid {COLORS["border"]};
+    }}
     QTextEdit {{
         border-radius: {RADIUS["md"]}px;
         padding: 10px;
-        line-height: 1.4;
+    }}
+    QCheckBox {{
+        color: {COLORS["text"]};
+        spacing: 8px;
+        font-weight: 600;
+        background: transparent;
+    }}
+    QCheckBox::indicator {{
+        width: 16px;
+        height: 16px;
+        border: 2px solid {COLORS["border"]};
+        border-radius: 4px;
+        background: {COLORS["card_alt"]};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {COLORS["accent"]};
+        border-color: {COLORS["accent"]};
+    }}
+    QCheckBox::indicator:hover {{
+        border-color: {COLORS["accent"]};
     }}
     QPushButton, QToolButton {{
         background: {COLORS["card_alt"]};
         color: {COLORS["text"]};
         border: 1px solid {COLORS["border"]};
         border-radius: {RADIUS["sm"]}px;
-        padding: 7px 12px;
+        padding: 6px 11px;
         font-weight: 600;
     }}
     QPushButton:enabled:hover, QToolButton:enabled:hover {{
@@ -600,10 +664,119 @@ def advanced_text_editor_stylesheet() -> str:
         border-color: {COLORS["accent"]};
         color: {COLORS["accent"]};
     }}
+    QPushButton:checked, QToolButton:checked {{
+        background: {COLORS["accent"]};
+        border-color: {COLORS["accent"]};
+        color: {COLORS["bg"]};
+        font-weight: 700;
+    }}
     QPushButton:disabled, QToolButton:disabled {{
-        background: {COLORS["panel"]};
+        background: {COLORS["bg"]};
         color: {COLORS["muted"]};
         border-color: {COLORS["border"]};
+    }}
+    QTabWidget#ate-tabs::pane {{
+        border: 1px solid {COLORS["border"]};
+        background: {COLORS["bg"]};
+        border-radius: {RADIUS["md"]}px;
+        margin-top: 6px;
+    }}
+    QTabWidget#ate-tabs > QTabBar::tab {{
+        background: {COLORS["panel"]};
+        color: {COLORS["muted"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: {RADIUS["sm"]}px;
+        padding: 6px 8px;
+        margin-right: 3px;
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QTabWidget#ate-tabs > QTabBar::tab:selected {{
+        background: {COLORS["card_alt"]};
+        color: {COLORS["accent"]};
+        border-color: {COLORS["accent"]};
+        font-weight: 700;
+    }}
+    QTabWidget#ate-tabs > QTabBar::tab:hover:!selected {{
+        color: {COLORS["text"]};
+        background: {COLORS["card_alt"]};
+    }}
+    QScrollArea, QWidget#ate-scroll-body {{
+        background: transparent;
+        border: none;
+    }}
+    QScrollBar:vertical {{
+        background: {COLORS["bg"]};
+        width: 8px;
+        margin: 2px 0;
+        border-radius: 4px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {COLORS["border"]};
+        min-height: 28px;
+        border-radius: 4px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {COLORS["accent"]};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0px;
+    }}
+    QFrame#ate-btn-bar {{
+        background: {COLORS["panel"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: {RADIUS["md"]}px;
+    }}
+    QPushButton#ate-apply-btn {{
+        background: {COLORS["accent"]};
+        color: #020617;
+        border-color: {COLORS["accent"]};
+        font-weight: 800;
+        padding: 7px 18px;
+    }}
+    QPushButton#ate-apply-btn:hover {{
+        background: {COLORS["accent_hover"]};
+        border-color: {COLORS["accent_hover"]};
+        color: #020617;
+    }}
+    QPushButton#ate-cancel-btn {{
+        background: transparent;
+        color: {COLORS["muted"]};
+        border-color: {COLORS["border"]};
+    }}
+    QPushButton#ate-cancel-btn:hover {{
+        background: {COLORS["border"]};
+        color: {COLORS["text"]};
+    }}
+    QPushButton#ate-revert-btn {{
+        background: transparent;
+        color: {COLORS["muted"]};
+        border-color: {COLORS["border"]};
+    }}
+    QPushButton#ate-revert-btn:hover {{
+        border-color: #f59e0b;
+        color: #fbbf24;
+        background: {COLORS["card_alt"]};
+    }}
+    QMenu {{
+        background-color: {COLORS["panel"]};
+        color: {COLORS["text"]};
+        border: 1px solid {COLORS["border"]};
+        border-radius: {RADIUS["md"]}px;
+        padding: 4px;
+    }}
+    QMenu::item {{
+        padding: 6px 24px 6px 12px;
+        border-radius: {RADIUS["sm"]}px;
+    }}
+    QMenu::item:selected {{
+        background-color: {COLORS["card_alt"]};
+        color: {COLORS["accent"]};
+    }}
+    QMenu::separator {{
+        height: 1px;
+        background: {COLORS["border"]};
+        margin: 4px 8px;
     }}
     {combo_popup_qss()}
     {list_widget_qss("QListWidget", compact=True)}
