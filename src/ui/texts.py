@@ -14,19 +14,19 @@ class NavText:
     FOCUS_MODE_ACTION = "Toggle Focus Mode (Canvas Only)"
     FOCUS_MODE_SHORTCUT = "Focus Mode (Canvas Only)"
     FOCUS_MODE_STATUS = "Focus Mode: Canvas Only (Press F2 to restore)"
-    COMPARE_MODE = "👁 Compare"
+    COMPARE_MODE = "Compare"
 
 
 class ActionText:
-    HELP_USAGE_MENU = "📖 Help & Usage..."
-    FULL_PAGE_TRANSLATE = "🚀 Terjemahkan Halaman Ini"
+    HELP_USAGE_MENU = "Help & Usage..."
+    FULL_PAGE_TRANSLATE = "Terjemahkan Halaman Ini"
     NEW_PROJECT_AUTOSAVED = "New project created and auto-saved."
 
 
 class DialogText:
     ABOUT_TITLE = "About & API Usage"
-    HELP_USAGE_TITLE = "📖 Help & Usage"
-    HELP_USAGE_HEADER = "📖  Help & Usage"
+    HELP_USAGE_TITLE = "Help & Usage"
+    HELP_USAGE_HEADER = "Help & Usage"
 
 
 class SettingsText:
@@ -48,10 +48,10 @@ class SettingsText:
         },
         {
             "key": "cleanup",
-            "label": "Cleanup",
-            "description": "Text cleanup defaults",
-            "title": "Cleanup",
-            "subtitle": "Choose how new text areas behave when the app cleans and redraws bubbles.",
+            "label": "Cleanup & Inpaint",
+            "description": "IOPaint server & cleanup",
+            "title": "Cleanup & Inpainting",
+            "subtitle": "Configure IOPaint server URL, inpainting backend, padding, and text box defaults.",
         },
         {
             "key": "appearance",
@@ -82,13 +82,6 @@ class SettingsText:
             "subtitle": "Manage translation and OCR provider keys, active keys, and the Tesseract path.",
         },
         {
-            "key": "ocr_plugins",
-            "label": "OCR Plugins",
-            "description": "Engines and languages",
-            "title": "OCR Plugins Manager",
-            "subtitle": "Enable OCR engines, install Tesseract, and manage local language models.",
-        },
-        {
             "key": "glossary",
             "label": "Glossary",
             "description": "Term consistency",
@@ -100,7 +93,7 @@ class SettingsText:
 
 class SettingsWorkspaceText:
     TITLE = "Settings"
-    SUBTITLE = "Profile, usage, help, and app preferences in one workspace."
+    SUBTITLE = "App settings, IOPaint configuration, workers monitor, and insights in one clean workspace."
     BACK_TO_APP = "Back to app"
     SEARCH_PLACEHOLDER = "Search settings..."
     PROFILE_NAME_FALLBACK = "MangaTranslate User"
@@ -117,29 +110,24 @@ class SettingsWorkspaceText:
 
     NAV_SECTIONS = [
         (
-            "Personal",
-            [
-                ("profile", "Profile", "Usage identity and streaks", "◎"),
-                ("usage", "Usage & Billing", "Costs, analytics, pricing", "$"),
-            ],
-        ),
-        (
             "App Settings",
             [
-                ("general", "General", "Export, autosave, defaults", "⚙"),
-                ("appearance", "Appearance", "Theme, fonts, motion", "◐"),
-                ("translation", "Translation", "Local/cloud models", "⇄"),
-                ("api", "API Keys", "Providers and tokens", "◇"),
-                ("ocr_plugins", "OCR Plugins", "Engines and languages", "▣"),
-                ("shortcuts", "Shortcuts", "Keyboard and mouse", "⌘"),
-                ("glossary", "Glossary", "Term consistency", "≡"),
-                ("cleanup", "Cleanup", "Text cleanup defaults", "✦"),
+                ("general", "General", "Export, autosave, presets", "settings"),
+                ("cleanup", "Cleanup & Inpaint", "IOPaint server & cleanup", "paintbrush"),
+                ("appearance", "Appearance", "Theme, fonts, motion", "palette"),
+                ("translation", "Translation", "Local/cloud models", "languages"),
+                ("api", "API Keys", "Providers and tokens", "key"),
+                ("shortcuts", "Shortcuts", "Keyboard and mouse", "keyboard"),
+                ("glossary", "Glossary", "Term consistency", "book"),
+                ("workers", "Workers Monitor", "Active jobs & threads", "activity"),
             ],
         ),
         (
-            "Help",
+            "Personal & Help",
             [
-                ("help_overview", "Help & About", "About app and project stats", "?"),
+                ("profile", "Profile", "Usage identity and streaks", "user"),
+                ("usage", "Usage & Billing", "Costs, analytics, pricing", "dollar"),
+                ("help_overview", "Help & About", "About app and project stats", "help"),
             ],
         ),
     ]
@@ -296,16 +284,32 @@ class FullPageBatchText:
     DIALOG_CANCEL_BTN = "Batalkan"
     DIALOG_STEP_WAIT = "Menunggu…"
 
+    SINGLE_DIALOG_TITLE = "Full-Page Translation"
+    SINGLE_PAGE_FMT = "Halaman: {name}"
+    SINGLE_LOCK_HINT = "Navigasi dan canvas dikunci sementara hingga proses selesai atau dibatalkan."
+    SINGLE_STEP_INIT = "Memulai proses halaman..."
+
     START_NO_TARGETS = "Tidak ada halaman untuk diproses. Semua halaman sudah di-typeset (atau sudah punya file _typeset) atau pilihan kosong."
     START_NEED_PICK = "Pilih dulu halaman yang ingin diproses."
     BATCH_BUSY = "Batch full-page masih berjalan. Tunggu hingga selesai."
     TOAST_DONE_FMT = "Batch selesai: {done} halaman diproses, {skipped} dilewati, {failed} gagal."
 
-    RESTORE_AREA_INPAINT_BTN = "↩ Pulihkan Inpaint Area"
+    RESTORE_AREA_INPAINT_BTN = "Pulihkan Inpaint Area"
     RESTORE_AREA_INPAINT_TIP = "Kembalikan gambar asli (sebelum inpaint) hanya pada area teks/SFX yang sedang dipilih."
-    CANCEL_PAGE_INPAINT_BTN = "✖ Batalkan Inpaint Halaman"
+    CANCEL_PAGE_INPAINT_BTN = "Batalkan Inpaint Halaman"
     CANCEL_PAGE_INPAINT_TIP = "Kembalikan seluruh gambar asli halaman ini seperti sebelum inpainting."
-    LAYER_RESTORE_INPAINT_ACTION = "↩ Pulihkan Inpaint Area Ini"
+    LAYER_RESTORE_INPAINT_ACTION = "Pulihkan Inpaint Area Ini"
+
+
+class TypesetText:
+    """Teks kontrol typesetting & auto font size (tab Typeset)."""
+
+    AUTO_FONT_SIZE_LABEL = "Auto Font Size (Fit Box)"
+    AUTO_FONT_SIZE_TIP = "Otomatis menyesuaikan ukuran font dengan besar bubble/area teks hasil deteksi."
+    FIT_FONT_SIZE_BTN = "Fit Box"
+    FIT_FONT_SIZE_TIP = "Sesuaikan ukuran font area terpilih agar pas mengisi kotak bubble."
+    FIT_FONT_SIZE_NO_SELECTION = "Pilih area teks terlebih dahulu untuk menyesuaikan ukuran font."
+    FIT_FONT_SIZE_APPLIED_FMT = "Ukuran font disesuaikan ke {size:.1f} pt."
 
 
 def welcome_subtitle_html() -> str:

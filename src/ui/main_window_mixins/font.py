@@ -23,7 +23,7 @@ class FontMixin:
             return
         fonts = self.font_manager.list_fonts()
         if group and getattr(self, 'font_groups', None):
-            fonts = fonts_in_group(fonts, self.font_groups.get(group, []))
+            fonts = fonts_in_group(fonts, self.font_groups.get(group, []), font_manager=self.font_manager)
 
         current_display = self.font_manager.display_name_for_font(getattr(self, 'typeset_font', None))
         target_display = preferred_display or current_display
@@ -35,6 +35,10 @@ class FontMixin:
                 preview_font.setPointSize(16)
                 index = self.font_dropdown.count() - 1
                 self.font_dropdown.setItemData(index, preview_font, Qt.FontRole)
+        if not fonts and group:
+            self.font_dropdown.setToolTip(f"Belum ada font terpasang di grup '{group}'. Klik Add Font untuk menambahkan.")
+        else:
+            self.font_dropdown.setToolTip("")
         if target_display in fonts:
             with QSignalBlocker(self.font_dropdown):
                 self.font_dropdown.setCurrentText(target_display)
@@ -212,4 +216,10 @@ class FontMixin:
         if 'typeset' not in SETTINGS:
             SETTINGS['typeset'] = {}
         SETTINGS['typeset']['auto_font_enabled'] = checked
+        save_settings(SETTINGS)
+
+    def _on_auto_font_size_toggled(self, checked):
+        if 'typeset' not in SETTINGS:
+            SETTINGS['typeset'] = {}
+        SETTINGS['typeset']['auto_font_size'] = bool(checked)
         save_settings(SETTINGS)

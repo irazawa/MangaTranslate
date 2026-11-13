@@ -64,10 +64,14 @@ class LayerMixin:
 
         # Title/desc
         desc = QLabel("Canvas Layers Manager")
+        desc.setWordWrap(True)
+        desc.setMinimumWidth(0)
         desc.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {theme.COLORS['accent']};")
         layout.addWidget(desc)
 
         help_lbl = QLabel("Right-Click: Rename / Fast Opacity  |  Double-Click: Edit Text")
+        help_lbl.setWordWrap(True)
+        help_lbl.setMinimumWidth(0)
         help_lbl.setStyleSheet(f"font-size: 9pt; color: {theme.COLORS['muted']};")
         layout.addWidget(help_lbl)
 
@@ -75,13 +79,16 @@ class LayerMixin:
         opacity_layout = QHBoxLayout()
         opacity_layout.addWidget(QLabel("Opacity:"))
         self.layer_opacity_slider = QSlider(Qt.Horizontal)
+        self.layer_opacity_slider.setMinimumWidth(0)
         self.layer_opacity_slider.setRange(0, 100)
         self.layer_opacity_slider.setValue(100)
         self.layer_opacity_slider.setSingleStep(5)
+        self.layer_opacity_slider.sliderPressed.connect(self._on_opacity_slider_pressed)
         self.layer_opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
-        opacity_layout.addWidget(self.layer_opacity_slider)
+        self.layer_opacity_slider.sliderReleased.connect(self._on_opacity_slider_released)
+        opacity_layout.addWidget(self.layer_opacity_slider, 1)
         self.layer_opacity_label = QLabel("100%")
-        self.layer_opacity_label.setMinimumWidth(35)
+        self.layer_opacity_label.setMinimumWidth(36)
         self.layer_opacity_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         opacity_layout.addWidget(self.layer_opacity_label)
         layout.addLayout(opacity_layout)
@@ -89,6 +96,8 @@ class LayerMixin:
         # List Widget
         self.layers_list_widget = QListWidget()
         self.layers_list_widget.setObjectName("layers-list")
+        self.layers_list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.layers_list_widget.setMinimumWidth(0)
         self.layers_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.layers_list_widget.customContextMenuRequested.connect(self._show_layer_context_menu)
         self.layers_list_widget.setStyleSheet(self._layers_list_qss())
@@ -98,10 +107,12 @@ class LayerMixin:
         # Control row
         btn_row = QHBoxLayout()
         add_layer_btn = QPushButton("+ Add Layer")
+        add_layer_btn.setMinimumWidth(0)
         add_layer_btn.clicked.connect(self._add_new_manual_layer)
         add_layer_btn.setStyleSheet(theme.secondary_button_qss())
         
         clear_all_btn = QPushButton("Clear All")
+        clear_all_btn.setMinimumWidth(0)
         clear_all_btn.clicked.connect(self._clear_all_layers)
         clear_all_btn.setStyleSheet(theme.danger_button_qss())
         
@@ -174,21 +185,19 @@ class LayerMixin:
             layout.addWidget(label, 1)
             
             # 4. Reorder Buttons
-            up_btn = QPushButton("▲")
+            up_btn = QPushButton()
+            up_btn.setIcon(app_icon("chevron-up", theme.COLORS['text'], size=12))
+            up_btn.setIconSize(QSize(12, 12))
             up_btn.setFixedSize(20, 20)
-            up_btn.setStyleSheet(
-                self._small_layer_button_qss()
-                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
-            )
+            up_btn.setStyleSheet(self._small_layer_button_qss())
             up_btn.clicked.connect(partial(self._move_layer_up, area))
             layout.addWidget(up_btn)
             
-            down_btn = QPushButton("▼")
+            down_btn = QPushButton()
+            down_btn.setIcon(app_icon("chevron-down", theme.COLORS['text'], size=12))
+            down_btn.setIconSize(QSize(12, 12))
             down_btn.setFixedSize(20, 20)
-            down_btn.setStyleSheet(
-                self._small_layer_button_qss()
-                + "font-size: 8pt; font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
-            )
+            down_btn.setStyleSheet(self._small_layer_button_qss())
             down_btn.clicked.connect(partial(self._move_layer_down, area))
             layout.addWidget(down_btn)
             
@@ -249,7 +258,8 @@ class LayerMixin:
         self._refresh_layers_list()
 
     def _add_new_manual_layer(self):
-        self.ocr_lang_combo.setCurrentText("Manual Text (Rect)")
+        if getattr(self, 'ocr_lang_combo', None) is not None:
+            self.ocr_lang_combo.setCurrentText("Manual Text (Rect)")
         from src.ui.canvas import TypesetArea
         rect = QRect(100, 100, 200, 80)
         from PyQt5.QtGui import QFont, QColor
@@ -306,6 +316,7 @@ class LayerMixin:
         menu.addAction(rename_action)
 
         restore_inpaint_action = QAction(FullPageBatchText.LAYER_RESTORE_INPAINT_ACTION, self)
+        restore_inpaint_action.setIcon(app_icon("undo", theme.COLORS['text'], size=14))
         restore_inpaint_action.triggered.connect(partial(self.restore_selected_area_inpaint, area))
         menu.addAction(restore_inpaint_action)
         

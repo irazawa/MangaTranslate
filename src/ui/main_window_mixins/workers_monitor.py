@@ -10,6 +10,9 @@ from collections import deque
 
 from PyQt5.QtCore import QTimer
 
+from src.ui import theme
+from src.ui.icons import app_icon
+from src.ui.texts import ActionText
 from src.ui.workers_panel import WorkersPanel, format_duration
 
 # Worker dianggap macet jika tidak ganti tahap selama sebanyak ini
@@ -182,7 +185,10 @@ class WorkersMonitorMixin:
     def cancel_full_page_translation(self):
         worker = getattr(self, '_full_page_worker', None)
         if worker is not None and worker.isRunning():
-            worker._is_cancelled = True
+            if hasattr(worker, 'cancel'):
+                worker.cancel()
+            else:
+                worker._is_cancelled = True
             self.show_toast("Batalkan full-page", "Full-page translation dibatalkan pada halaman berjalan.", kind="info")
 
     def force_kill_full_page_translation(self):
@@ -192,6 +198,15 @@ class WorkersMonitorMixin:
         worker.terminate()
         if not worker.wait(2000):
             self._zombie_threads.append(worker)
+        else:
+            self._full_page_worker = None
+        if hasattr(self, '_close_full_page_progress_dialog'):
+            self._close_full_page_progress_dialog()
+        btn = getattr(self, 'auto_translate_page_btn', None)
+        if btn is not None:
+            btn.setText(ActionText.FULL_PAGE_TRANSLATE)
+            btn.setIcon(app_icon("rocket", theme.COLORS['bg'], size=15))
+            btn.setEnabled(True)
         self.show_toast("Full-page dihentikan paksa", "Thread full-page translation diterminasi.", kind="warning")
 
     def cancel_batch_job(self):

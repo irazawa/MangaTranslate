@@ -22,6 +22,8 @@ import traceback
 import threading
 import logging
 
+from src.ui.icons import app_icon, app_pixmap, icon_label
+
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -350,14 +352,15 @@ class CodeBlock(QFrame):
     def __init__(self, code: str, lang: str = "", parent=None):
         super().__init__(parent)
         self._code = code
+        c = theme.COLORS
         self.setFrameShape(QFrame.NoFrame)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.setStyleSheet("""
-            CodeBlock {
-                background: #0a0d14;
-                border: 1px solid #1e3a5f;
-                border-radius: 8px;
-            }
+        self.setStyleSheet(f"""
+            CodeBlock {{
+                background: {c['bg']};
+                border: 1px solid {c['border']};
+                border-radius: 10px;
+            }}
         """)
 
         root = QVBoxLayout(self)
@@ -368,37 +371,45 @@ class CodeBlock(QFrame):
         header = QFrame()
         header.setFrameShape(QFrame.NoFrame)
         header.setFixedHeight(30)
-        header.setStyleSheet("""
-            QFrame {
-                background: #0f1a2a;
-                border-radius: 8px 8px 0 0;
-                border-bottom: 1px solid #1e3a5f;
-            }
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: {c['card_alt']};
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                border-bottom: 1px solid {c['border']};
+            }}
         """)
         hlay = QHBoxLayout(header)
         hlay.setContentsMargins(10, 0, 8, 0)
 
-        lang_lbl = QLabel(lang if lang else "code")
-        lang_lbl.setStyleSheet("color: #475569; font-size: 10px; font-family: monospace;")
+        lang_lbl = QLabel(lang.upper() if lang else "CODE")
+        lang_lbl.setStyleSheet(
+            f"color: {c['muted']}; font-size: 9.5px; font-weight: 700; "
+            "font-family: 'Consolas', 'Courier New', monospace; letter-spacing: 0.5px;"
+        )
         hlay.addWidget(lang_lbl)
         hlay.addStretch()
 
-        self._copy_btn = QPushButton("⎘ Copy")
-        self._copy_btn.setFixedHeight(22)
-        self._copy_btn.setStyleSheet("""
-            QPushButton {
+        self._copy_btn = QPushButton("Copy")
+        self._copy_btn.setIcon(app_icon("copy", c['muted'], size=12))
+        self._copy_btn.setIconSize(QSize(12, 12))
+        self._copy_btn.setFixedHeight(21)
+        self._copy_btn.setCursor(Qt.PointingHandCursor)
+        self._copy_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                color: #64748b;
-                border: 1px solid #1e293b;
-                border-radius: 4px;
-                padding: 0 8px;
+                color: {c['muted']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 0 9px;
                 font-size: 10px;
-            }
-            QPushButton:hover {
-                background: #1e293b;
-                color: #38bdf8;
-                border-color: #38bdf8;
-            }
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {c['panel']};
+                color: {c['accent']};
+                border-color: {c['accent']};
+            }}
         """)
         self._copy_btn.clicked.connect(self._copy_code)
         hlay.addWidget(self._copy_btn)
@@ -412,21 +423,23 @@ class CodeBlock(QFrame):
         self._code_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._code_edit.setMinimumHeight(40)
         self._code_edit.setMaximumHeight(400)
-        self._code_edit.setStyleSheet("""
-            QTextEdit {
-                background: #0a0d14;
-                color: #7dd3fc;
+        self._code_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background: {c['bg']};
+                color: {c['text']};
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 12px;
                 border: none;
-                border-radius: 0 0 8px 8px;
+                border-bottom-left-radius: 10px;
+                border-bottom-right-radius: 10px;
                 padding: 10px 12px;
-                selection-background-color: #1e3a5f;
-            }
-            QScrollBar:horizontal {
-                background: #0f1a2a; height: 6px; border-radius: 3px;
-            }
-            QScrollBar::handle:horizontal { background: #1e3a5f; border-radius: 3px; }
+                selection-background-color: {c['accent']};
+                selection-color: {c['bg']};
+            }}
+            QScrollBar:horizontal {{
+                background: {c['panel']}; height: 6px; border-radius: 3px;
+            }}
+            QScrollBar::handle:horizontal {{ background: {c['border']}; border-radius: 3px; }}
         """)
         # Auto-resize height to content
         doc = self._code_edit.document()
@@ -440,7 +453,9 @@ class CodeBlock(QFrame):
 
     def _copy_code(self):
         QApplication.clipboard().setText(self._code)
-        self._copy_btn.setText("✓ Copied!")
+        self._copy_btn.setText("Copied!")
+        self._copy_btn.setIcon(app_icon("check", theme.COLORS["success"], size=12))
+        self._copy_btn.setIconSize(QSize(12, 12))
         self._copy_btn.setStyleSheet("""
             QPushButton {
                 background: #0f2d1a;
@@ -454,7 +469,9 @@ class CodeBlock(QFrame):
         QTimer.singleShot(2000, self._reset_copy_btn)
 
     def _reset_copy_btn(self):
-        self._copy_btn.setText("⎘ Copy")
+        self._copy_btn.setText("Copy")
+        self._copy_btn.setIcon(app_icon("copy", theme.COLORS["muted"], size=12))
+        self._copy_btn.setIconSize(QSize(12, 12))
         self._copy_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -494,9 +511,9 @@ class ChatBubble(QFrame):
         self.setFrameShape(QFrame.NoFrame)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
-        # Outer layout: small indent on one side so bubbles don't go edge-to-edge
+        # Outer layout: subtle directional asymmetry without squeezing narrow panels
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(4, 3, 4, 3)
+        outer.setContentsMargins(6, 4, 6, 4)
         outer.setSpacing(0)
 
         # Inner bubble frame — expands to fill available width
@@ -505,37 +522,25 @@ class ChatBubble(QFrame):
         self._bubble.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         self._inner_layout = QVBoxLayout(self._bubble)
-        self._inner_layout.setContentsMargins(12, 8, 12, 8)
+        self._inner_layout.setContentsMargins(12, 9, 12, 10)
         self._inner_layout.setSpacing(6)
 
-        # Role label row (role name + copy-all button)
-        role_name = "You" if role == "user" else "AI"
-        role_color = "#38bdf8" if role == "user" else "#a78bfa"
-
+        # Role label pill + copy button
+        role_name = "YOU" if role == "user" else "AI"
         role_row = QHBoxLayout()
         role_row.setContentsMargins(0, 0, 0, 0)
         role_row.setSpacing(6)
 
-        role_label = QLabel(role_name)
-        role_label.setStyleSheet(
-            f"font-size: 10px; font-weight: 700; color: {role_color};"
-        )
-        role_row.addWidget(role_label)
+        self._role_label = QLabel(role_name)
+        role_row.addWidget(self._role_label)
         role_row.addStretch()
 
-        self._copy_all_btn = QPushButton("⎘")
-        self._copy_all_btn.setFixedSize(20, 18)
+        self._copy_all_btn = QPushButton()
+        self._copy_all_btn.setIcon(app_icon("copy", theme.COLORS["muted"], size=12))
+        self._copy_all_btn.setIconSize(QSize(12, 12))
+        self._copy_all_btn.setFixedSize(24, 20)
+        self._copy_all_btn.setCursor(Qt.PointingHandCursor)
         self._copy_all_btn.setToolTip("Copy message")
-        self._copy_all_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #475569;
-                border: none;
-                font-size: 11px;
-                border-radius: 3px;
-            }
-            QPushButton:hover { color: #38bdf8; background: rgba(56,189,248,0.1); }
-        """)
         self._copy_all_btn.clicked.connect(self._copy_all)
         role_row.addWidget(self._copy_all_btn)
 
@@ -547,34 +552,64 @@ class ChatBubble(QFrame):
         self._content_area.setSpacing(6)
         self._inner_layout.addLayout(self._content_area)
 
-
         if role == "user":
-            self._bubble.setStyleSheet("""
-                QFrame {
-                    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #1e3a5f, stop:1 #1a2e4a);
-                    border: 1px solid #2d5a8e;
-                    border-radius: 16px 4px 16px 16px;
-                }
-            """)
-            # User: small indent on the LEFT so bubble aligns right-ish
-            outer.addSpacing(24)
+            outer.addSpacing(26)
             outer.addWidget(self._bubble)
         else:
-            self._bubble.setStyleSheet("""
-                QFrame {
-                    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #1a1f2e, stop:1 #141824);
-                    border: 1px solid #2a3350;
-                    border-radius: 4px 16px 16px 16px;
-                }
-            """)
-            # AI: small indent on the RIGHT so bubble aligns left-ish
             outer.addWidget(self._bubble)
-            outer.addSpacing(24)
+            outer.addSpacing(10)
+
+        self.refresh_theme()
 
         if content:
             self.set_content(content)
+
+    def refresh_theme(self):
+        c = theme.COLORS
+        if self.role == "user":
+            self._role_label.setStyleSheet(
+                f"background: {c['accent']}; color: {c['bg']}; "
+                "font-size: 9px; font-weight: 800; letter-spacing: 0.5px; "
+                "padding: 2px 7px; border-radius: 6px;"
+            )
+            self._bubble.setStyleSheet(f"""
+                QFrame {{
+                    background: {c['card_alt']};
+                    border: 1px solid {c['accent']};
+                    border-radius: 12px;
+                }}
+            """)
+        else:
+            self._role_label.setStyleSheet(
+                f"background: {c['card_alt']}; color: {c['accent']}; "
+                f"border: 1px solid {c['border']}; "
+                "font-size: 9px; font-weight: 800; letter-spacing: 0.5px; "
+                "padding: 2px 7px; border-radius: 6px;"
+            )
+            self._bubble.setStyleSheet(f"""
+                QFrame {{
+                    background: {c['panel']};
+                    border: 1px solid {c['border']};
+                    border-radius: 12px;
+                }}
+            """)
+
+        self._copy_all_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {c['muted']};
+                border: 1px solid transparent;
+                font-size: 10px;
+                font-weight: 600;
+                padding: 0 7px;
+                border-radius: 5px;
+            }}
+            QPushButton:hover {{
+                color: {c['accent']};
+                background: {c['card_alt']};
+                border: 1px solid {c['border']};
+            }}
+        """)
 
     # ------------------------------------------------------------------
     # Content rendering
@@ -596,9 +631,10 @@ class ChatBubble(QFrame):
         )
         lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         lbl.setOpenExternalLinks(True)
-        color = "#d1e8ff" if self.role == "user" else "#cbd5e1"
+        colors = theme.COLORS
+        color = "#e0f2fe" if self.role == "user" else colors["text"]
         lbl.setStyleSheet(
-            f"color: {color}; font-size: 13px; background: transparent;"
+            f"color: {color}; font-size: 13px; line-height: 1.45; background: transparent;"
         )
         lbl.setText(html)
         return lbl
@@ -649,12 +685,14 @@ class ChatBubble(QFrame):
     def _inline_markdown(text: str) -> str:
         """Convert inline markdown (bold, italic, inline-code) and newlines to HTML."""
         import html as html_lib
+        colors = theme.COLORS
         t = html_lib.escape(text)
         # Inline code
         t = re.sub(
             r"`([^`]+)`",
-            r'<code style="background:#0f1420;padding:2px 5px;border-radius:4px;'
-            r'color:#7dd3fc;font-family:monospace;font-size:12px;">\1</code>',
+            f'<code style="background:{colors["card_alt"]};padding:2px 6px;border-radius:4px;'
+            f'border:1px solid {colors["border"]};color:{colors["accent_hover"]};'
+            f'font-family:Consolas,monospace;font-size:12px;">\\1</code>',
             t
         )
         # Bold
@@ -668,7 +706,9 @@ class ChatBubble(QFrame):
     def _copy_all(self):
         """Copy the entire raw message text to clipboard."""
         QApplication.clipboard().setText(self._full_content)
-        self._copy_all_btn.setText("✓")
+        self._copy_all_btn.setText("")
+        self._copy_all_btn.setIcon(app_icon("check", theme.COLORS["success"], size=12))
+        self._copy_all_btn.setIconSize(QSize(12, 12))
         self._copy_all_btn.setStyleSheet("""
             QPushButton {
                 background: rgba(74,222,128,0.12);
@@ -681,7 +721,9 @@ class ChatBubble(QFrame):
         QTimer.singleShot(2000, self._reset_copy_all_btn)
 
     def _reset_copy_all_btn(self):
-        self._copy_all_btn.setText("⎘")
+        self._copy_all_btn.setText("")
+        self._copy_all_btn.setIcon(app_icon("copy", theme.COLORS["muted"], size=12))
+        self._copy_all_btn.setIconSize(QSize(12, 12))
         self._copy_all_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -726,8 +768,9 @@ class TypingIndicator(QFrame):
 
         self._dots = []
         for _ in range(3):
-            dot = QLabel("●")
-            dot.setStyleSheet("color: #475569; font-size: 10px;")
+            dot = QFrame()
+            dot.setFixedSize(7, 7)
+            dot.setStyleSheet("background: #475569; border-radius: 3px;")
             b_layout.addWidget(dot)
             self._dots.append(dot)
 
@@ -743,7 +786,7 @@ class TypingIndicator(QFrame):
         colors = ["#38bdf8", "#475569", "#475569"]
         for i, dot in enumerate(self._dots):
             color = colors[(i - self._step) % 3]
-            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+            dot.setStyleSheet(f"background: {color}; border-radius: 3px;")
         self._step = (self._step + 1) % 3
 
     def stop(self):
@@ -762,6 +805,7 @@ class HistoryDialog(QDialog):
     def __init__(self, sessions: List[dict], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Chat History")
+        self.setWindowIcon(app_icon("history", "#38bdf8", size=16))
         self.setMinimumSize(420, 360)
         self.setStyleSheet("""
             QDialog { background: #0e111a; color: #cbd5e1; }
@@ -775,7 +819,7 @@ class HistoryDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        header = QLabel("📜  Select a previous conversation")
+        header = QLabel("Select a previous conversation")
         header.setStyleSheet("color: #38bdf8; font-size: 13px; font-weight: 700; padding: 4px;")
         layout.addWidget(header)
 
@@ -784,7 +828,8 @@ class HistoryDialog(QDialog):
         for s in sessions:
             dt = datetime.fromtimestamp(s["updated_at"]).strftime("%d %b %Y %H:%M")
             n = s.get("msg_count", 0)
-            item = QListWidgetItem(f"💬 {s['title']}\n   {s['provider']} · {s['model']}  •  {n} msgs  •  {dt}")
+            item = QListWidgetItem(f"{s['title']}\n{s['provider']} · {s['model']}  •  {n} msgs  •  {dt}")
+            item.setIcon(app_icon("message", theme.COLORS["accent"], size=16))
             item.setData(Qt.UserRole, s["id"])
             self._list.addItem(item)
         self._list.itemDoubleClicked.connect(self._on_select)
@@ -856,34 +901,29 @@ class AIChatWidgetContent(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self._icon_btns = []
 
         # ---- Top bar ----
         top_bar = QFrame()
+        top_bar.setObjectName("chat-top-bar")
         self._top_bar = top_bar
         top_bar.setFrameShape(QFrame.NoFrame)
-        top_bar.setFixedHeight(48)
-        top_bar.setStyleSheet("""
-            QFrame {
-                background: #0b0e16;
-                border-bottom: 1px solid #1e293b;
-            }
-        """)
+        top_bar.setFixedHeight(44)
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(10, 6, 10, 6)
+        top_layout.setContentsMargins(12, 6, 10, 6)
         top_layout.setSpacing(6)
 
-        ai_icon = QLabel("🤖")
-        ai_icon.setStyleSheet("font-size: 18px;")
-        top_layout.addWidget(ai_icon)
+        self._accent_dot = icon_label("sparkles", theme.COLORS['accent'], size=15)
+        top_layout.addWidget(self._accent_dot)
 
-        self._title_label = QLabel("AI Chat")
-        self._title_label.setStyleSheet("color: #38bdf8; font-size: 13px; font-weight: 700;")
+        self._title_label = QLabel("AI Assistant")
         top_layout.addWidget(self._title_label)
         top_layout.addStretch(1)
 
-        history_btn = self._make_icon_btn("📜", "Lihat History Chat", self._open_history)
-        new_btn = self._make_icon_btn("✚", "Mulai Chat Baru", self._new_chat)
-        clear_btn = self._make_icon_btn("🗑", "Hapus Chat Ini", self._clear_current_chat)
+        history_btn = self._make_icon_btn("history", "Lihat History Chat", self._open_history)
+        new_btn = self._make_icon_btn("plus", "Mulai Chat Baru", self._new_chat)
+        clear_btn = self._make_icon_btn("trash", "Hapus Chat Ini", self._clear_current_chat)
+        self._icon_btns.extend([history_btn, new_btn, clear_btn])
         top_layout.addWidget(history_btn)
         top_layout.addWidget(new_btn)
         top_layout.addWidget(clear_btn)
@@ -891,43 +931,32 @@ class AIChatWidgetContent(QWidget):
 
         # ---- Model selector row ----
         model_bar = QFrame()
+        model_bar.setObjectName("chat-model-bar")
         self._model_bar = model_bar
         model_bar.setFrameShape(QFrame.NoFrame)
-        model_bar.setStyleSheet("QFrame { background: #090a0f; border-bottom: 1px solid #1a2235; }")
         model_layout = QHBoxLayout(model_bar)
-        model_layout.setContentsMargins(10, 6, 10, 6)
+        model_layout.setContentsMargins(12, 6, 10, 6)
         model_layout.setSpacing(8)
 
-        model_lbl = QLabel("Model:")
+        model_lbl = QLabel("Model")
         self._model_label = model_lbl
-        model_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
         model_layout.addWidget(model_lbl)
 
         self._model_combo = QComboBox()
-        self._model_combo.setStyleSheet("""
-            QComboBox {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                border-radius: 8px;
-                padding: 4px 8px;
-                color: #cbd5e1;
-                font-size: 11px;
-                min-width: 180px;
-            }
-            QComboBox::drop-down { width: 20px; border-left: 1px solid #1e293b; }
-            QComboBox QAbstractItemView {
-                background: #0f131c;
-                border: 1px solid #1e293b;
-                color: #cbd5e1;
-                selection-background-color: #1e3a5f;
-            }
-        """)
-        self._model_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._model_combo.setMinimumWidth(0)
+        self._model_combo.setMinimumContentsLength(10)
+        self._model_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._model_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        try:
+            self._model_combo.view().setTextElideMode(Qt.ElideRight)
+        except Exception:
+            pass
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
-        model_layout.addWidget(self._model_combo)
+        model_layout.addWidget(self._model_combo, 1)
 
-        refresh_btn = self._make_icon_btn("⟳", "Refresh daftar model", self.refresh_models)
+        refresh_btn = self._make_icon_btn("refresh", "Refresh daftar model", self.refresh_models)
         refresh_btn.setFixedSize(28, 28)
+        self._icon_btns.append(refresh_btn)
         model_layout.addWidget(refresh_btn)
         root.addWidget(model_bar)
 
@@ -936,84 +965,46 @@ class AIChatWidgetContent(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("""
-            QScrollArea { background: #090a0f; border: none; }
-            QScrollBar:vertical { background: #0b0e16; width: 6px; border-radius: 3px; }
-            QScrollBar::handle:vertical { background: #1e293b; border-radius: 3px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
 
         self._messages_container = QWidget()
-        self._messages_container.setStyleSheet("background: #090a0f;")
         self._messages_layout = QVBoxLayout(self._messages_container)
-        self._messages_layout.setContentsMargins(0, 12, 0, 12)
-        self._messages_layout.setSpacing(4)
+        self._messages_layout.setContentsMargins(4, 10, 4, 10)
+        self._messages_layout.setSpacing(6)
         self._messages_layout.addStretch(1)  # push messages to top initially
 
         self._scroll.setWidget(self._messages_container)
         root.addWidget(self._scroll, 1)
 
-        # ---- Input area ----
+        # ---- Input composer area ----
         input_frame = QFrame()
+        input_frame.setObjectName("chat-input-frame")
         self._input_frame = input_frame
         input_frame.setFrameShape(QFrame.NoFrame)
-        input_frame.setStyleSheet("""
-            QFrame {
-                background: #0b0e16;
-                border-top: 1px solid #1e293b;
-            }
-        """)
         input_layout = QHBoxLayout(input_frame)
-        input_layout.setContentsMargins(10, 10, 10, 10)
+        input_layout.setContentsMargins(10, 8, 10, 8)
         input_layout.setSpacing(8)
 
         self._input_box = QTextEdit()
         self._input_box.setPlaceholderText("Ketik pesan di sini… (Enter = kirim, Shift+Enter = baris baru)")
-        self._input_box.setMaximumHeight(100)
+        self._input_box.setMaximumHeight(110)
         self._input_box.setMinimumHeight(42)
         self._input_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._input_box.setStyleSheet("""
-            QTextEdit {
-                background: #0f1420;
-                border: 1px solid #1e293b;
-                border-radius: 12px;
-                padding: 8px 12px;
-                color: #e2e8f0;
-                font-size: 13px;
-            }
-            QTextEdit:focus {
-                border: 1px solid #38bdf8;
-            }
-        """)
         # Override key press to send on Enter
         self._input_box.installEventFilter(self)
         input_layout.addWidget(self._input_box)
 
-        self._send_btn = QPushButton("➤")
-        self._send_btn.setFixedSize(42, 42)
-        self._send_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #0284c7, stop:1 #38bdf8);
-                color: #fff;
-                border: none;
-                border-radius: 21px;
-                font-size: 16px;
-                font-weight: 700;
-            }
-            QPushButton:hover { background: #38bdf8; }
-            QPushButton:pressed { background: #0369a1; }
-            QPushButton:disabled { background: #1e293b; color: #64748b; }
-        """)
+        self._send_btn = QPushButton()
+        self._send_btn.setIcon(app_icon("send", theme.COLORS['bg'], size=16))
+        self._send_btn.setIconSize(QSize(16, 16))
+        self._send_btn.setFixedSize(38, 38)
+        self._send_btn.setCursor(Qt.PointingHandCursor)
+        self._send_btn.setToolTip("Kirim pesan (Enter)")
         self._send_btn.clicked.connect(self._on_send)
-        input_layout.addWidget(self._send_btn)
+        input_layout.addWidget(self._send_btn, 0, Qt.AlignBottom)
         root.addWidget(input_frame)
 
         # ---- Status bar ----
         self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet(
-            "color: #475569; font-size: 10px; padding: 2px 10px 4px 10px; background: #090a0f;"
-        )
         root.addWidget(self._status_label)
 
         # Populate models on first load
@@ -1021,90 +1012,129 @@ class AIChatWidgetContent(QWidget):
         self.refresh_theme()
 
     def refresh_theme(self):
-        frame_qss = f"""
-            QFrame {{
-                background: {theme.COLORS['panel']};
-                border-color: {theme.COLORS['border']};
+        c = theme.COLORS
+        if getattr(self, '_top_bar', None) is not None:
+            self._top_bar.setStyleSheet(f"""
+                QFrame#chat-top-bar {{
+                    background: {c['panel']};
+                    border-bottom: 1px solid {c['border']};
+                }}
+            """)
+        if getattr(self, '_model_bar', None) is not None:
+            self._model_bar.setStyleSheet(f"""
+                QFrame#chat-model-bar {{
+                    background: {c['bg']};
+                    border-bottom: 1px solid {c['border']};
+                }}
+            """)
+        if getattr(self, '_input_frame', None) is not None:
+            self._input_frame.setStyleSheet(f"""
+                QFrame#chat-input-frame {{
+                    background: {c['panel']};
+                    border-top: 1px solid {c['border']};
+                }}
+            """)
+        if getattr(self, '_accent_dot', None) is not None:
+            self._accent_dot.setPixmap(app_pixmap("sparkles", c['accent'], size=15))
+            self._accent_dot.setStyleSheet("background: transparent;")
+        if getattr(self, '_title_label', None) is not None:
+            self._title_label.setStyleSheet(
+                f"color: {c['text']}; font-size: 13px; font-weight: 700; background: transparent;"
+            )
+        if getattr(self, '_model_label', None) is not None:
+            self._model_label.setStyleSheet(
+                f"color: {c['muted']}; font-size: 10.5px; font-weight: 700; background: transparent;"
+            )
+        icon_qss = f"""
+            QToolButton {{
+                background: {c['card_alt']};
+                border: 1px solid {c['border']};
+                color: {c['muted']};
+                font-size: 13px;
+                border-radius: 8px;
+            }}
+            QToolButton:hover {{
+                background: {c['panel']};
+                border: 1px solid {c['accent']};
+                color: {c['accent']};
             }}
         """
-        for frame in (getattr(self, '_top_bar', None), getattr(self, '_model_bar', None), getattr(self, '_input_frame', None)):
-            if frame is not None:
-                frame.setStyleSheet(frame_qss)
-        if getattr(self, '_title_label', None) is not None:
-            self._title_label.setStyleSheet(f"color: {theme.COLORS['accent']}; font-size: 13px; font-weight: 700;")
-        if getattr(self, '_model_label', None) is not None:
-            self._model_label.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 11px;")
+        for btn in getattr(self, '_icon_btns', []):
+            if btn is not None:
+                btn.setStyleSheet(icon_qss)
+                icon_name = btn.property("icon_name")
+                if icon_name:
+                    btn.setIcon(app_icon(icon_name, c['muted'], size=15, active_color=c['accent']))
         if getattr(self, '_model_combo', None) is not None:
             self._model_combo.setStyleSheet(f"""
                 QComboBox {{
-                    background: {theme.COLORS['card_alt']};
-                    border: 1px solid {theme.COLORS['border']};
+                    background: {c['card_alt']};
+                    border: 1px solid {c['border']};
                     border-radius: 8px;
-                    padding: 4px 8px;
-                    color: {theme.COLORS['text']};
+                    padding: 4px 10px;
+                    color: {c['text']};
                     font-size: 11px;
-                    min-width: 180px;
                 }}
-                QComboBox::drop-down {{ width: 20px; border-left: 1px solid {theme.COLORS['border']}; }}
+                QComboBox:hover {{ border-color: {c['accent']}; }}
+                QComboBox::drop-down {{ width: 20px; border: none; }}
                 {theme.combo_popup_qss()}
             """)
         if getattr(self, '_scroll', None) is not None:
             self._scroll.setStyleSheet(f"""
-                QScrollArea {{ background: {theme.COLORS['bg']}; border: none; }}
-                QScrollBar:vertical {{ background: {theme.COLORS['panel']}; width: 6px; border-radius: 3px; }}
-                QScrollBar::handle:vertical {{ background: {theme.COLORS['border']}; border-radius: 3px; }}
+                QScrollArea {{ background: {c['bg']}; border: none; }}
+                QScrollBar:vertical {{ background: {c['panel']}; width: 6px; border-radius: 3px; }}
+                QScrollBar::handle:vertical {{ background: {c['border']}; border-radius: 3px; }}
                 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
             """)
         if getattr(self, '_messages_container', None) is not None:
-            self._messages_container.setStyleSheet(f"background: {theme.COLORS['bg']};")
+            self._messages_container.setStyleSheet(f"background: {c['bg']};")
         if getattr(self, '_input_box', None) is not None:
             self._input_box.setStyleSheet(f"""
                 QTextEdit {{
-                    background: {theme.COLORS['card_alt']};
-                    border: 1px solid {theme.COLORS['border']};
+                    background: {c['card_alt']};
+                    border: 1px solid {c['border']};
                     border-radius: 12px;
                     padding: 8px 12px;
-                    color: {theme.COLORS['text']};
-                    font-size: 13px;
+                    color: {c['text']};
+                    font-size: 12.5px;
                 }}
                 QTextEdit:focus {{
-                    border: 1px solid {theme.COLORS['accent']};
+                    border: 1px solid {c['accent']};
+                    background: {c['bg']};
                 }}
             """)
         if getattr(self, '_send_btn', None) is not None:
+            icon_key = "stop" if getattr(self, '_streaming', False) else "send"
+            self._send_btn.setIcon(app_icon(icon_key, c['bg'], size=16))
             self._send_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: {theme.COLORS['accent']};
-                    color: {theme.COLORS['bg']};
+                    background: {c['accent']};
+                    color: {c['bg']};
                     border: none;
-                    border-radius: 21px;
-                    font-size: 16px;
+                    border-radius: 10px;
+                    font-size: 15px;
                     font-weight: 700;
                 }}
-                QPushButton:hover {{ background: {theme.COLORS['accent_hover']}; }}
-                QPushButton:disabled {{ background: {theme.COLORS['border']}; color: {theme.COLORS['muted']}; }}
+                QPushButton:hover {{ background: {c['accent_hover']}; }}
+                QPushButton:disabled {{ background: {c['border']}; color: {c['muted']}; }}
             """)
         if getattr(self, '_status_label', None) is not None:
             self._status_label.setStyleSheet(
-                f"color: {theme.COLORS['muted']}; font-size: 10px; padding: 2px 10px 4px 10px; background: {theme.COLORS['bg']};"
+                f"color: {c['muted']}; font-size: 10px; padding: 2px 12px 5px 12px; background: {c['panel']};"
             )
+        for bubble in getattr(self, '_bubbles', []):
+            if hasattr(bubble, 'refresh_theme'):
+                bubble.refresh_theme()
 
     @staticmethod
-    def _make_icon_btn(icon: str, tooltip: str, slot) -> QToolButton:
+    def _make_icon_btn(icon_name: str, tooltip: str, slot) -> QToolButton:
         btn = QToolButton()
-        btn.setText(icon)
+        btn.setProperty("icon_name", icon_name)
+        btn.setIcon(app_icon(icon_name, theme.COLORS['muted'], size=15, active_color=theme.COLORS['accent']))
+        btn.setIconSize(QSize(15, 15))
         btn.setToolTip(tooltip)
-        btn.setFixedSize(32, 32)
-        btn.setStyleSheet("""
-            QToolButton {
-                background: transparent;
-                border: none;
-                color: #64748b;
-                font-size: 14px;
-                border-radius: 6px;
-            }
-            QToolButton:hover { background: #1e293b; color: #38bdf8; }
-        """)
+        btn.setFixedSize(30, 30)
+        btn.setCursor(Qt.PointingHandCursor)
         btn.clicked.connect(slot)
         return btn
 
@@ -1189,9 +1219,8 @@ class AIChatWidgetContent(QWidget):
         self._session = ChatHistoryManager.new_session(provider, model_id)
         self._clear_message_bubbles()
         self._title_label.setText("New Chat")
-        self._status_label.setText("New conversation started.")
-        if not silent:
-            self._add_system_note("✨ Sesi chat baru dimulai. Silakan mulai bertanya!")
+        self._status_label.setText("Ready · Ask anything about manga translation")
+        self._show_welcome_card()
 
     def _open_history(self):
         sessions = ChatHistoryManager.list_sessions()
@@ -1219,14 +1248,17 @@ class AIChatWidgetContent(QWidget):
                 self._model_combo.setCurrentIndex(i)
                 break
 
-        # Render existing messages
-        for msg in data.get("messages", []):
-            bubble = ChatBubble(msg["role"], msg["content"])
-            self._insert_bubble(bubble)
+        msgs = data.get("messages", [])
+        if not msgs:
+            self._show_welcome_card()
+        else:
+            for msg in msgs:
+                bubble = ChatBubble(msg["role"], msg["content"])
+                self._insert_bubble(bubble)
 
         title = data.get("title", "Chat")
         self._title_label.setText(title)
-        self._status_label.setText(f"Loaded: {title} ({len(data.get('messages', []))} messages)")
+        self._status_label.setText(f"Loaded: {title} ({len(msgs)} messages)")
         self._scroll_to_bottom()
 
     def _clear_current_chat(self):
@@ -1247,6 +1279,7 @@ class AIChatWidgetContent(QWidget):
 
     def _clear_message_bubbles(self):
         # Remove all widgets except the stretch at index 0
+        self._welcome_card = None
         while self._messages_layout.count() > 1:
             item = self._messages_layout.takeAt(1)
             if item and item.widget():
@@ -1254,11 +1287,65 @@ class AIChatWidgetContent(QWidget):
         self._current_ai_bubble = None
         self._typing_indicator = None
 
+    def _remove_welcome_card(self):
+        card = getattr(self, '_welcome_card', None)
+        if card is not None:
+            self._messages_layout.removeWidget(card)
+            card.deleteLater()
+            self._welcome_card = None
+
+    def _show_welcome_card(self):
+        self._remove_welcome_card()
+        colors = theme.COLORS
+        card = QFrame()
+        card.setObjectName("chat-welcome-card")
+        card.setStyleSheet(
+            f"#chat-welcome-card {{ background: {colors['card']}; border: 1px solid {colors['border']}; "
+            f"border-radius: 10px; margin: 12px 6px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(10)
+
+        title = QLabel("AI Translation Assistant")
+        title.setStyleSheet(f"color: {colors['text']}; font-size: 13px; font-weight: 800; background: transparent;")
+        sub = QLabel("Ask about nuance, SFX localization, honorifics, or natural phrasing.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color: {colors['muted']}; font-size: 11px; background: transparent;")
+        v.addWidget(title)
+        v.addWidget(sub)
+
+        prompts = [
+            "Natural Indonesian dialogue",
+            "Explain Japanese SFX meaning",
+            "Keep polite vs rough tone",
+        ]
+        for prompt_text in prompts:
+            chip = QPushButton(prompt_text)
+            chip.setIcon(app_icon("sparkles", colors['accent'], size=13))
+            chip.setIconSize(QSize(13, 13))
+            chip.setMinimumWidth(0)
+            chip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            chip.setObjectName("chat-prompt-chip")
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(
+                f"#chat-prompt-chip {{ text-align: left; background: {colors['card_alt']}; "
+                f"color: {colors['accent_hover']}; border: 1px solid {colors['border']}; "
+                f"border-radius: 7px; padding: 7px 10px; font-size: 11px; font-weight: 600; }}"
+                f"#chat-prompt-chip:hover {{ border-color: {colors['accent']}; background: rgba(56, 189, 248, 0.12); }}"
+            )
+            chip.clicked.connect(lambda _=False, p=prompt_text: (
+                self._input_box.setPlainText(p),
+                self._input_box.setFocus(),
+            ))
+            v.addWidget(chip)
+
+        self._welcome_card = card
+        self._messages_layout.addWidget(card)
+
     def _insert_bubble(self, bubble: QWidget):
         """Insert before the trailing stretch (which keeps bubbles top-aligned)."""
-        count = self._messages_layout.count()
-        # The stretch is at index 0 initially; after first insert it moves
-        # We just append — layout has stretch at index 0, rest are bubbles
+        self._remove_welcome_card()
         self._messages_layout.addWidget(bubble)
 
     def _add_system_note(self, text: str):
@@ -1337,16 +1424,16 @@ class AIChatWidgetContent(QWidget):
     def _cancel_response(self):
         if self._worker:
             self._worker.cancel()
-        self._send_btn.setText("➤")
+        self._send_btn.setIcon(app_icon("send", theme.COLORS['bg'], size=16))
         self._is_responding = False
         self._status_label.setText("Cancelled.")
         self._hide_typing_indicator()
 
     def _start_ai_response(self, provider: str, model_id: str):
         self._is_responding = True
-        self._send_btn.setText("■")
+        self._send_btn.setIcon(app_icon("stop", theme.COLORS['bg'], size=16))
         self._send_btn.setToolTip("Klik untuk membatalkan respons")
-        self._status_label.setText(f"⏳  {provider} / {model_id} sedang merespons…")
+        self._status_label.setText(f"{provider} / {model_id} sedang merespons...")
 
         # Show typing indicator
         self._show_typing_indicator()
@@ -1394,7 +1481,7 @@ class AIChatWidgetContent(QWidget):
 
     def _on_ai_finished(self):
         self._is_responding = False
-        self._send_btn.setText("➤")
+        self._send_btn.setIcon(app_icon("send", theme.COLORS['bg'], size=16))
         self._send_btn.setToolTip("")
         self._hide_typing_indicator()
 
@@ -1413,16 +1500,16 @@ class AIChatWidgetContent(QWidget):
         self._current_ai_bubble = None
         provider = self._session.get("provider", "") if self._session else ""
         model = self._session.get("model", "") if self._session else ""
-        self._status_label.setText(f"✓  {provider} / {model} — siap")
+        self._status_label.setText(f"{provider} / {model} — siap")
         self._scroll_to_bottom()
 
     def _on_ai_error(self, err: str):
         self._hide_typing_indicator()
         self._is_responding = False
-        self._send_btn.setText("➤")
+        self._send_btn.setIcon(app_icon("send", theme.COLORS['bg'], size=16))
         self._current_ai_bubble = None
 
-        err_bubble = ChatBubble("assistant", f"⚠️ **Error:** {err}")
+        err_bubble = ChatBubble("assistant", f"**Error:** {err}")
         self._insert_bubble(err_bubble)
         self._status_label.setText(f"Error: {err[:80]}")
         self._scroll_to_bottom()
@@ -1439,21 +1526,28 @@ class AIChatWidgetContent(QWidget):
                 from src.core.config import SETTINGS
                 provider = self._session.get("provider", "") if self._session else ""
                 model = self._session.get("model", "") if self._session else ""
-                ocr_lang = ""
-                try:
-                    ocr_lang = self.main_app.ocr_lang_combo.currentText()
-                except Exception:
-                    pass
-                trans_to = ""
-                try:
-                    trans_to = self.main_app.translate_combo.currentText()
-                except Exception:
-                    pass
-                gpu = ""
-                try:
-                    gpu = "active" if self.main_app.use_gpu_checkbox.isChecked() else "inactive"
-                except Exception:
-                    pass
+                ocr_lang = "AI OCR (Auto)"
+                ocr_combo = getattr(self.main_app, 'ocr_lang_combo', None)
+                if ocr_combo is not None:
+                    try:
+                        ocr_lang = ocr_combo.currentText() or ocr_lang
+                    except Exception:
+                        pass
+                trans_to = "Indonesian"
+                trans_combo = getattr(self.main_app, 'translate_combo', None)
+                if trans_combo is not None:
+                    try:
+                        trans_to = trans_combo.currentText() or trans_to
+                    except Exception:
+                        pass
+                gpu_cb = getattr(self.main_app, 'use_gpu_checkbox', None)
+                if gpu_cb is not None:
+                    try:
+                        gpu = "active" if gpu_cb.isChecked() else "inactive"
+                    except Exception:
+                        gpu = "auto"
+                else:
+                    gpu = "auto"
 
                 context_lines = [
                     f"- App: MangaTranslate (Manga OCR & Typeset Tool)",

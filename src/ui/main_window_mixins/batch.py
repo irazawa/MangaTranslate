@@ -115,7 +115,8 @@ class BatchMixin:
 
     def on_batch_mode_changed(self, state):
         is_checked = (state == Qt.Checked)
-        self.process_batch_button.setVisible(is_checked)
+        if getattr(self, 'process_batch_button', None) is not None:
+            self.process_batch_button.setVisible(True)
         if not is_checked and self.batch_processing_queue:
             reply = QMessageBox.question(self, 'Clear Batch Queue?',
                                            f"You have {len(self.batch_processing_queue)} items in the batch. Do you want to process them now? \n\nChoosing 'No' will discard them.",
@@ -131,12 +132,29 @@ class BatchMixin:
             self.start_batch_processing()
 
     def update_batch_button_text(self):
+        btn = getattr(self, 'process_batch_button', None)
+        if btn is None:
+            return
         count = len(self.batch_processing_queue)
-        self.process_batch_button.setText(f"Process Batch Now ({count} items)")
-        self.process_batch_button.setEnabled(count > 0)
+        btn.setText(f"Batch Now ({count})" if count > 0 else "Batch Now")
+        btn.setEnabled(True)
 
     def start_batch_processing(self):
-        if not self.batch_processing_queue: return
+        if not self.batch_processing_queue:
+            if getattr(self, '_full_translate_tab', None) is not None and getattr(self, 'tabs', None) is not None:
+                self.tabs.setCurrentWidget(self._full_translate_tab)
+            if not getattr(self, 'image_files', None):
+                self.show_toast("Batch Translate", "Open a manga image or project folder first.", kind="info")
+                return
+            if hasattr(self, '_open_full_page_picker') and len(self.image_files) > 1:
+                if getattr(self, 'full_scope_combo', None) is not None:
+                    idx = self.full_scope_combo.findData('selected')
+                    if idx >= 0:
+                        self.full_scope_combo.setCurrentIndex(idx)
+                self._open_full_page_picker()
+            elif hasattr(self, 'start_full_page_translation'):
+                self.start_full_page_translation()
+            return
         if self.batch_processor_thread and self.batch_processor_thread.isRunning():
             self.show_toast("Batch busy", "A batch is already being processed.", kind="info"); return
 
@@ -180,7 +198,8 @@ class BatchMixin:
             return
 
         # [DIUBAH] Menggunakan mode deteksi yang dipilih user
-        detection_mode = "Text" if self.text_detect_radio.isChecked() else "Bubble"
+        text_radio = getattr(self, 'text_detect_radio', None)
+        detection_mode = "Text" if (text_radio is not None and text_radio.isChecked()) else "Bubble"
 
         settings = self.get_current_settings()
         if detection_mode == "Bubble" and not self._ensure_bubble_model_ready(settings):

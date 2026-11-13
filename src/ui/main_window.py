@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.8.8
+# Manga OCR & Typeset Tool v14.9.9.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -95,6 +95,7 @@ from src.core.fonts import *
 from src.core.app_info import APP_VERSION, app_title
 from src.ui.dialogs import *
 from src.ui.canvas import *
+from src.ui.icons import app_icon, clear_icon_cache
 from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
@@ -1211,36 +1212,45 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
 
     def refresh_scene_ui_state(self):
+        selector = getattr(self, 'scene_selector', None)
+        if selector is None:
+            return
         # Update selector
         current_idx = -1
-        self.scene_selector.blockSignals(True)
-        self.scene_selector.clear()
+        selector.blockSignals(True)
+        selector.clear()
         for i, name in enumerate(self.scene_order):
-            self.scene_selector.addItem(name)
+            selector.addItem(name)
             if name == self.current_scene_name:
                 current_idx = i
-        self.scene_selector.blockSignals(False)
-        
+        selector.blockSignals(False)
+
         if current_idx >= 0:
-            self.scene_selector.setCurrentIndex(current_idx)
-            
+            selector.setCurrentIndex(current_idx)
+
         has_scene = bool(self.current_scene_name)
-        self.scene_table.setVisible(has_scene)
-        self.scene_pf_btn.setEnabled(has_scene)
-        self.scene_qc_btn.setEnabled(has_scene)
-        self.scene_natural_btn.setEnabled(has_scene)
-        self.apply_scene_btn.setEnabled(has_scene)
-        
-        if has_scene:
-            count = len(self.scenes.get(self.current_scene_name, []))
-            self.scene_info_label.setText(f"Scene: {self.current_scene_name} ({count} items)")
-        else:
-            self.scene_info_label.setText("No scene selected.")
+        for attr in ('scene_table',):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(has_scene)
+        for attr in ('scene_pf_btn', 'scene_qc_btn', 'scene_natural_btn', 'apply_scene_btn'):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setEnabled(has_scene)
+
+        info_lbl = getattr(self, 'scene_info_label', None)
+        if info_lbl is not None:
+            if has_scene:
+                count = len(self.scenes.get(self.current_scene_name, []))
+                info_lbl.setText(f"Scene: {self.current_scene_name} ({count} items)")
+            else:
+                info_lbl.setText("No scene selected.")
 
     def on_scene_selection_changed(self, index):
-        if index < 0:
+        selector = getattr(self, 'scene_selector', None)
+        if selector is None or index < 0:
             return
-        name = self.scene_selector.itemText(index)
+        name = selector.itemText(index)
         self.current_scene_name = name
         self.refresh_history_views()
         self.refresh_scene_ui_state()
@@ -1251,7 +1261,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if not self.create_scene(name):
                 self.show_banner("scene-create-error", "Scene not created", "Could not create scene. Name might be empty or duplicate.", kind="warning")
             else:
-                self.scene_selector.setCurrentText(name) 
+                if getattr(self, 'scene_selector', None) is not None:
+                    self.scene_selector.setCurrentText(name)
                 self.refresh_scene_ui_state() # Force UI refresh
 
     def prompt_delete_scene(self):
@@ -2077,6 +2088,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             return True
 
     def _refresh_theme_dependent_styles(self):
+        clear_icon_cache()
         for attr_name, qss_factory in (
             ('toggle_left_btn', toggle_button_qss),
             ('toggle_right_btn', toggle_button_qss),
@@ -2091,6 +2103,14 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 widget.setStyleSheet(qss_factory())
             except Exception:
                 pass
+        if getattr(self, 'compare_mode_btn', None) is not None:
+            self.compare_mode_btn.setIcon(app_icon("eye", theme.COLORS["text"], 14))
+        if getattr(self, 'auto_translate_page_btn', None) is not None:
+            self.auto_translate_page_btn.setIcon(app_icon("rocket", theme.COLORS["bg"], 15))
+        for btn in getattr(self, '_sidebar_buttons', ()):
+            icon_name = btn.property("icon_name")
+            if icon_name:
+                btn.setIcon(app_icon(icon_name, theme.COLORS["muted"], 20, active_color=theme.COLORS["accent"]))
         try:
             self._apply_right_panel_styles()
         except Exception:
@@ -2276,30 +2296,38 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             'engine': 'MOFRL-GPT'
         }
 
-        previous_ocr_text = self.ocr_lang_combo.currentText() if getattr(self, 'ocr_lang_combo', None) else ''
-        default_ocr_text = SETTINGS.get('general', {}).get('default_ocr_lang', 'Japanese (Manga-OCR)')
+        ocr_combo = getattr(self, 'ocr_lang_combo', None)
+        if ocr_combo is None:
+            return
 
-        # Populate ComboBox
-        self.ocr_lang_combo.blockSignals(True)
-        self.ocr_lang_combo.clear()
-        # Append AI OCR entries (active models only)
-        for ai_entry in self._get_ai_ocr_entries():
+        previous_ocr_text = ocr_combo.currentText()
+        default_ocr_text = SETTINGS.get('general', {}).get('default_ocr_lang', '')
+
+        # Populate ComboBox (AI OCR models prioritized at top)
+        ocr_combo.blockSignals(True)
+        ocr_combo.clear()
+        ai_entries = self._get_ai_ocr_entries()
+        first_ai_display = ai_entries[0]['display'] if ai_entries else ''
+        for ai_entry in ai_entries:
             self.OCR_LANGS[ai_entry['display']] = ai_entry['data']
+            ocr_combo.addItem(ai_entry['display'], ai_entry['data'])
 
+        ai_displays = {entry['display'] for entry in ai_entries}
         for display_name, data in sorted(self.OCR_LANGS.items()):
-            self.ocr_lang_combo.addItem(display_name, data)
-        self.ocr_lang_combo.blockSignals(False)
+            if display_name not in ai_displays:
+                ocr_combo.addItem(display_name, data)
+        ocr_combo.blockSignals(False)
 
-        target_texts = [previous_ocr_text, default_ocr_text, "Japanese (Manga-OCR)"]
+        target_texts = [previous_ocr_text, first_ai_display if SETTINGS.get('force_ai_ocr', True) else default_ocr_text, default_ocr_text, "Japanese (Manga-OCR)"]
         for target_text in target_texts:
             if not target_text:
                 continue
-            target_index = self.ocr_lang_combo.findText(target_text)
+            target_index = ocr_combo.findText(target_text)
             if target_index != -1:
-                self.ocr_lang_combo.setCurrentIndex(target_index)
+                ocr_combo.setCurrentIndex(target_index)
                 break
 
-        self.on_ocr_lang_changed(self.ocr_lang_combo.currentIndex())
+        self.on_ocr_lang_changed(ocr_combo.currentIndex())
 
     def initialize_core_engines(self):
         """Initializes engines that don't depend on user input, like Manga-OCR and language list."""
@@ -2436,8 +2464,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         engine = lang_data['engine']
         lang_code = lang_data['code']
         
-        # Gunakan setting dari checkbox
-        use_gpu = self.use_gpu_checkbox.isChecked() and self.is_gpu_available
+        # Gunakan setting dari checkbox jika tersedia
+        gpu_cb = getattr(self, 'use_gpu_checkbox', None)
+        use_gpu = (gpu_cb.isChecked() if gpu_cb else True) and self.is_gpu_available
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.statusBar().showMessage(f"Initializing {engine} for '{lang_code}'...")
@@ -2646,13 +2675,18 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
     def on_pipeline_mode_changed(self, state):
         is_enhanced = (state == Qt.Checked)
-        if is_enhanced and self.ai_only_translate_checkbox.isChecked():
-            self.ai_only_translate_checkbox.setChecked(False)
+        ai_only_cb = getattr(self, 'ai_only_translate_checkbox', None)
+        ocr_combo = getattr(self, 'ocr_lang_combo', None)
+        if is_enhanced and ai_only_cb is not None and ai_only_cb.isChecked():
+            ai_only_cb.setChecked(False)
 
-        self.ocr_lang_combo.setEnabled(not is_enhanced)
-        if is_enhanced:
-            self.ocr_lang_combo.setToolTip("Disabled in Enhanced Pipeline mode (uses Manga-OCR + Tesseract).")
-        else:
+        if ocr_combo is not None:
+            ocr_combo.setEnabled(not is_enhanced)
+            if is_enhanced:
+                ocr_combo.setToolTip("Disabled in Enhanced Pipeline mode (uses Manga-OCR + Tesseract).")
+            else:
+                ocr_combo.setToolTip("")
+        if not is_enhanced and hasattr(self, 'on_translation_mode_changed'):
             self.on_translation_mode_changed()
 
     def _on_lang_orientation_changed(self, lang_code, value):
@@ -3169,7 +3203,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
     def handle_worker_error_ui(self, error_msg):
         self.show_banner("worker-error", "Processing error", f"An error occurred in a worker thread: {error_msg}", kind="error")
         self.overall_progress_bar.setVisible(False)
-        self.batch_process_button.setEnabled(True)
+        if getattr(self, 'batch_process_button', None) is not None:
+            self.batch_process_button.setEnabled(True)
 
     def update_overall_progress(self, value, text):
         self.overall_progress_bar.setVisible(True)
@@ -3331,20 +3366,22 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
 
     def update_gpu_status_label(self):
-        if not hasattr(self, 'gpu_status_label') or not self.gpu_status_label:
+        status_label = getattr(self, 'gpu_status_label', None)
+        gpu_cb = getattr(self, 'use_gpu_checkbox', None)
+        if not status_label:
             return
 
         if not self.is_gpu_available:
-            self.gpu_status_label.setText("GPU Not Detected")
-            self.gpu_status_label.setStyleSheet("color: #ff7b72;")
+            status_label.setText("GPU Not Detected")
+            status_label.setStyleSheet("color: #ff7b72;")
             return
 
-        if self.use_gpu_checkbox.isChecked():
-            self.gpu_status_label.setText("GPU Acceleration Active")
-            self.gpu_status_label.setStyleSheet("color: #5de6c1;")
+        if gpu_cb and gpu_cb.isChecked():
+            status_label.setText("GPU Acceleration Active")
+            status_label.setStyleSheet("color: #5de6c1;")
         else:
-            self.gpu_status_label.setText("GPU Detected (Disabled)")
-            self.gpu_status_label.setStyleSheet("color: #ffc857;")
+            status_label.setText("GPU Detected (Disabled)")
+            status_label.setStyleSheet("color: #ffc857;")
 
     def _ensure_profile_usage_state(self):
         if not isinstance(getattr(self, 'usage_data', None), dict):
@@ -3652,17 +3689,24 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         enabled_state = not ai_disabled and not is_worker_running
 
-        self.enhanced_pipeline_checkbox.setEnabled(enabled_state)
-        self.ai_only_translate_checkbox.setEnabled(enabled_state)
+        enh_cb = getattr(self, 'enhanced_pipeline_checkbox', None)
+        ai_only_cb = getattr(self, 'ai_only_translate_checkbox', None)
+        if enh_cb is not None:
+            enh_cb.setEnabled(enabled_state)
+        if ai_only_cb is not None:
+            ai_only_cb.setEnabled(enabled_state)
 
         if ai_disabled:
-            self.enhanced_pipeline_checkbox.setChecked(False)
-            self.ai_only_translate_checkbox.setChecked(False)
-            self.enhanced_pipeline_checkbox.setToolTip(tooltip_message)
-            self.ai_only_translate_checkbox.setToolTip(tooltip_message)
+            if enh_cb is not None:
+                enh_cb.setChecked(False)
+                enh_cb.setToolTip(tooltip_message)
+            if ai_only_cb is not None:
+                ai_only_cb.setChecked(False)
+                ai_only_cb.setToolTip(tooltip_message)
             if not self.api_limit_timer.isActive(): self.api_limit_timer.start()
         else:
-            self.on_pipeline_mode_changed(self.enhanced_pipeline_checkbox.checkState())
+            if enh_cb is not None:
+                self.on_pipeline_mode_changed(enh_cb.checkState())
             if self.api_limit_timer.isActive(): self.api_limit_timer.stop()
 
     def periodic_limit_check(self):
@@ -4436,7 +4480,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 'text': pre_detected_text # Tambahkan teks yang sudah di-OCR jika ada
             }
 
-            if self.batch_mode_checkbox.isChecked():
+            batch_cb = getattr(self, 'batch_mode_checkbox', None)
+            if batch_cb is not None and batch_cb.isChecked():
                 self.add_to_batch_queue(job)
             else:
                 self.add_job_to_queue(job)
@@ -4615,9 +4660,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 providers = ['CPUExecutionProvider']
                 use_gpu = False
                 if settings is not None:
-                    use_gpu = settings.get('use_gpu', False)
-                elif hasattr(self, 'use_gpu_checkbox'):
+                    use_gpu = settings.get('use_gpu', self.is_gpu_available)
+                elif getattr(self, 'use_gpu_checkbox', None) is not None:
                     use_gpu = self.use_gpu_checkbox.isChecked()
+                else:
+                    use_gpu = bool(self.is_gpu_available)
                 if use_gpu and self.is_gpu_available:
                     providers.insert(0, 'CUDAExecutionProvider')
                 model_info['instance'] = onnxruntime.InferenceSession(model_info['path'], providers=providers)
@@ -4670,9 +4717,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             # [BARU] Pilih device CPU/GPU
             use_gpu = False
             if settings is not None:
-                use_gpu = settings.get('use_gpu', False)
-            elif hasattr(self, 'use_gpu_checkbox'):
+                use_gpu = settings.get('use_gpu', self.is_gpu_available)
+            elif getattr(self, 'use_gpu_checkbox', None) is not None:
                 use_gpu = self.use_gpu_checkbox.isChecked()
+            else:
+                use_gpu = bool(self.is_gpu_available)
             device = "cuda" if use_gpu and self.is_gpu_available else "cpu"
             results = model(full_cv_image, verbose=False, device=device)
             if not results: return None
@@ -5332,48 +5381,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         # --- Smart Auto-Fitting ---
         original_segments = None
         if getattr(area, 'smart_fit_enabled', False):
-            best_scale = 1.0
-            min_scale = 0.1
-            max_scale = 3.0
-            
-            for attempt in range(8):
-                test_scale = (min_scale + max_scale) / 2.0
-                sim_lines = []
-                sim_curr = []
-                for segment in area.get_segments():
-                    t_val = segment.get('text', '') or ''
-                    base_f = area.segment_to_qfont(segment)
-                    f = QFont(base_f)
-                    f.setPointSizeF(base_f.pointSizeF() * test_scale)
-                    f.setLetterSpacing(QFont.PercentageSpacing, area.get_char_spacing())
-                    for ch in t_val:
-                        if ch == '\n':
-                            sim_lines.append(sim_curr)
-                            sim_curr = []
-                            continue
-                        sim_curr.append({'char': ch, 'font': f})
-                if sim_curr:
-                    sim_lines.append(sim_curr)
-                
-                metrics = []
-                for glyphs in sim_lines:
-                    if not glyphs:
-                        fm = QFontMetrics(area.get_font())
-                        metrics.append((fm.ascent() + fm.descent()) * area.get_line_spacing())
-                        continue
-                    ascents = [QFontMetrics(g['font']).ascent() for g in glyphs]
-                    descents = [QFontMetrics(g['font']).descent() for g in glyphs]
-                    metrics.append((max(ascents) + max(descents)) * area.get_line_spacing())
-                
-                total_h = sum(metrics)
-                total_w = max([sum(QFontMetrics(g['font']).horizontalAdvance(g['char']) for g in gl) for gl in sim_lines]) if sim_lines else 0
-                
-                if total_h <= rect.height() and total_w <= rect.width():
-                    best_scale = test_scale
-                    min_scale = test_scale
-                else:
-                    max_scale = test_scale
-            
+            best_scale = compute_auto_font_scale(
+                rect, area, min_scale=0.15, max_scale=3.5, fill_ratio=0.92
+            )
             original_segments = area.text_segments
             scaled_segments = []
             for seg in original_segments:
@@ -6596,7 +6606,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("🔍 Find & Replace")
+        dlg.setWindowTitle("Find & Replace")
+        dlg.setWindowIcon(app_icon("search", theme.COLORS['accent'], size=16))
         dlg.setModal(True)
         dlg.resize(380, 200)
         
@@ -6721,7 +6732,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         layout.addLayout(btn_lay)
 
         # Results Group (hidden initially)
-        results_group = QGroupBox("🔍 Search Results")
+        results_group = QGroupBox("Search Results")
         results_vbox = QVBoxLayout(results_group)
         results_table = QTableWidget(0, 2)
         results_table.setHorizontalHeaderLabels(["Page / File", "Text Content"])
@@ -6977,12 +6988,16 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         super().wheelEvent(event)
 
     def on_dl_provider_changed(self, provider):
-        self.dl_model_file_combo.clear()
+        file_combo = getattr(self, 'dl_model_file_combo', None)
+        dl_cb = getattr(self, 'dl_bubble_detector_checkbox', None)
+        if not (file_combo and dl_cb):
+            return
+        file_combo.clear()
         if provider == "Kitsumed":
-            self.dl_model_file_combo.addItems(['model_dynamic.onnx', 'model.pt'])
+            file_combo.addItems(['model_dynamic.onnx', 'model.pt'])
         elif provider == "Ogkalu":
-            self.dl_model_file_combo.addItems(['comic-speech-bubble-detector.pt'])
-        self.on_dl_detector_state_changed(self.dl_bubble_detector_checkbox.checkState())
+            file_combo.addItems(['comic-speech-bubble-detector.pt'])
+        self.on_dl_detector_state_changed(dl_cb.checkState())
 
     def _provider_has_api_key(self, provider):
         prov = (provider or '').lower()
@@ -7043,7 +7058,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
     def set_ui_for_confirmation(self, is_confirming):
         self.is_in_confirmation_mode = is_confirming
-        self.batch_process_button.setEnabled(not is_confirming)
+        if getattr(self, 'batch_process_button', None) is not None:
+            self.batch_process_button.setEnabled(not is_confirming)
         self.confirm_items_button.setVisible(is_confirming)
         if is_confirming: self.update_confirmation_button_text()
         self._refresh_detection_overlay()
@@ -7447,6 +7463,12 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         parts = [t.strip() for t in texts if t and t.strip()]
         return ' '.join(parts)
     
+    def _on_opacity_slider_pressed(self):
+        area = self.selected_typeset_area
+        if not area or area not in self.typeset_areas:
+            return
+        self.set_transform_preview_active(True)
+
     def _on_opacity_slider_changed(self, value):
         area = self.selected_typeset_area
         if not area or area not in self.typeset_areas:
@@ -7455,7 +7477,17 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         area.opacity = opacity
         if hasattr(self, 'layer_opacity_label'):
             self.layer_opacity_label.setText(f"{value}%")
-        self.redraw_all_typeset_areas(refresh_layers=False)
+        # Defer heavy full-canvas rasterization so rapid slider ticks do not freeze the event loop
+        slider = getattr(self, 'layer_opacity_slider', None)
+        if slider is not None and slider.isSliderDown() and not self.is_transform_preview:
+            self.set_transform_preview_active(True)
+        self.schedule_typeset_redraw(30)
+
+    def _on_opacity_slider_released(self):
+        if getattr(self, 'is_transform_preview', False):
+            self.set_transform_preview_active(False)
+        else:
+            self.schedule_typeset_redraw(0)
 
     def toggle_left_panel(self):
         if not hasattr(self, 'left_panel_widget') or self.left_panel_widget is None:
@@ -7552,7 +7584,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             "YOLO Models (*.pt);;All Files (*)"
         )
         if file_path:
-            self.panel_model_path_input.setText(file_path)
+            if getattr(self, 'panel_model_path_input', None) is not None:
+                self.panel_model_path_input.setText(file_path)
             self.on_panel_model_path_changed(file_path)
 
     def on_panel_model_path_changed(self, text):
@@ -7581,7 +7614,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             progress_dlg.close()
             if success:
                 self.show_toast("Panel model downloaded", "Model YOLO26 panel detector berhasil diunduh.", kind="success")
-                self.panel_model_path_input.setText(model_path)
+                if getattr(self, 'panel_model_path_input', None) is not None:
+                    self.panel_model_path_input.setText(model_path)
                 self.on_panel_model_path_changed(model_path)
                 callback()
             else:
@@ -7678,7 +7712,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         if not panels:
             panels = self.detect_panels_opencv_fallback()
             self.detected_panels = panels
-            self.show_panels_checkbox.setChecked(True)
+            if getattr(self, 'show_panels_checkbox', None) is not None:
+                self.show_panels_checkbox.setChecked(True)
             self.image_label.update()
 
         sorted_panels = self._sort_panels_rtl(panels)
@@ -7697,11 +7732,16 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             self.show_banner("full-page-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
             return
 
-        # Re-entrancy guard: jangan spawn worker baru bila yang lama masih jalan.
+        # Re-entrancy guard: jangan spawn worker baru bila single/batch masih berjalan.
         worker = getattr(self, '_full_page_worker', None)
         if worker is not None and worker.isRunning():
             self.show_banner("full-page-busy", "Sedang berjalan",
                              "Penerjemahan halaman masih diproses. Tunggu hingga selesai.", kind="warning")
+            return
+        batch = getattr(self, '_full_batch_worker', None)
+        if batch is not None and batch.isRunning():
+            self.show_banner("full-batch-busy", "Sedang berjalan",
+                             FullPageBatchText.BATCH_BUSY, kind="warning")
             return
 
         # Cakupan batch (tab Full): selain 'current' ditangani worker batch.
@@ -7711,16 +7751,45 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             return
 
         settings, use_ai_vision = self._collect_full_page_settings()
+        target_pdf_page = self.current_pdf_page if self.pdf_document else -1
+        target_key = self.get_current_data_key(path=self.current_image_path, page=target_pdf_page)
+        page_pil = None
+        if target_pdf_page != -1 and getattr(self, 'current_image_pil', None) is not None:
+            page_pil = self.current_image_pil.copy()
 
-        self.auto_translate_page_btn.setText("⏳ Memproses Halaman...")
+        self.auto_translate_page_btn.setText("Memproses Halaman...")
+        self.auto_translate_page_btn.setIcon(app_icon("clock", theme.COLORS['bg'], size=15))
         self.auto_translate_page_btn.setEnabled(False)
 
-        self._full_page_worker = FullPageTranslateWorker(self, self.current_image_path, settings, use_ai_vision)
-        self._full_page_worker.progress.connect(lambda pct, msg: self.statusBar().showMessage(f"{msg} ({pct}%)"))
+        page_label = os.path.basename(self.current_image_path)
+        if target_pdf_page != -1:
+            page_label = f"{page_label} (Hal. {target_pdf_page + 1})"
+
+        dialog = FullPageProgressDialog(self, page_label)
+        self._full_page_dialog = dialog
+
+        self._full_page_worker = FullPageTranslateWorker(
+            self,
+            self.current_image_path,
+            settings,
+            use_ai_vision,
+            target_key=target_key,
+            pdf_page=target_pdf_page,
+            page_pil=page_pil,
+        )
+        self._full_page_worker.progress.connect(
+            lambda pct, msg: (
+                self.statusBar().showMessage(f"{msg} ({pct}%)"),
+                dialog.set_progress(pct, msg) if getattr(self, '_full_page_dialog', None) is dialog else None,
+            )
+        )
         self._full_page_worker.finished.connect(self.on_full_page_translation_finished)
         self._full_page_worker.error.connect(self.on_full_page_translation_error)
         self._full_page_worker.finished.connect(self._full_page_worker.deleteLater)
+        self._full_page_worker.error.connect(self._full_page_worker.deleteLater)
+        dialog.cancel_requested.connect(self.cancel_full_page_translation)
 
+        dialog.show()
         self._full_page_worker.start()
 
 class FileDownloadWorker(QThread):
@@ -7773,10 +7842,13 @@ class FullPageTranslateWorker(QThread):
     finished = pyqtSignal(list, str)
     error = pyqtSignal(str)
 
-    def __init__(self, main_app, image_path, settings, use_ai_vision):
+    def __init__(self, main_app, image_path, settings, use_ai_vision, *, target_key=None, pdf_page=-1, page_pil=None):
         super().__init__()
         self.main_app = main_app
         self.image_path = image_path
+        self.target_key = target_key if target_key is not None else image_path
+        self.pdf_page = pdf_page
+        self._page_pil = page_pil
         self.settings = settings
         self.use_ai_vision = use_ai_vision
         self._is_cancelled = False
@@ -7786,11 +7858,17 @@ class FullPageTranslateWorker(QThread):
         self.last_created_areas = []
         self.last_error = None
 
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         self.last_created_areas = []
         self.last_error = None
         try:
-            pil_image = Image.open(self.image_path).convert('RGB')
+            if self._page_pil is not None:
+                pil_image = self._page_pil.convert('RGB')
+            else:
+                pil_image = Image.open(self.image_path).convert('RGB')
             cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
             h, w = cv_image.shape[:2]
             
@@ -8108,7 +8186,7 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     )
                     if do_inpaint and not self._is_cancelled:
                         self.progress.emit(75, "Membersihkan teks (worker inpaint paralel)...")
-                        self._run_page_inpaint(cv_image, polygons_only, ai_mask=None)
+                        self._run_page_inpaint(cv_image, polygons_only, ai_mask=None, expanded_rects=rects)
                     return rects
 
                 # Jalankan worker penerjemahan (API/jaringan) dan worker layout+inpaint
@@ -8168,6 +8246,11 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                             area_payload['text'] = translated
                     if fut_inp is not None:
                         fut_inp.result()
+
+            if self._is_cancelled:
+                self.last_created_areas = []
+                self.finished.emit([], "Dibatalkan.")
+                return
 
             if created_areas:
                 self.last_created_areas = list(created_areas)
@@ -8340,22 +8423,25 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
             is_bright = True
             for thresh_val, bright_flag in ((200, True), (55, False)):
                 binary = ((crop >= thresh_val) if bright_flag else (crop <= thresh_val)).astype(np.uint8)
-                _n, lbl, _st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+                _n, lbl, st_lbl, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
                 inner = lbl[by1 - y1:by2 - y1, bx1 - x1:bx2 - x1]
                 vals, counts = np.unique(inner[inner > 0], return_counts=True)
                 if len(vals):
                     best_i = int(counts.argmax())
-                    if int(counts[best_i]) >= 0.30 * inner_area:
-                        zone = (lbl == int(vals[best_i])).astype(np.uint8)
+                    best_lbl = int(vals[best_i])
+                    best_cnt = int(counts[best_i])
+                    comp_area = int(st_lbl[best_lbl, cv2.CC_STAT_AREA])
+                    if best_cnt >= 0.30 * inner_area or (
+                        best_cnt >= 0.12 * inner_area and comp_area >= 1.6 * inner_area
+                    ):
+                        zone = (lbl == best_lbl).astype(np.uint8)
                         is_bright = bright_flag
                         break
             if zone is None:
                 snapped.append(poly)
                 continue
 
-            zpad = np.pad(zone, 12, mode='constant', constant_values=0)
-            zclosed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_k)
-            zint = cv2.erode(zclosed, erode_k)[12:-12, 12:-12]
+            zint = self._safe_bubble_interior(zone, close_k=close_k, erode_k=erode_k)
             dark = (((crop < 185) if is_bright else (crop > 70)) & (zint > 0)).astype(np.uint8)
             for j, ob in enumerate(rects):
                 if j == idx:
@@ -8813,7 +8899,7 @@ Input:
                 results[i] = tr
         return results
 
-    def _run_page_inpaint(self, cv_image, polygons, ai_mask=None):
+    def _run_page_inpaint(self, cv_image, polygons, ai_mask=None, expanded_rects=None):
         """Jalankan inpainting halaman secara cepat: direct bubble fill (<15ms)
         ditambah ROI-cropped IOPaint hanya pada area mask yang bertekstur."""
         try:
@@ -8821,7 +8907,7 @@ Input:
             if ai_mask is not None:
                 mask = ai_mask
             else:
-                mask = self._build_text_pixel_mask(cv_image, polygons)
+                mask = self._build_text_pixel_mask(cv_image, polygons, expanded_rects=expanded_rects)
             direct_bgr = getattr(self, '_direct_bubble_cleaned_bgr', None)
             work_bgr = direct_bgr.copy() if direct_bgr is not None else cv_image.copy()
             cleaned = None
@@ -8892,18 +8978,36 @@ Input:
             print(f"Inpaint full-page gagal (lanjut tanpa pembersihan): {ie}")
             self.cleaned_image_pil = None
 
-    def _build_text_pixel_mask(self, cv_image, polygons):
+    @staticmethod
+    def _safe_bubble_interior(zone, close_k=None, erode_k=None):
+        """Fill enclosed holes inside bubble zone (e.g. bold kanji) before eroding the outer wall."""
+        if close_k is None:
+            close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+        if erode_k is None:
+            erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        close_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        zpad = np.pad((zone > 0).astype(np.uint8) * 255, 16, mode='constant', constant_values=0)
+        z_sealed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_small)
+        inv = np.where(z_sealed > 0, 0, 255).astype(np.uint8)
+        ff1 = np.zeros((inv.shape[0] + 2, inv.shape[1] + 2), dtype=np.uint8)
+        cv2.floodFill(inv, ff1, (0, 0), 0)
+        z_filled = cv2.bitwise_or(z_sealed, inv)
+        z_closed = cv2.morphologyEx(z_filled, cv2.MORPH_CLOSE, close_k)
+        inv2 = np.where(z_closed > 0, 0, 255).astype(np.uint8)
+        ff2 = np.zeros((inv2.shape[0] + 2, inv2.shape[1] + 2), dtype=np.uint8)
+        cv2.floodFill(inv2, ff2, (0, 0), 0)
+        z_solid = cv2.bitwise_or(z_closed, inv2)
+        return cv2.erode(z_solid, erode_k)[16:-16, 16:-16]
+
+    def _build_text_pixel_mask(self, cv_image, polygons, expanded_rects=None):
         """Bangun mask inpaint berisi HANYA piksel teks di dalam tiap region.
 
         - Bila region berada di dalam interior balon polos (`zone`), goresan
-          teks dibatasi ketat ke interior yang sudah di-erode (`zint`) agar
-          outline balon dan artwork luar (rambut/screentone) tidak pernah
-          tersentuh mask. Bila latar balon rata (solid putih/hitam), piksel
-          teks langsung diisi warna median interior balon pada
-          `self._direct_bubble_cleaned_bgr` (bebas halusinasi LaMa & instan).
-        - Bila region mengambang di atas latar bertekstur, hanya komponen
-          goresan berukuran huruf di dalam polygon yang dimasukkan ke mask
-          untuk dibersihkan IOPaint.
+          teks dibatasi ketat ke interior yang sudah diisi lubangnya lalu di-erode
+          (`zint`) agar kanji tebal tidak berlubang sekaligus outline balon dan
+          artwork luar tidak pernah tersentuh mask.
+        - Memanfaatkan `expanded_rects` serta whole-component + proximity linking
+          di dalam balon yang sama agar tepi kanji/furigana tidak terpotong garis lurus.
         """
         h, w = cv_image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -8912,11 +9016,12 @@ Input:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
         close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
         erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        link_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
 
         direct_bgr = cv_image.copy()
         direct_any = False
 
-        for polygon in polygons:
+        for idx, polygon in enumerate(polygons):
             rect = polygon.boundingRect()
             bx1 = max(0, rect.x())
             by1 = max(0, rect.y())
@@ -8925,9 +9030,17 @@ Input:
             if bx2 - bx1 < 4 or by2 - by1 < 4:
                 continue
 
-            pad_ctx = 36
-            x1, y1 = max(0, bx1 - pad_ctx), max(0, by1 - pad_ctx)
-            x2, y2 = min(w, bx2 + pad_ctx), min(h, by2 + pad_ctx)
+            ex1, ey1, ex2, ey2 = bx1, by1, bx2, by2
+            if expanded_rects and idx < len(expanded_rects) and expanded_rects[idx] is not None:
+                erect = expanded_rects[idx]
+                ex1 = max(0, min(bx1, erect.x()))
+                ey1 = max(0, min(by1, erect.y()))
+                ex2 = min(w, max(bx2, erect.x() + erect.width()))
+                ey2 = min(h, max(by2, erect.y() + erect.height()))
+
+            pad_ctx = 40
+            x1, y1 = max(0, ex1 - pad_ctx), max(0, ey1 - pad_ctx)
+            x2, y2 = min(w, ex2 + pad_ctx), min(h, ey2 + pad_ctx)
             crop = gray[y1:y2, x1:x2]
             inner_area = max(1, (by2 - by1) * (bx2 - bx1))
 
@@ -8935,47 +9048,105 @@ Input:
             is_bright = True
             for thresh_val, bright_flag in ((200, True), (55, False)):
                 binary = ((crop >= thresh_val) if bright_flag else (crop <= thresh_val)).astype(np.uint8)
-                _n, lbl, _st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+                _n, lbl, st_lbl, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
                 inner = lbl[by1 - y1:by2 - y1, bx1 - x1:bx2 - x1]
                 vals, counts = np.unique(inner[inner > 0], return_counts=True)
                 if len(vals):
                     best_i = int(counts.argmax())
-                    if int(counts[best_i]) >= 0.30 * inner_area:
-                        zone = (lbl == int(vals[best_i])).astype(np.uint8)
+                    best_lbl = int(vals[best_i])
+                    best_cnt = int(counts[best_i])
+                    comp_area = int(st_lbl[best_lbl, cv2.CC_STAT_AREA])
+                    if best_cnt >= 0.30 * inner_area or (
+                        best_cnt >= 0.12 * inner_area and comp_area >= 1.6 * inner_area
+                    ):
+                        zone = (lbl == best_lbl).astype(np.uint8)
                         is_bright = bright_flag
                         break
 
             if zone is not None:
-                zpad = np.pad(zone, 12, mode='constant', constant_values=0)
-                zclosed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_k)
-                zint = cv2.erode(zclosed, erode_k)[12:-12, 12:-12]
+                zint_raw = self._safe_bubble_interior(zone, close_k=close_k, erode_k=erode_k)
+                _nz, lbl_z, _stz, _ = cv2.connectedComponentsWithStats((zint_raw > 0).astype(np.uint8), connectivity=8)
+                z_inner = lbl_z[by1 - y1:by2 - y1, bx1 - x1:bx2 - x1]
+                z_vals = z_inner[z_inner > 0]
+                if len(z_vals):
+                    zv, zc = np.unique(z_vals, return_counts=True)
+                    main_zid = int(zv[int(zc.argmax())])
+                    zint = np.where(lbl_z == main_zid, 255, 0).astype(np.uint8)
+                else:
+                    zint = np.where(zint_raw > 0, 255, 0).astype(np.uint8)
+
+                zone_vals = crop[zone > 0]
+                is_flat_bubble = False
+                zone_med = 255.0 if is_bright else 0.0
+                q25, q75 = (zone_med, zone_med)
+                if zone_vals.size > 0:
+                    q25, zone_med, q75 = np.percentile(zone_vals, [25, 50, 75])
+                    is_flat_bubble = ((q75 - q25) <= 12.0)
+
+                if is_bright:
+                    stroke_thresh = 220 if (is_flat_bubble and zone_med >= 242.0) else 195
+                    all_dark = ((crop < stroke_thresh) & (zint > 0)).astype(np.uint8)
+                else:
+                    stroke_thresh = 45 if (is_flat_bubble and zone_med <= 15.0) else 60
+                    all_dark = ((crop > stroke_thresh) & (zint > 0)).astype(np.uint8)
+
+                n_s, lbl_s, st_s, _ = cv2.connectedComponentsWithStats(all_dark, connectivity=8)
+                if n_s <= 1:
+                    continue
 
                 poly_win = np.zeros_like(zint)
-                px1 = max(0, bx1 - x1 - 6)
-                py1 = max(0, by1 - y1 - 6)
-                px2 = min(x2 - x1, bx2 - x1 + 6)
-                py2 = min(y2 - y1, by2 - y1 + 6)
+                px1 = max(0, ex1 - x1 - 6)
+                py1 = max(0, ey1 - y1 - 6)
+                px2 = min(x2 - x1, ex2 - x1 + 6)
+                py2 = min(y2 - y1, ey2 - y1 + 6)
                 poly_win[py1:py2, px1:px2] = 1
 
-                strokes = (
-                    ((crop < 195) if is_bright else (crop > 60))
-                    & (zint > 0)
-                    & (poly_win > 0)
-                ).astype(np.uint8) * 255
+                seed_ids = {int(c) for c in np.unique(lbl_s[(poly_win > 0) & (lbl_s > 0)]) if c > 0}
+                selected_ids = set(seed_ids)
+
+                # Perluas ke komponen sejenis yang berdekatan (furigana / ujung kanji terpotong) di dalam interior balon yang sama
+                if selected_ids:
+                    seed_mask = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
+                    for _hop in range(2):
+                        frontier = cv2.dilate(seed_mask, link_k)
+                        frontier[zint == 0] = 0
+                        new_ids = {int(c) for c in np.unique(lbl_s[(frontier > 0) & (lbl_s > 0)]) if c > 0} - selected_ids
+                        if not new_ids:
+                            break
+                        selected_ids |= new_ids
+                        seed_mask = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
+
+                # Bila balon benar-benar tertutup rapat di dalam crop, sapu semua karakter/furigana tersisa di interiornya
+                ch, cw = zone.shape[:2]
+                zint_area = int(np.count_nonzero(zint))
+                border_touches = (
+                    int(np.count_nonzero(zone[0, :])) + int(np.count_nonzero(zone[-1, :]))
+                    + int(np.count_nonzero(zone[:, 0])) + int(np.count_nonzero(zone[:, -1]))
+                )
+                win_area = max(1, (px2 - px1) * (py2 - py1))
+                if (
+                    border_touches <= 2
+                    and 0 < zint_area < 0.85 * ch * cw
+                    and win_area >= 0.12 * zint_area
+                ):
+                    for ci in range(1, n_s):
+                        if int(st_s[ci, cv2.CC_STAT_AREA]) < 0.45 * zint_area:
+                            selected_ids.add(ci)
+
+                if not selected_ids:
+                    continue
+                strokes = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
                 dil = cv2.dilate(strokes, kernel, iterations=2)
                 dil[zint == 0] = 0
                 if not dil.any():
                     continue
 
-                zone_vals = crop[zone > 0]
-                if zone_vals.size > 0:
-                    q25, q75 = np.percentile(zone_vals, [25, 75])
-                    if (q75 - q25) <= 12.0:
-                        bgr_crop = direct_bgr[y1:y2, x1:x2]
-                        fill_bgr = np.median(bgr_crop[zone > 0], axis=0).astype(np.uint8)
-                        bgr_crop[dil > 0] = fill_bgr
-                        direct_any = True
-                        continue
+                if is_flat_bubble:
+                    bgr_crop = direct_bgr[y1:y2, x1:x2]
+                    fill_bgr = np.median(bgr_crop[zone > 0], axis=0).astype(np.uint8)
+                    bgr_crop[dil > 0] = fill_bgr
+                    direct_any = True
+                    continue
 
                 mask[y1:y2, x1:x2] = cv2.bitwise_or(mask[y1:y2, x1:x2], dil)
                 continue

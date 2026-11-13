@@ -9,7 +9,7 @@ from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 
 class SettingsMixin:
-    def open_settings_dialog(self, focus_tab: str = 'profile'):
+    def open_settings_dialog(self, focus_tab: str = 'general'):
         self.show_settings_workspace(focus_tab)
 
     def open_openrouter_settings_dialog(self):
@@ -29,7 +29,7 @@ class SettingsMixin:
         stack.addWidget(workspace)
         return workspace
 
-    def show_settings_workspace(self, focus_tab: str = 'profile'):
+    def show_settings_workspace(self, focus_tab: str = 'general'):
         stack = getattr(self, 'center_stack', None)
         if stack is None:
             return
@@ -108,28 +108,38 @@ class SettingsMixin:
         gen_cfg = SETTINGS.get('general', {}) if isinstance(SETTINGS.get('general'), dict) else {}
         
         if apply_runtime_controls:
-            # 1. OCR Language default
-            default_ocr = gen_cfg.get('default_ocr_lang', 'Japanese (Manga-OCR)')
-            if hasattr(self, 'ocr_lang_combo'):
+            # 1. OCR Language / AI OCR default
+            default_ocr = gen_cfg.get('default_ocr_lang', '')
+            if default_ocr and getattr(self, 'ocr_lang_combo', None) is not None:
                 idx = self.ocr_lang_combo.findText(default_ocr)
                 if idx != -1:
                     self.ocr_lang_combo.setCurrentIndex(idx)
 
-            # 2. AI-Only Translate default
-            default_ai_only = bool(gen_cfg.get('default_ai_only_translate', False))
-            if hasattr(self, 'ai_only_translate_checkbox'):
+            # 2. Force AI OCR & AI-Only Translate defaults
+            if getattr(self, 'force_ai_ocr_checkbox', None) is not None:
+                with QSignalBlocker(self.force_ai_ocr_checkbox):
+                    self.force_ai_ocr_checkbox.setChecked(bool(SETTINGS.get('force_ai_ocr', True)))
+            default_ai_only = bool(gen_cfg.get('default_ai_only_translate', True))
+            if getattr(self, 'ai_only_translate_checkbox', None) is not None:
                 self.ai_only_translate_checkbox.setChecked(default_ai_only)
 
-            # 3. AI Model default
+            # 3. Cleanup toggles synced from Settings
+            cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+            if getattr(self, 'inpaint_checkbox', None) is not None and not getattr(self, 'selected_typeset_area', None):
+                with QSignalBlocker(self.inpaint_checkbox):
+                    self.inpaint_checkbox.setChecked(bool(cleanup_cfg.get('use_inpaint', True)))
+            self._refresh_inpaint_summary_badges()
+
+            # 4. AI Model default
             default_ai_model = gen_cfg.get('default_ai_model', '')
-            if default_ai_model and hasattr(self, 'ai_model_combo'):
+            if default_ai_model and getattr(self, 'ai_model_combo', None) is not None:
                 idx = self.ai_model_combo.findText(default_ai_model)
                 if idx != -1:
                     self.ai_model_combo.setCurrentIndex(idx)
 
-            # 3.5 Default Translation Style
+            # 4.5 Default Translation Style
             default_style = gen_cfg.get('default_translation_style', 'Santai (Default)')
-            if default_style and hasattr(self, 'style_combo'):
+            if default_style and getattr(self, 'style_combo', None) is not None:
                 idx = self.style_combo.findText(default_style)
                 if idx != -1:
                     self.style_combo.setCurrentIndex(idx)
@@ -276,10 +286,21 @@ class SettingsMixin:
         SETTINGS['ai_model_overrides'] = overrides
         save_settings(SETTINGS)
 
+    def _refresh_inpaint_summary_badges(self):
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        model_name = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        server_url = cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL)
+        summary_lbl = getattr(self, 'cleanup_inpaint_summary_label', None)
+        if summary_lbl is not None:
+            summary_lbl.setText(f"Active Engine: {model_name}\nServer URL: {server_url}")
+        if hasattr(self, '_update_full_tab_hints'):
+            self._update_full_tab_hints()
+
     def get_current_settings(self):
-        lang_data = self.ocr_lang_combo.currentData()
-        ocr_engine = lang_data.get('engine') if isinstance(lang_data, dict) else None
-        ocr_lang_code = lang_data.get('code') if isinstance(lang_data, dict) else None
+        ocr_combo = getattr(self, 'ocr_lang_combo', None)
+        lang_data = ocr_combo.currentData() if ocr_combo is not None else None
+        ocr_engine = lang_data.get('engine') if isinstance(lang_data, dict) else 'AI_OCR'
+        ocr_lang_code = lang_data.get('code') if isinstance(lang_data, dict) else 'auto'
         ai_provider = None
         ai_model_id = None
         ai_model_name = None
@@ -289,18 +310,29 @@ class SettingsMixin:
             ai_model_id = lang_data.get('model_id')
             ai_model_name = lang_data.get('model_name')
             ai_provider_label = lang_data.get('provider_label')
+        elif SETTINGS.get('force_ai_ocr', True) and hasattr(self, '_get_ai_ocr_entries'):
+            ai_entries = self._get_ai_ocr_entries()
+            if ai_entries:
+                ai_data = ai_entries[0].get('data') or {}
+                ai_provider = ai_data.get('provider')
+                ai_model_id = ai_data.get('model_id')
+                ai_model_name = ai_data.get('model_name')
+                ai_provider_label = ai_data.get('provider_label')
         selected_model_info = self.get_selected_model_info() or {}
         selected_model_label = selected_model_info.get('display') or selected_model_info.get('name')
 
-        inpaint_model_text = self.inpaint_model_combo.currentText()
-        # Hanya model LaMa yang membutuhkan dependency eksternal. Jika pengguna memilih OpenCV,
-        # biarkan kuncinya None supaya engine LaMa tidak lagi dipanggil.
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        inpaint_combo = getattr(self, 'inpaint_model_combo', None)
+        inpaint_model_text = inpaint_combo.currentText() if inpaint_combo is not None else cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
         inpaint_model_key = None
         if "Big-LaMa" in inpaint_model_text:
             inpaint_model_key = 'big_lama'
         elif "Anime" in inpaint_model_text:
             inpaint_model_key = 'anime_inpaint'
-            
+
+        inpaint_pad_spin = getattr(self, 'inpaint_padding_spinbox', None)
+        inpaint_padding_val = int(inpaint_pad_spin.value()) if inpaint_pad_spin is not None else int(cleanup_cfg.get('inpaint_padding', 5) or 5)
+
         font_for_settings = QFont(self._build_current_font())
         self.typeset_font = font_for_settings
         color_for_settings = QColor(self.typeset_color)
@@ -316,6 +348,19 @@ class SettingsMixin:
             use_background_box_value = bool(self.use_background_box_checkbox.isChecked()) if getattr(self, 'use_background_box_checkbox', None) else self._default_cleanup_value('use_background_box')
             constrain_text_value = bool(self.constrain_text_checkbox.isChecked()) if getattr(self, 'constrain_text_checkbox', None) else self._default_cleanup_value('constrain_text')
 
+        ori_combo = getattr(self, 'orientation_combo', None)
+        trans_combo = getattr(self, 'translate_combo', None)
+        enh_cb = getattr(self, 'enhanced_pipeline_checkbox', None)
+        ai_only_cb = getattr(self, 'ai_only_translate_checkbox', None)
+        deepl_cb = getattr(self, 'deepl_only_checkbox', None)
+        dl_cb = getattr(self, 'dl_bubble_detector_checkbox', None)
+        dl_prov_combo = getattr(self, 'dl_model_provider_combo', None)
+        dl_file_combo = getattr(self, 'dl_model_file_combo', None)
+        style_combo = getattr(self, 'style_combo', None)
+        split_cb = getattr(self, 'split_bubbles_checkbox', None)
+        safe_cb = getattr(self, 'safe_mode_checkbox', None)
+        gpu_cb = getattr(self, 'use_gpu_checkbox', None)
+
         return {
             'ocr_engine': ocr_engine,
             'ocr_lang': ocr_lang_code,
@@ -323,36 +368,35 @@ class SettingsMixin:
             'ocr_ai_provider_label': ai_provider_label,
             'ocr_ai_model_id': ai_model_id,
             'ocr_ai_model_name': ai_model_name,
-            'orientation': self.orientation_combo.currentText(),
-            'target_lang': self.translate_combo.currentText(),
+            'orientation': ori_combo.currentText() if ori_combo is not None else 'Auto-Detect',
+            'target_lang': trans_combo.currentText() if trans_combo is not None else SETTINGS.get('general', {}).get('default_target_lang', 'Indonesian'),
             'use_ai': True,
             'font': font_for_settings,
             'color': color_for_settings,
-            'enhanced_pipeline': self.enhanced_pipeline_checkbox.isChecked(),
-            'use_ai_only_translate': self.ai_only_translate_checkbox.isChecked(),
-            'use_deepl_only_translate': self.deepl_only_checkbox.isChecked(),
-            'use_dl_detector': self.dl_bubble_detector_checkbox.isChecked(),
-            'dl_provider': self.dl_model_provider_combo.currentText(),
-            'dl_model_file': self.dl_model_file_combo.currentText(),
+            'enhanced_pipeline': bool(enh_cb.isChecked()) if enh_cb is not None else False,
+            'use_ai_only_translate': bool(ai_only_cb.isChecked()) if ai_only_cb is not None else True,
+            'use_deepl_only_translate': bool(deepl_cb.isChecked()) if deepl_cb is not None else False,
+            'use_dl_detector': bool(dl_cb.isChecked()) if dl_cb is not None else False,
+            'dl_provider': dl_prov_combo.currentText() if dl_prov_combo is not None else 'Kitsumed',
+            'dl_model_file': dl_file_combo.currentText() if dl_file_combo is not None else '',
             'ai_model': self.get_selected_model_name(),
             'ai_model_label': selected_model_label,
             'ai_model_info': selected_model_info,
-            'translation_style': self.style_combo.currentText(),
-            'auto_split_bubbles': self.split_bubbles_checkbox.isChecked(),
-            'safe_mode': self.safe_mode_checkbox.isChecked(),
-            'use_gpu': self.use_gpu_checkbox.isChecked(),
-            # Pastikan ini sesuai dengan hardware Anda
+            'translation_style': style_combo.currentText() if style_combo is not None else 'Santai (Default)',
+            'auto_split_bubbles': bool(split_cb.isChecked()) if split_cb is not None else False,
+            'safe_mode': bool(safe_cb.isChecked()) if safe_cb is not None else False,
+            'use_gpu': bool(gpu_cb.isChecked()) if gpu_cb is not None else bool(getattr(self, 'is_gpu_available', False)),
+            # Optimasi CPU / Cleanup
             'use_inpaint': use_inpaint_value,
             'inpaint_model_name': inpaint_model_text,
             'inpaint_model_key': inpaint_model_key,
-            'inpaint_server_url': SETTINGS.get('cleanup', {}).get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL),
-            'inpaint_server_timeout': SETTINGS.get('cleanup', {}).get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT),
-            'inpaint_padding': self.inpaint_padding_spinbox.value(),
-            # Optimasi CPU
-            'cpu_threads': 4,  # Sesuaikan dengan jumlah core CPU Anda
-            'enable_mkldnn': True,  # Optimasi untuk CPU Intel
+            'inpaint_server_url': cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL),
+            'inpaint_server_timeout': cleanup_cfg.get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT),
+            'inpaint_padding': inpaint_padding_val,
+            'cpu_threads': 4,
+            'enable_mkldnn': True,
             'orientation_mode': self.typeset_orientation,
-            'create_bubble': getattr(self, 'create_bubble_checkbox', None) and self.create_bubble_checkbox.isChecked(),
+            'create_bubble': bool(getattr(self, 'create_bubble_checkbox', None) and self.create_bubble_checkbox.isChecked()),
             'use_background_box': use_background_box_value,
             'text_effect': 'none',
             'effect_intensity': 20.0,
@@ -367,8 +411,13 @@ class SettingsMixin:
             'margins': {'top': 0, 'right': 0, 'bottom': 0, 'left': 0},
             'manga_use_easy_detection': bool(getattr(self, 'manga_use_easy_detection_checkbox', None) and self.manga_use_easy_detection_checkbox.isChecked()),
             'tesseract_use_easy_detection': bool(getattr(self, 'tesseract_use_easy_detection_checkbox', None) and self.tesseract_use_easy_detection_checkbox.isChecked()),
-            'use_auto_text_color': bool(SETTINGS.get('cleanup', {}).get('auto_text_color', True)),
+            'use_auto_text_color': bool(cleanup_cfg.get('auto_text_color', True)),
             'constrain_text': constrain_text_value,
+            'auto_font_size': (
+                bool(self.auto_font_size_checkbox.isChecked())
+                if getattr(self, 'auto_font_size_checkbox', None) is not None
+                else bool(SETTINGS.get('typeset', {}).get('auto_font_size', True))
+            ),
         }
 
     def _apply_typeset_settings(self, settings_dict):

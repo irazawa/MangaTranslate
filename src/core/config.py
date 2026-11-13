@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.8.8
+# Manga OCR & Typeset Tool v14.9.9.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -152,6 +152,7 @@ def default_settings() -> dict:
             "outline_width": 2.0,
             "outline_color": "#000000",
             "outline_style": "stroke",
+            "auto_font_size": True,
         },
         "ocr": {
             "openrouter": {

@@ -68,9 +68,14 @@ class UibuildMixin:
         find_replace_action.triggered.connect(self.open_find_replace_dialog)
         edit_menu.addAction(find_replace_action)
 
+        detect_bubbles_action = QAction('Detect Bubbles on Page', self)
+        detect_bubbles_action.setToolTip("Run interactive manual bubble detection on the current page")
+        detect_bubbles_action.triggered.connect(self.start_interactive_batch_detection)
+        edit_menu.addAction(detect_bubbles_action)
+
         self.use_box_action = None
         settings_center_action = QAction('Settings', self)
-        settings_center_action.triggered.connect(lambda: self.open_settings_dialog('profile'))
+        settings_center_action.triggered.connect(lambda: self.open_settings_dialog('general'))
         menu_bar.addAction(settings_center_action)
 
         # Legacy individual dialogs (tersembunyi, bisa dipakai dari kode)
@@ -181,6 +186,8 @@ class UibuildMixin:
 
         # Quick Compare toggle button
         self.compare_mode_btn = QPushButton(NavText.COMPARE_MODE)
+        self.compare_mode_btn.setIcon(app_icon("eye", theme.COLORS["text"], size=14, active_color=theme.COLORS["accent"]))
+        self.compare_mode_btn.setIconSize(QSize(14, 14))
         self.compare_mode_btn.setToolTip("Tahan untuk lihat gambar asli tanpa typeset overlay (Quick Compare)")
         self.compare_mode_btn.setCheckable(True)
         self.compare_mode_btn.toggled.connect(self._on_compare_mode_toggled)
@@ -207,8 +214,9 @@ class UibuildMixin:
         right_panel_layout = self.setup_right_panel()
         right_panel_content = QWidget()
         right_panel_content.setObjectName("right-panel")
+        right_panel_content.setMinimumSize(0, 0)
+        right_panel_content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         right_panel_content.setLayout(right_panel_layout)
-        right_panel_content.setMinimumHeight(0)
 
         self.right_panel_scroll = QScrollArea()
         self.right_panel_scroll.setObjectName("right-panel-scroll")
@@ -253,8 +261,7 @@ class UibuildMixin:
         header_h.setContentsMargins(14, 0, 14, 0)
         header_h.setSpacing(8)
 
-        header_icon = QLabel("⚡")
-        header_icon.setStyleSheet("font-size:16px; background:transparent; color:#38bdf8;")
+        header_icon = icon_label("zap", theme.COLORS['accent'], size=16)
         header_h.addWidget(header_icon)
 
         header = QLabel(WorkspaceText.RIGHT_PANEL_TITLE)
@@ -293,38 +300,18 @@ class UibuildMixin:
             print(f"[ChatWidget] Failed to load: {_chat_err}")
             self._chat_widget = None
 
-        # Tab definitions: (label_short, emoji, tooltip, widget_builder)
+        # Tab definitions: (label_short, icon_name, tooltip, widget_builder)
         tab_defs = [
-            ("OCR",      "🔍", "Translate & OCR settings",     self._create_translate_tab),
-            ("Full",     "🚀", "Full-page auto translation",   self._create_full_translate_tab),
-            ("Typeset",  "✏️", "Typography & text styling",    self._create_typeset_tab),
-            ("Layers",   "🗂️", "Canvas layer manager",         self._create_layers_tab),
-            ("Cleanup",  "🧹", "Inpainting & detection tools",  self._create_cleanup_tab),
-            ("History",  "📋", "Translation history log",       self._create_history_tab),
-            ("Scenes",   "🎬", "Scene / dialogue manager",      self._create_scene_tab),
-            ("AI Cfg",   "🤖", "AI models & hardware config",   self._create_ai_hardware_tab),
-            ("Workers",  "🛠", WorkersText.TAB_TOOLTIP,          self._create_workers_tab),
+            ("OCR",      "scan",     "AI OCR & translation target",   self._create_translate_tab),
+            ("Full",     "rocket",   "Full-page auto translation",    self._create_full_translate_tab),
+            ("Typeset",  "type",     "Typography & text styling",     self._create_typeset_tab),
+            ("Layers",   "layers",   "Canvas layer manager",          self._create_layers_tab),
+            ("Cleanup",  "eraser",   "Background box & area cleanup", self._create_cleanup_tab),
+            ("AI Cfg",   "cpu",      "AI models & custom styles",     self._create_ai_hardware_tab),
         ]
         if self._chat_widget is not None:
             # Insert chat after OCR
-            tab_defs.insert(1, ("Chat", "💬", "AI Chat & Video", None))
-
-        compact_markers = {
-            "OCR": "OCR",
-            "Full": "FULL",
-            "Typeset": "TXT",
-            "Layers": "LYR",
-            "Cleanup": "CLN",
-            "History": "HIS",
-            "Scenes": "SCN",
-            "AI Cfg": "AI",
-            "Chat": "CHAT",
-            "Workers": "WRK",
-        }
-        tab_defs = [
-            (label, compact_markers.get(label, marker), tip, builder)
-            for label, marker, tip, builder in tab_defs
-        ]
+            tab_defs.insert(1, ("Chat", "message", "AI Chat & Assistant", None))
 
         # QStackedWidget as content area
         self.right_stack = QStackedWidget()
@@ -333,15 +320,28 @@ class UibuildMixin:
         self.right_stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
         # Compatibility alias so code referencing self.tabs still works for tab switching
-        # We create a minimal shim object
         class _TabShim:
-            """Shim so legacy `self.tabs.setCurrentIndex(n)` calls still work."""
-            def __init__(self, stack):
+            """Shim so legacy `self.tabs.setCurrentIndex(n)` / `setCurrentWidget(w)` calls work cleanly."""
+            def __init__(self, stack, page_map):
                 self._stack = stack
+                self._page_map = page_map
+            def _sync_sidebar(self, idx):
+                for p_idx, btn in self._page_map.items():
+                    btn.setChecked(p_idx == idx)
             def setCurrentIndex(self, i):
                 self._stack.setCurrentIndex(i)
+                self._sync_sidebar(i)
+            def setCurrentWidget(self, w):
+                idx = self._stack.indexOf(w)
+                if idx >= 0:
+                    self._stack.setCurrentIndex(idx)
+                    self._sync_sidebar(idx)
             def currentIndex(self):
                 return self._stack.currentIndex()
+            def currentWidget(self):
+                return self._stack.currentWidget()
+            def indexOf(self, w):
+                return self._stack.indexOf(w)
             def addTab(self, w, label):
                 self._stack.addWidget(w)
             def tabBar(self):
@@ -354,20 +354,23 @@ class UibuildMixin:
             def setStyleSheet(self, s): pass
             def setDocumentMode(self, v): pass
             def setMovable(self, v): pass
-        self.tabs = _TabShim(self.right_stack)
 
         self._sidebar_buttons = []
         self._stack_page_map = {}  # page_index -> btn
+        self.tabs = _TabShim(self.right_stack, self._stack_page_map)
 
-        def _make_sidebar_btn(marker, label, tip, page_idx):
+        def _make_sidebar_btn(icon_name, label, tip, page_idx):
             btn = QToolButton()
             btn.setObjectName("rp-nav-btn")
-            btn.setText(f"{marker}\n{label}")
+            btn.setText(label)
+            btn.setIcon(app_icon(icon_name, theme.COLORS["muted"], 20, active_color=theme.COLORS["accent"]))
+            btn.setIconSize(QSize(20, 20))
             btn.setToolTip(tip)
             btn.setCheckable(True)
             btn.setFixedSize(60, 56)
-            btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
             btn.setProperty("page", page_idx)
+            btn.setProperty("icon_name", icon_name)
             btn.clicked.connect(lambda checked, idx=page_idx: self._on_sidebar_nav(idx))
             sidebar_v.addWidget(btn)
             self._sidebar_buttons.append(btn)
@@ -427,88 +430,87 @@ class UibuildMixin:
 
         bottom_bar = QWidget()
         bottom_bar.setObjectName("rp-bottom-bar")
+        bottom_bar.setMinimumWidth(0)
         bottom_v = QVBoxLayout(bottom_bar)
-        bottom_v.setContentsMargins(10, 8, 10, 8)
+        bottom_v.setContentsMargins(8, 8, 8, 8)
         bottom_v.setSpacing(6)
 
-        # ── Batch action row ────────────────────────────────────────────────────
-        batch_row = QHBoxLayout()
-        batch_row.setSpacing(6)
-        self.process_batch_button = QPushButton("⚡ Batch Now")
-        self.process_batch_button.setObjectName("rp-action-btn")
-        self.process_batch_button.setText("Batch Now")
-        self.process_batch_button.setToolTip("Process batch queue now")
-        self.process_batch_button.clicked.connect(self.start_batch_processing)
-        batch_row.addWidget(self.process_batch_button)
+        # Kept None so legacy guards stay safe while redundant Batch Now / Detect All buttons are retired.
+        self.process_batch_button = None
+        self.batch_process_button = None
 
-        self.batch_process_button = QPushButton("🔍 Detect All")
-        self.batch_process_button.setObjectName("rp-action-btn")
-        self.batch_process_button.setText("Detect All")
-        self.batch_process_button.setToolTip("Detects all bubbles/text on the current page")
-        self.batch_process_button.clicked.connect(self.start_interactive_batch_detection)
-        batch_row.addWidget(self.batch_process_button)
-        bottom_v.addLayout(batch_row)
-        self.on_batch_mode_changed(False)
-
-        # ── Confirm/Cancel detection (hidden by default) ──────────────────────
+        # ── Confirm/Cancel detection (hidden unless manual detection active) ─
         detect_row = QHBoxLayout()
         detect_row.setSpacing(6)
-        self.confirm_items_button = QPushButton("✔ Confirm (0)")
+        self.confirm_items_button = QPushButton("Confirm (0)")
         self.confirm_items_button.setObjectName("rp-confirm-btn")
-        self.confirm_items_button.setText("Confirm (0)")
+        self.confirm_items_button.setMinimumWidth(0)
+        self.confirm_items_button.setIcon(app_icon("check", theme.COLORS["success"], 14))
+        self.confirm_items_button.setIconSize(QSize(14, 14))
         self.confirm_items_button.clicked.connect(self.process_confirmed_detections)
         self.confirm_items_button.setVisible(False)
-        detect_row.addWidget(self.confirm_items_button)
-        self.cancel_detection_button = QPushButton("✕ Cancel")
+        detect_row.addWidget(self.confirm_items_button, 1)
+        self.cancel_detection_button = QPushButton("Cancel")
         self.cancel_detection_button.setObjectName("rp-danger-btn")
-        self.cancel_detection_button.setText("Cancel")
+        self.cancel_detection_button.setMinimumWidth(0)
+        self.cancel_detection_button.setIcon(app_icon("x", theme.COLORS["danger"], 14))
+        self.cancel_detection_button.setIconSize(QSize(14, 14))
         self.cancel_detection_button.clicked.connect(self.cancel_interactive_batch)
         self.cancel_detection_button.setVisible(False)
-        detect_row.addWidget(self.cancel_detection_button)
+        detect_row.addWidget(self.cancel_detection_button, 1)
         bottom_v.addLayout(detect_row)
 
         # ── Edit action row ─────────────────────────────────────────────────────
         edit_row = QHBoxLayout()
-        edit_row.setSpacing(6)
-        self.undo_button = QPushButton("↩ Undo")
+        edit_row.setSpacing(5)
+        self.undo_button = QPushButton("Undo")
         self.undo_button.setObjectName("rp-action-btn")
-        self.undo_button.setText("Undo")
+        self.undo_button.setMinimumWidth(0)
+        self.undo_button.setIcon(app_icon("undo", theme.COLORS["text"], 14))
+        self.undo_button.setIconSize(QSize(14, 14))
         self.undo_button.clicked.connect(self.undo_last_action)
         self.undo_button.setEnabled(False)
-        edit_row.addWidget(self.undo_button)
+        edit_row.addWidget(self.undo_button, 1)
 
-        self.redo_button = QPushButton("↪ Redo")
+        self.redo_button = QPushButton("Redo")
         self.redo_button.setObjectName("rp-action-btn")
-        self.redo_button.setText("Redo")
+        self.redo_button.setMinimumWidth(0)
+        self.redo_button.setIcon(app_icon("redo", theme.COLORS["text"], 14))
+        self.redo_button.setIconSize(QSize(14, 14))
         self.redo_button.clicked.connect(self.redo_last_action)
         self.redo_button.setEnabled(False)
-        edit_row.addWidget(self.redo_button)
+        edit_row.addWidget(self.redo_button, 1)
 
-        self.reset_button = QPushButton("🔄 Reset")
+        self.reset_button = QPushButton("Reset")
         self.reset_button.setObjectName("rp-action-btn")
-        self.reset_button.setText("Reset")
+        self.reset_button.setMinimumWidth(0)
+        self.reset_button.setIcon(app_icon("refresh", theme.COLORS["text"], 14))
+        self.reset_button.setIconSize(QSize(14, 14))
         self.reset_button.clicked.connect(self.reset_view_to_original)
-        edit_row.addWidget(self.reset_button)
+        edit_row.addWidget(self.reset_button, 1)
 
-        self.save_button = QPushButton("💾 Save")
+        self.save_button = QPushButton("Save")
         self.save_button.setObjectName("rp-save-btn")
-        self.save_button.setText("Save")
+        self.save_button.setMinimumWidth(0)
+        self.save_button.setIcon(app_icon("save", theme.COLORS["bg"], 14))
+        self.save_button.setIconSize(QSize(14, 14))
         self.save_button.clicked.connect(self.save_image)
-        edit_row.addWidget(self.save_button)
+        edit_row.addWidget(self.save_button, 1)
         bottom_v.addLayout(edit_row)
 
         # ── Undo History Timeline (Feature #1) ──────────────────────────────────
         timeline_header = QHBoxLayout()
         timeline_header.setContentsMargins(2, 4, 2, 0)
         timeline_header.setSpacing(4)
-        timeline_title_lbl = QLabel("🕐 History")
+        timeline_header.addWidget(icon_label("clock", theme.COLORS["muted"], 12))
+        timeline_title_lbl = QLabel("History")
         timeline_title_lbl.setObjectName("rp-tiny-label")
-        timeline_title_lbl.setText("History")
         timeline_header.addWidget(timeline_title_lbl)
         timeline_header.addStretch(1)
-        self._timeline_clear_btn = QPushButton("✕")
+        self._timeline_clear_btn = QPushButton()
         self._timeline_clear_btn.setObjectName("rp-action-btn")
-        self._timeline_clear_btn.setText("x")
+        self._timeline_clear_btn.setIcon(app_icon("x", theme.COLORS["muted"], 10))
+        self._timeline_clear_btn.setIconSize(QSize(10, 10))
         self._timeline_clear_btn.setFixedSize(18, 18)
         self._timeline_clear_btn.setToolTip("Clear undo history")
         self._timeline_clear_btn.clicked.connect(self._clear_undo_history)
@@ -524,43 +526,46 @@ class UibuildMixin:
         self.undo_timeline_list.itemClicked.connect(self._on_timeline_item_clicked)
         bottom_v.addWidget(self.undo_timeline_list)
 
-        # ── Status metrics (compact 2-row grid) ─────────────────────────────────
+        # ── Status metrics (compact grid that stays under 350px) ────────────────
         metrics_widget = QWidget()
         metrics_widget.setObjectName("rp-metrics")
+        metrics_widget.setMinimumWidth(0)
+        metrics_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         metrics_grid = QGridLayout(metrics_widget)
-        metrics_grid.setContentsMargins(8, 6, 8, 6)
-        metrics_grid.setHorizontalSpacing(8)
+        metrics_grid.setContentsMargins(6, 5, 6, 5)
+        metrics_grid.setHorizontalSpacing(5)
         metrics_grid.setVerticalSpacing(3)
 
         def _mlabel(text, bold=False):
             lbl = QLabel(text)
+            lbl.setMinimumWidth(0)
             lbl.setObjectName("rp-metric-key" if not bold else "rp-metric-val")
             return lbl
 
         # Row 0
         metrics_grid.addWidget(_mlabel("Workers"), 0, 0)
-        self.active_workers_label = QLabel("0"); self.active_workers_label.setObjectName("rp-metric-val")
+        self.active_workers_label = QLabel("0"); self.active_workers_label.setMinimumWidth(0); self.active_workers_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.active_workers_label, 0, 1)
 
         metrics_grid.addWidget(_mlabel("RPM"), 0, 2)
-        self.rpm_label = QLabel("0/0"); self.rpm_label.setObjectName("rp-metric-val")
+        self.rpm_label = QLabel("0/0"); self.rpm_label.setMinimumWidth(0); self.rpm_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.rpm_label, 0, 3)
 
         metrics_grid.addWidget(_mlabel("RPD"), 0, 4)
-        self.rpd_label = QLabel("0/0"); self.rpd_label.setObjectName("rp-metric-val")
+        self.rpd_label = QLabel("0/0"); self.rpd_label.setMinimumWidth(0); self.rpd_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.rpd_label, 0, 5)
 
         # Row 1
         metrics_grid.addWidget(_mlabel("Cost"), 1, 0)
-        self.cost_label = QLabel("$0.0000"); self.cost_label.setObjectName("rp-cost-val")
+        self.cost_label = QLabel("$0.0000"); self.cost_label.setMinimumWidth(0); self.cost_label.setObjectName("rp-cost-val")
         metrics_grid.addWidget(self.cost_label, 1, 1)
 
         metrics_grid.addWidget(_mlabel("IDR"), 1, 2)
-        self.cost_idr_label = QLabel("Rp 0"); self.cost_idr_label.setObjectName("rp-metric-val")
+        self.cost_idr_label = QLabel("Rp 0"); self.cost_idr_label.setMinimumWidth(0); self.cost_idr_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.cost_idr_label, 1, 3)
 
         metrics_grid.addWidget(_mlabel("Snippets"), 1, 4)
-        self.translated_label = QLabel("0"); self.translated_label.setObjectName("rp-metric-val")
+        self.translated_label = QLabel("0"); self.translated_label.setMinimumWidth(0); self.translated_label.setObjectName("rp-metric-val")
         metrics_grid.addWidget(self.translated_label, 1, 5)
 
         # Row 2 — provider + model  (spans full width)
@@ -578,28 +583,33 @@ class UibuildMixin:
 
         bottom_v.addWidget(metrics_widget)
 
-        # ── Token rates (very small, collapsed to single row) ─────────────────
-        token_row = QHBoxLayout()
-        token_row.setSpacing(12)
+        # ── Token rates (2x2 compact grid so values never clip horizontally) ───
+        token_grid = QGridLayout()
+        token_grid.setContentsMargins(2, 0, 2, 0)
+        token_grid.setHorizontalSpacing(10)
+        token_grid.setVerticalSpacing(2)
         self.input_tokens_label = QLabel("In: 0 tok")
+        self.input_tokens_label.setMinimumWidth(0)
         self.input_tokens_label.setObjectName("rp-tiny-label")
-        token_row.addWidget(self.input_tokens_label)
+        token_grid.addWidget(self.input_tokens_label, 0, 0)
         self.output_tokens_label = QLabel("Out: 0 tok")
+        self.output_tokens_label.setMinimumWidth(0)
         self.output_tokens_label.setObjectName("rp-tiny-label")
-        token_row.addWidget(self.output_tokens_label)
+        token_grid.addWidget(self.output_tokens_label, 0, 1)
         self.rate_label_input = QLabel("$0.0000/in")
+        self.rate_label_input.setMinimumWidth(0)
         self.rate_label_input.setObjectName("rp-tiny-label")
-        token_row.addWidget(self.rate_label_input)
+        token_grid.addWidget(self.rate_label_input, 1, 0)
         self.rate_label_output = QLabel("$0.0000/out")
+        self.rate_label_output.setMinimumWidth(0)
         self.rate_label_output.setObjectName("rp-tiny-label")
-        token_row.addWidget(self.rate_label_output)
-        token_row.addStretch()
-        bottom_v.addLayout(token_row)
+        token_grid.addWidget(self.rate_label_output, 1, 1)
+        token_grid.setColumnStretch(2, 1)
+        bottom_v.addLayout(token_grid)
 
         # ── Cooldown label ───────────────────────────────────────────────────────
-        self.countdown_label = QLabel("⏳ Cooldown: 60s")
+        self.countdown_label = QLabel("Cooldown: 60s")
         self.countdown_label.setObjectName("rp-countdown")
-        self.countdown_label.setText("Cooldown: 60s")
         self.countdown_label.setVisible(False)
         bottom_v.addWidget(self.countdown_label)
 
@@ -695,7 +705,7 @@ class UibuildMixin:
                 border: 1px solid #1e293b;
                 border-radius: 10px;
                 margin-top: 12px;
-                padding: 12px 10px 10px 10px;
+                padding: 10px 8px 10px 8px;
             }
             #rp-stack QGroupBox::title {
                 subcontrol-origin: margin;
@@ -827,8 +837,8 @@ class UibuildMixin:
                 color: #94a3b8;
                 border: 1px solid #1e2d42;
                 border-radius: 7px;
-                padding: 5px 10px;
-                font-size: 9pt;
+                padding: 5px 6px;
+                font-size: 8.5pt;
                 font-weight: 600;
             }
             QPushButton#rp-action-btn:enabled:hover {
@@ -848,8 +858,8 @@ class UibuildMixin:
                 color: #e0f2fe;
                 border: 1px solid #0284c7;
                 border-radius: 7px;
-                padding: 5px 10px;
-                font-size: 9pt;
+                padding: 5px 6px;
+                font-size: 8.5pt;
                 font-weight: 700;
             }
             QPushButton#rp-save-btn:hover {
@@ -960,105 +970,134 @@ class UibuildMixin:
     def _create_cleanup_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(10, 14, 10, 12)
+        layout.setSpacing(12)
 
-        # Auto-Detection Mode Group (NEW)
-        detection_mode_group = QGroupBox("Auto-Detection Mode")
-        detection_mode_layout = QHBoxLayout(detection_mode_group)
-        self.bubble_detect_radio = QRadioButton("Bubble Detection")
-        self.text_detect_radio = QRadioButton("Text Detection")
-        self.bubble_detect_radio.setChecked(True) # Default
-        detection_mode_layout.addWidget(self.bubble_detect_radio)
-        detection_mode_layout.addWidget(self.text_detect_radio)
-        layout.addWidget(detection_mode_group)
+        selection_group = QGroupBox("Text Box && Area Cleanup")
+        selection_layout = QVBoxLayout(selection_group)
+        selection_layout.setContentsMargins(10, 14, 10, 12)
+        selection_layout.setSpacing(8)
 
-        selection_group = QGroupBox("Manual Selection Tool")
-        selection_layout = QGridLayout(selection_group)
-        
-        selection_layout.addWidget(QLabel("Mode:"), 0, 0)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        mode_row.addWidget(QLabel("Mode:"))
         self.selection_mode_combo = ScrollableComboBox(self)
         self.selection_mode_combo.addItems(SELECTION_MODE_LABELS)
-        selection_layout.addWidget(self.selection_mode_combo, 0, 1, 1, 1)
+        self._fit_workspace_combo(self.selection_mode_combo, 10)
+        mode_row.addWidget(self.selection_mode_combo, 1)
+        selection_layout.addLayout(mode_row)
 
         self.selection_mode_combo.currentTextChanged.connect(self.selection_mode_changed)
-        pen_buttons_layout = QHBoxLayout()
-        self.confirm_button = QPushButton("Confirm"); self.confirm_button.clicked.connect(self.confirm_pen_selection); self.confirm_button.setVisible(False)
-        self.cancel_button = QPushButton("Cancel"); self.cancel_button.clicked.connect(self.cancel_pen_selection); self.cancel_button.setVisible(False)
-        pen_buttons_layout.addWidget(self.confirm_button); pen_buttons_layout.addWidget(self.cancel_button)
+        pen_buttons_layout = QVBoxLayout()
+        pen_buttons_layout.setSpacing(6)
+        confirm_row = QHBoxLayout()
+        confirm_row.setSpacing(6)
+        self.confirm_button = QPushButton("Confirm"); self.confirm_button.setMinimumWidth(0); self.confirm_button.clicked.connect(self.confirm_pen_selection); self.confirm_button.setVisible(False)
+        self.cancel_button = QPushButton("Cancel"); self.cancel_button.setMinimumWidth(0); self.cancel_button.clicked.connect(self.cancel_pen_selection); self.cancel_button.setVisible(False)
+        confirm_row.addWidget(self.confirm_button, 1); confirm_row.addWidget(self.cancel_button, 1)
+        pen_buttons_layout.addLayout(confirm_row)
 
         self.brush_controls_widget = QWidget()
-        brush_layout = QHBoxLayout(self.brush_controls_widget)
-        brush_layout.setContentsMargins(0, 0, 0, 0)
-        brush_layout.addWidget(QLabel("Brush Size:"))
+        self.brush_controls_widget.setMinimumWidth(0)
+        brush_v = QVBoxLayout(self.brush_controls_widget)
+        brush_v.setContentsMargins(0, 0, 0, 0)
+        brush_v.setSpacing(6)
+
+        brush_size_row = QHBoxLayout()
+        brush_size_row.setSpacing(6)
+        brush_size_row.addWidget(QLabel("Brush Size:"))
         self.brush_size_spinbox = QSpinBox()
         self.brush_size_spinbox.setRange(5, 200)
         self.brush_size_spinbox.setValue(25)
         self.brush_size_spinbox.valueChanged.connect(lambda val: self.image_label.set_inpaint_brush_size(val) if hasattr(self, 'image_label') else None)
-        brush_layout.addWidget(self.brush_size_spinbox)
-        self.inpaint_confirm_button = QPushButton("Confirm Clean")
+        brush_size_row.addWidget(self.brush_size_spinbox, 1)
+        brush_v.addLayout(brush_size_row)
+
+        brush_btn_row = QGridLayout()
+        brush_btn_row.setSpacing(6)
+        self.inpaint_confirm_button = QPushButton("Clean")
+        self.inpaint_confirm_button.setMinimumWidth(0)
+        self.inpaint_confirm_button.setToolTip("Apply inpainting to the painted brush mask")
         self.inpaint_confirm_button.clicked.connect(lambda: self.apply_inpaint_brush_selection(run_ocr_translate=self._is_inpaint_ocr_mode()))
-        brush_layout.addWidget(self.inpaint_confirm_button)
+        brush_btn_row.addWidget(self.inpaint_confirm_button, 0, 0)
+
         self.inpaint_clear_button = QPushButton("Clear Brush")
+        self.inpaint_clear_button.setMinimumWidth(0)
         self.inpaint_clear_button.clicked.connect(lambda: self.image_label.clear_inpaint_mask() if hasattr(self, 'image_label') else None)
-        brush_layout.addWidget(self.inpaint_clear_button)
+        brush_btn_row.addWidget(self.inpaint_clear_button, 0, 1)
+
         self.inpaint_compare_button = QPushButton("Compare")
+        self.inpaint_compare_button.setMinimumWidth(0)
         self.inpaint_compare_button.setCheckable(True)
         self.inpaint_compare_button.setToolTip("Show the page before inpainting so OCR can read the original text.")
         self.inpaint_compare_button.toggled.connect(lambda checked: self.compare_mode_btn.setChecked(checked) if hasattr(self, 'compare_mode_btn') else None)
-        brush_layout.addWidget(self.inpaint_compare_button)
-        self.inpaint_cancel_button = QPushButton("X")
+        brush_btn_row.addWidget(self.inpaint_compare_button, 1, 0)
+
+        self.inpaint_cancel_button = QPushButton("Reset Bg")
+        self.inpaint_cancel_button.setMinimumWidth(0)
         self.inpaint_cancel_button.setToolTip("Cancel the saved inpainting result for this page.")
         self.inpaint_cancel_button.clicked.connect(self.cancel_inpaint_result)
-        brush_layout.addWidget(self.inpaint_cancel_button)
+        brush_btn_row.addWidget(self.inpaint_cancel_button, 1, 1)
+        brush_v.addLayout(brush_btn_row)
+
         self.brush_controls_widget.setVisible(False)
         pen_buttons_layout.addWidget(self.brush_controls_widget)
 
-        selection_layout.addLayout(pen_buttons_layout, 1, 0, 1, 2)
+        selection_layout.addLayout(pen_buttons_layout)
 
-        self.create_bubble_checkbox = QCheckBox("Create white bubble with black outline")
-        self.create_bubble_checkbox.setToolTip("When enabled, confirmed selections will render a bubble background behind the text.")
-        selection_layout.addWidget(self.create_bubble_checkbox, 2, 0, 1, 2)
-        # New: option to use a background box for rendered text (global cleanup option)
+        self.create_bubble_checkbox = QCheckBox("White bubble (black outline)")
+        self.create_bubble_checkbox.setMinimumWidth(0)
+        self.create_bubble_checkbox.setToolTip("When enabled, confirmed selections render a white bubble with a black outline behind the text.")
+        selection_layout.addWidget(self.create_bubble_checkbox)
+
         self.use_background_box_checkbox = QCheckBox("Use Background Box for Text")
-        # Initialize from saved SETTINGS if present
+        self.use_background_box_checkbox.setMinimumWidth(0)
         self.use_background_box_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('use_background_box', True)))
-        self.use_background_box_checkbox.setToolTip("When enabled, OCR/translated text will be placed inside a background box. If disabled, text is drawn directly over the image (transparent background).")
-        selection_layout.addWidget(self.use_background_box_checkbox, 3, 0, 1, 2)
+        self.use_background_box_checkbox.setToolTip("When enabled, translated text is placed inside a background box. Disable for transparent overlay.")
+        selection_layout.addWidget(self.use_background_box_checkbox)
 
         self.constrain_text_checkbox = QCheckBox("Keep Text Inside Area")
+        self.constrain_text_checkbox.setMinimumWidth(0)
         self.constrain_text_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('constrain_text', True)))
-        self.constrain_text_checkbox.setToolTip("When enabled, text still wraps to the selected area when the background box is hidden. Turn off for one-line free text.")
-        selection_layout.addWidget(self.constrain_text_checkbox, 4, 0, 1, 2)
-        # Small control: apply mode (selected area vs global)
-        apply_mode_layout = QHBoxLayout()
-        self.apply_mode_selected_radio = QRadioButton("Apply to Selected Area")
-        self.apply_mode_global_radio = QRadioButton("Apply Globally")
-        # Restore saved apply mode if present in SETTINGS
+        self.constrain_text_checkbox.setToolTip("When enabled, text wraps within the area bounds even when the background box is hidden.")
+        selection_layout.addWidget(self.constrain_text_checkbox)
+
+        self.inpaint_checkbox = QCheckBox("Use Inpainting (clean bg)")
+        self.inpaint_checkbox.setMinimumWidth(0)
+        self.inpaint_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('use_inpaint', True)))
+        self.inpaint_checkbox.setToolTip("Use Inpainting (Remove Original Text): erase underlying text via your configured IOPaint / Inpaint backend.")
+        selection_layout.addWidget(self.inpaint_checkbox)
+
+        apply_mode_box = QVBoxLayout()
+        apply_mode_box.setSpacing(4)
+        self.apply_mode_selected_radio = QRadioButton("Selected Area")
+        self.apply_mode_global_radio = QRadioButton("Global Default")
+        self.apply_mode_selected_radio.setMinimumWidth(0)
+        self.apply_mode_global_radio.setMinimumWidth(0)
         saved_mode = self._default_cleanup_value('apply_mode') or 'selected'
         if saved_mode == 'global':
             self.apply_mode_global_radio.setChecked(True)
         else:
             self.apply_mode_selected_radio.setChecked(True)
-        apply_mode_layout.addWidget(self.apply_mode_selected_radio)
-        apply_mode_layout.addWidget(self.apply_mode_global_radio)
-        # small status label to show which mode is active
-        self.apply_mode_status_label = QLabel()
-        def _update_apply_mode_label():
-            if self.apply_mode_global_radio.isChecked():
-                self.apply_mode_status_label.setText("Mode: Global")
-            else:
-                self.apply_mode_status_label.setText("Mode: Selected Area")
-        _update_apply_mode_label()
-        apply_mode_layout.addWidget(self.apply_mode_status_label)
-        selection_layout.addLayout(apply_mode_layout, 5, 0, 1, 2)
+        apply_mode_box.addWidget(self.apply_mode_selected_radio)
+        apply_mode_box.addWidget(self.apply_mode_global_radio)
 
-        # Apply to All Areas button
+        self.apply_mode_status_label = QLabel()
+        self.apply_mode_status_label.setMinimumWidth(0)
+        self.apply_mode_status_label.setStyleSheet(f"color: {theme.COLORS['accent']}; font-size: 8.5pt; font-weight: 700;")
+        def _update_apply_mode_label():
+            self.apply_mode_status_label.setText(
+                "Mode: Global Default" if self.apply_mode_global_radio.isChecked() else "Mode: Selected Area"
+            )
+        _update_apply_mode_label()
+        apply_mode_box.addWidget(self.apply_mode_status_label)
+        selection_layout.addLayout(apply_mode_box)
+
         self.apply_all_button = QPushButton("Apply to All Areas")
-        self.apply_all_button.setToolTip("Apply the selected action either to update defaults only or force update every existing area.")
+        self.apply_all_button.setMinimumWidth(0)
+        self.apply_all_button.setToolTip("Update defaults only or push current cleanup toggles to every existing area.")
         def _on_apply_all_clicked():
-            # Dialog with two choices
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
             dlg = QDialog(self)
             dlg.setWindowTitle("Apply to All Areas")
@@ -1076,8 +1115,8 @@ class UibuildMixin:
             def _update_defaults_only():
                 use_box_val = bool(self.use_background_box_checkbox.isChecked())
                 use_inpaint_val = bool(self.inpaint_checkbox.isChecked())
-                self._set_global_cleanup_default('use_background_box', use_box_val)
                 constrain_text_val = bool(self.constrain_text_checkbox.isChecked())
+                self._set_global_cleanup_default('use_background_box', use_box_val)
                 self._set_global_cleanup_default('use_inpaint', use_inpaint_val)
                 self._set_global_cleanup_default('constrain_text', constrain_text_val)
                 self.show_toast("Apply to all", "Global defaults updated. Existing areas keep their individual overrides.", kind="success")
@@ -1087,8 +1126,8 @@ class UibuildMixin:
             def _force_update_all():
                 use_box_val = bool(self.use_background_box_checkbox.isChecked())
                 use_inpaint_val = bool(self.inpaint_checkbox.isChecked())
-                self._set_global_cleanup_default('use_background_box', use_box_val)
                 constrain_text_val = bool(self.constrain_text_checkbox.isChecked())
+                self._set_global_cleanup_default('use_background_box', use_box_val)
                 self._set_global_cleanup_default('use_inpaint', use_inpaint_val)
                 self._set_global_cleanup_default('constrain_text', constrain_text_val)
                 default_box = self._default_cleanup_value('use_background_box')
@@ -1129,9 +1168,8 @@ class UibuildMixin:
             dlg.exec_()
 
         self.apply_all_button.clicked.connect(_on_apply_all_clicked)
-        selection_layout.addWidget(self.apply_all_button, 6, 0, 1, 2)
+        selection_layout.addWidget(self.apply_all_button)
 
-        # Whenever apply-mode is toggled, save to SETTINGS
         def _on_apply_mode_changed():
             mode = 'global' if self.apply_mode_global_radio.isChecked() else 'selected'
             self._set_global_cleanup_default('apply_mode', mode)
@@ -1140,85 +1178,46 @@ class UibuildMixin:
         self.apply_mode_selected_radio.toggled.connect(_on_apply_mode_changed)
         self.apply_mode_global_radio.toggled.connect(_on_apply_mode_changed)
 
-        # When user toggles the checkbox in the Cleanup tab, update either the hovered area or global default depending on apply mode
-        def on_tab_checkbox_toggled(state):
-            self._apply_cleanup_change('use_background_box', bool(state))
-        self.use_background_box_checkbox.toggled.connect(on_tab_checkbox_toggled)
-
-        def on_constrain_text_toggled(state):
-            self._apply_cleanup_change('constrain_text', bool(state))
-        self.constrain_text_checkbox.toggled.connect(on_constrain_text_toggled)
+        self.use_background_box_checkbox.toggled.connect(
+            lambda state: self._apply_cleanup_change('use_background_box', bool(state))
+        )
+        self.constrain_text_checkbox.toggled.connect(
+            lambda state: self._apply_cleanup_change('constrain_text', bool(state))
+        )
+        self.inpaint_checkbox.toggled.connect(
+            lambda state: self._apply_cleanup_change('use_inpaint', bool(state))
+        )
         layout.addWidget(selection_group)
-        
-        # [DIUBAH] Inpainting Group dengan model baru
-        inpaint_group = QGroupBox("Inpainting (Text Removal)")
-        inpaint_layout = QGridLayout(inpaint_group)
-        self.inpaint_checkbox = QCheckBox("Gunakan Inpainting")
-        # Initialize from SETTINGS default if present
-        self.inpaint_checkbox.setChecked(bool(SETTINGS.get('cleanup', {}).get('use_inpaint', True)))
-        inpaint_layout.addWidget(self.inpaint_checkbox, 0, 0, 1, 2)
 
-        inpaint_models = ["IOPaint Server", "OpenCV-NS", "OpenCV-Telea"]
-        if self.is_lama_available:
-            if os.path.exists(self.dl_models['big_lama']['path']):
-                inpaint_models.append("Big-LaMa")
-            if os.path.exists(self.dl_models['anime_inpaint']['path']):
-                inpaint_models.append("Anime-Inpainting")
-        
-        self.inpaint_model_combo = self._create_combo_box(inpaint_layout, "Model:", inpaint_models, 1, 0)
-        self.inpaint_padding_spinbox = self._create_spin_box(inpaint_layout, "Padding (px):", 1, 25, 5, 2, 0)
-        # When toggling inpaint checkbox, respect apply mode selection
-        def on_inpaint_toggled(state):
-            self._apply_cleanup_change('use_inpaint', bool(state))
-        self.inpaint_checkbox.toggled.connect(on_inpaint_toggled)
-        layout.addWidget(inpaint_group)
+        # ── Inpainting Server Configuration Card (delegated to Settings) ──────
+        inpaint_card = QGroupBox("Inpainting Engine (IOPaint Server)")
+        inpaint_v = QVBoxLayout(inpaint_card)
+        inpaint_v.setContentsMargins(12, 12, 12, 12)
+        inpaint_v.setSpacing(8)
+        cleanup_cfg = SETTINGS.get('cleanup', {})
+        model_name = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        server_url = cleanup_cfg.get('inpaint_server_url', 'http://127.0.0.1:8080')
+        self.cleanup_inpaint_summary_label = QLabel(
+            f"Active Engine: {model_name}\nServer URL: {server_url}"
+        )
+        self.cleanup_inpaint_summary_label.setWordWrap(True)
+        self.cleanup_inpaint_summary_label.setStyleSheet(
+            f"background: {theme.COLORS['card_alt']}; color: {theme.COLORS['accent_hover']}; "
+            f"border: 1px solid {theme.COLORS['border']}; border-radius: 6px; "
+            f"padding: 7px 10px; font-size: 8.5pt;"
+        )
+        inpaint_v.addWidget(self.cleanup_inpaint_summary_label)
 
-        # Ensure UI reflects either selected area overrides or global defaults
+        cfg_inpaint_btn = QPushButton("IOPaint && Inpaint Settings")
+        cfg_inpaint_btn.setMinimumWidth(0)
+        cfg_inpaint_btn.setToolTip("Configure IOPaint & Inpainting in Settings")
+        cfg_inpaint_btn.setIcon(app_icon("settings", theme.COLORS["accent"], 14))
+        cfg_inpaint_btn.setIconSize(QSize(14, 14))
+        cfg_inpaint_btn.clicked.connect(lambda: self.open_settings_dialog('cleanup'))
+        inpaint_v.addWidget(cfg_inpaint_btn)
+        layout.addWidget(inpaint_card)
+
         self._sync_cleanup_controls_from_selection()
-
-        dl_detect_group = QGroupBox("Bubble Detector Model (Advanced)")
-        dl_layout = QGridLayout(dl_detect_group)
-        self.dl_bubble_detector_checkbox = QCheckBox("Gunakan DL Model untuk Bubble"); dl_layout.addWidget(self.dl_bubble_detector_checkbox, 0, 0, 1, 2)
-        self.dl_model_provider_combo = self._create_combo_box(dl_layout, "Provider:", ["Kitsumed", "Ogkalu"], 1, 0)
-        self.dl_model_file_combo = self._create_combo_box(dl_layout, "Model:", [], 2, 0)
-        self.split_bubbles_checkbox = QCheckBox("Otomatis Pisahkan Bubble Panjang")
-        dl_layout.addWidget(self.split_bubbles_checkbox, 3, 0, 1, 2)
-        self.dl_bubble_detector_checkbox.stateChanged.connect(self.on_dl_detector_state_changed)
-        self.dl_model_provider_combo.currentTextChanged.connect(self.on_dl_provider_changed)
-        layout.addWidget(dl_detect_group)
-        self.on_dl_provider_changed(self.dl_model_provider_combo.currentText())
-
-        # Panel & RTL Reader Group (NEW)
-        panel_group = QGroupBox("Panel & RTL Reader (Advanced)")
-        panel_layout = QGridLayout(panel_group)
-        
-        self.panel_model_path_input = QLineEdit()
-        self.panel_model_path_input.setPlaceholderText("Default YOLO26 model path")
-        self.panel_model_path_input.setText(SETTINGS.get('cleanup', {}).get('panel_model_path', ''))
-        self.panel_model_path_input.textChanged.connect(self.on_panel_model_path_changed)
-        
-        browse_panel_btn = QPushButton("Browse")
-        browse_panel_btn.clicked.connect(self.browse_panel_model)
-        
-        self.show_panels_checkbox = QCheckBox("Tampilkan Batas Panel (Debug)")
-        self.show_panels_checkbox.setChecked(False)
-        self.show_panels_checkbox.stateChanged.connect(self.on_show_panels_changed)
-        
-        detect_panels_btn = QPushButton("Auto-Detect Panels")
-        detect_panels_btn.clicked.connect(self.detect_panels_yolo)
-        
-        sort_rtl_btn = QPushButton("Sort RTL")
-        sort_rtl_btn.clicked.connect(self.sort_areas_rtl)
-        
-        panel_layout.addWidget(QLabel("YOLO Model:"), 0, 0)
-        panel_layout.addWidget(self.panel_model_path_input, 0, 1)
-        panel_layout.addWidget(browse_panel_btn, 0, 2)
-        panel_layout.addWidget(self.show_panels_checkbox, 1, 0, 1, 3)
-        panel_layout.addWidget(detect_panels_btn, 2, 0, 1, 1)
-        panel_layout.addWidget(sort_rtl_btn, 2, 1, 1, 2)
-        
-        layout.addWidget(panel_group)
-
         layout.addStretch()
         return tab
 
@@ -1395,27 +1394,75 @@ class UibuildMixin:
     def _create_ai_hardware_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
+
+        # ── Active Pipeline Mode Banner ───────────────────────────────────────
+        hero = QFrame()
+        hero.setStyleSheet(
+            f"QFrame {{ background: {theme.COLORS['card']}; border: 1px solid {theme.COLORS['border']}; "
+            f"border-left: 3px solid {theme.COLORS['accent']}; border-radius: 8px; }}"
+        )
+        hero_v = QVBoxLayout(hero)
+        hero_v.setContentsMargins(12, 10, 12, 10)
+        hero_v.setSpacing(6)
+        hero_row = QHBoxLayout()
+        hero_row.setSpacing(6)
+        hero_title = QLabel("AI Translation")
+        hero_title.setMinimumWidth(0)
+        hero_title.setStyleSheet(f"color: {theme.COLORS['text']}; font-weight: 800; font-size: 10pt; border: none;")
+        mode_pill = QLabel("AI-ONLY")
+        mode_pill.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        mode_pill.setStyleSheet(
+            f"color: {theme.COLORS['accent']}; background: rgba(56, 189, 248, 0.12); "
+            f"border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 999px; "
+            f"padding: 2px 8px; font-size: 7.5pt; font-weight: 700;"
+        )
+        hero_row.addWidget(hero_title)
+        hero_row.addStretch()
+        hero_row.addWidget(mode_pill)
+        hero_v.addLayout(hero_row)
+        hero_sub = QLabel("Select your active translation model and tone style.")
+        hero_sub.setWordWrap(True)
+        hero_sub.setMinimumWidth(0)
+        hero_sub.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; border: none;")
+        hero_v.addWidget(hero_sub)
+        layout.addWidget(hero)
 
         # ── AI Model & Translation ────────────────────────────────────────────
-        ai_group = QGroupBox("AI Models & Translation")
-        ai_form = QFormLayout(ai_group)
-        ai_form.setContentsMargins(12, 16, 12, 12)
-        ai_form.setSpacing(10)
-        ai_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        ai_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        ai_group = QGroupBox("AI Models && Translation")
+        ai_v = QVBoxLayout(ai_group)
+        ai_v.setContentsMargins(12, 14, 12, 12)
+        ai_v.setSpacing(8)
 
+        _ai_lbl_style = f"color: {theme.COLORS['muted']}; font-size: 8.5pt; font-weight: 600;"
+
+        model_lbl = QLabel("AI Model:")
+        model_lbl.setStyleSheet(_ai_lbl_style)
+        ai_v.addWidget(model_lbl)
         self.ai_model_combo = QComboBox()
+        self._fit_workspace_combo(self.ai_model_combo, 12)
         self.ai_model_combo.currentTextChanged.connect(self.on_ai_model_changed)
-        ai_form.addRow("AI Model:", self.ai_model_combo)
+        ai_v.addWidget(self.ai_model_combo)
 
+        style_lbl = QLabel("Style:")
+        style_lbl.setStyleSheet(_ai_lbl_style)
+        ai_v.addWidget(style_lbl)
         self.style_combo = QComboBox()
         self.style_combo.addItems(self.translation_styles)
+        self._fit_workspace_combo(self.style_combo, 12)
         default_style = SETTINGS.get('general', {}).get('default_translation_style', 'Santai (Default)')
         if default_style in self.translation_styles:
             self.style_combo.setCurrentText(default_style)
-        ai_form.addRow("Style:", self.style_combo)
+        ai_v.addWidget(self.style_combo)
+
+        cfg_api_btn = QPushButton("Providers && API Settings")
+        cfg_api_btn.setMinimumWidth(0)
+        cfg_api_btn.setToolTip("Manage Providers & API Keys in Settings")
+        cfg_api_btn.setIcon(app_icon("settings", theme.COLORS["accent"], 14))
+        cfg_api_btn.setIconSize(QSize(14, 14))
+        cfg_api_btn.clicked.connect(lambda: self.open_settings_dialog('api'))
+        ai_v.addWidget(cfg_api_btn)
 
         layout.addWidget(ai_group)
 
@@ -1425,89 +1472,30 @@ class UibuildMixin:
         cs_layout.setContentsMargins(12, 14, 12, 12)
         cs_layout.setSpacing(8)
 
-        style_row = QHBoxLayout()
         self.style_input = QLineEdit(self)
-        self.style_input.setPlaceholderText("New style name...")
-        style_row.addWidget(self.style_input, 1)
+        self.style_input.setMinimumWidth(0)
+        self.style_input.setPlaceholderText("Enter custom style name...")
+        cs_layout.addWidget(self.style_input)
+
+        style_btn_row = QHBoxLayout()
+        style_btn_row.setSpacing(8)
         add_style_btn = QPushButton("+ Add")
+        add_style_btn.setMinimumWidth(0)
+        add_style_btn.setStyleSheet(compact_primary_button_qss())
         add_style_btn.clicked.connect(lambda: (self.add_custom_style(self.style_input.text()) and self.style_input.clear()))
-        style_row.addWidget(add_style_btn)
+        style_btn_row.addWidget(add_style_btn, 1)
         remove_style_btn = QPushButton("Remove")
+        remove_style_btn.setMinimumWidth(0)
         remove_style_btn.clicked.connect(lambda: self.remove_selected_style())
-        style_row.addWidget(remove_style_btn)
-        cs_layout.addLayout(style_row)
+        style_btn_row.addWidget(remove_style_btn, 1)
+        cs_layout.addLayout(style_btn_row)
+
+        cs_hint = QLabel("Added styles appear immediately in the Style dropdown above; Remove deletes the selected style.")
+        cs_hint.setWordWrap(True)
+        cs_hint.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8pt;")
+        cs_layout.addWidget(cs_hint)
 
         layout.addWidget(custom_style_group)
-
-        # ── Processing Modes ─────────────────────────────────────────────────
-        mode_group = QGroupBox("Processing Modes")
-        mode_v = QVBoxLayout(mode_group)
-        mode_v.setContentsMargins(12, 14, 12, 12)
-        mode_v.setSpacing(8)
-
-        self.enhanced_pipeline_checkbox = QCheckBox("Enhanced Pipeline  (JP Only · More API)")
-        self.enhanced_pipeline_checkbox.stateChanged.connect(self.on_pipeline_mode_changed)
-        mode_v.addWidget(self.enhanced_pipeline_checkbox)
-
-        self.ai_only_translate_checkbox = QCheckBox("AI-Only Translate")
-        self.ai_only_translate_checkbox.stateChanged.connect(self.on_translation_mode_changed)
-        mode_v.addWidget(self.ai_only_translate_checkbox)
-
-        self.deepl_only_checkbox = QCheckBox("DeepL-Only Translate")
-        self.deepl_only_checkbox.stateChanged.connect(self.on_translation_mode_changed)
-        mode_v.addWidget(self.deepl_only_checkbox)
-
-        self.safe_mode_checkbox = QCheckBox("Safe Mode  (Filter Adult Content)")
-        mode_v.addWidget(self.safe_mode_checkbox)
-
-        self.batch_mode_checkbox = QCheckBox("Enable Batch Processing")
-        self.batch_mode_checkbox.stateChanged.connect(self.on_batch_mode_changed)
-        mode_v.addWidget(self.batch_mode_checkbox)
-
-        layout.addWidget(mode_group)
-
-        # ── Hardware & Performance ────────────────────────────────────────────
-        hardware_group = QGroupBox("Hardware & Performance")
-        hw_form = QFormLayout(hardware_group)
-        hw_form.setContentsMargins(12, 16, 12, 12)
-        hw_form.setSpacing(10)
-        hw_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        hw_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-
-        # GPU row with status indicator
-        gpu_row = QHBoxLayout()
-        self.use_gpu_checkbox = QCheckBox("Enable GPU")
-        self.use_gpu_checkbox.setChecked(self.is_gpu_available)
-        self.use_gpu_checkbox.setEnabled(self.is_gpu_available)
-        if not self.is_gpu_available:
-            self.use_gpu_checkbox.setToolTip("Tidak ada GPU NVIDIA yang terdeteksi.")
-        self.use_gpu_checkbox.stateChanged.connect(self.update_gpu_status_label)
-        gpu_row.addWidget(self.use_gpu_checkbox)
-        gpu_row.addStretch()
-        self.gpu_status_label = QLabel("● GPU OK" if self.is_gpu_available else "● No GPU")
-        self.gpu_status_label.setObjectName("gpu-status")
-        self.gpu_status_label.setStyleSheet(
-            "color: #4ade80; font-weight:700; font-size:9pt;" if self.is_gpu_available
-            else "color: #f87171; font-weight:700; font-size:9pt;"
-        )
-        gpu_row.addWidget(self.gpu_status_label)
-        hw_form.addRow("Accel:", gpu_row)
-
-        self.max_workers_spinbox = QSpinBox()
-        self.max_workers_spinbox.setRange(1, 50)
-        self.max_workers_spinbox.setValue(self.MAX_WORKERS)
-        self.max_workers_spinbox.valueChanged.connect(self.on_max_workers_changed)
-        hw_form.addRow("Max Workers:", self.max_workers_spinbox)
-
-        self.spawn_threshold_spinbox = QSpinBox()
-        self.spawn_threshold_spinbox.setRange(1, 10)
-        self.spawn_threshold_spinbox.setValue(self.WORKER_SPAWN_THRESHOLD)
-        self.spawn_threshold_spinbox.valueChanged.connect(self.on_spawn_threshold_changed)
-        hw_form.addRow("Spawn Threshold:", self.spawn_threshold_spinbox)
-
-        layout.addWidget(hardware_group)
-
-        self.update_gpu_status_label()
         layout.addStretch()
         return tab
 
@@ -1552,7 +1540,7 @@ class UibuildMixin:
         """Bangun widget welcome screen yang indah dengan quick actions dan recent projects."""
         from PyQt5.QtWidgets import (
             QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-            QScrollArea, QFrame, QSizePolicy, QGridLayout
+            QScrollArea, QFrame, QSizePolicy, QGridLayout, QToolButton
         )
         from PyQt5.QtCore import Qt, QSize
         from PyQt5.QtGui import QFont, QColor, QPalette
@@ -1583,7 +1571,13 @@ class UibuildMixin:
         vbox.setSpacing(0)
 
         # ── Header ────────────────────────────────────────────────────────────
-        header_lbl = QLabel("📖 MangaTranslate")
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+        header_row.setAlignment(Qt.AlignCenter)
+        header_icon = icon_label("book", theme.COLORS["accent"], size=36)
+        header_icon.setStyleSheet("background: transparent; margin-bottom: 4px;")
+        header_row.addWidget(header_icon)
+        header_lbl = QLabel("MangaTranslate")
         header_lbl.setAlignment(Qt.AlignCenter)
         header_lbl.setStyleSheet(f"""
             color: {theme.COLORS["text"]};
@@ -1592,8 +1586,10 @@ class UibuildMixin:
             font-family: {theme.FONT_FAMILY};
             letter-spacing: 1px;
             margin-bottom: 4px;
+            background: transparent;
         """)
-        vbox.addWidget(header_lbl)
+        header_row.addWidget(header_lbl)
+        vbox.addLayout(header_row)
 
         sub_lbl = QLabel(welcome_subtitle_html())
         sub_lbl.setAlignment(Qt.AlignCenter)
@@ -1629,13 +1625,16 @@ class UibuildMixin:
         qa_row = QHBoxLayout()
         qa_row.setSpacing(12)
 
-        def make_action_btn(icon, label, slot, color_start, color_end, border_color):
-            btn = QPushButton()
+        def make_action_btn(icon_name, label, slot, color_start, color_end, border_color):
+            btn = QToolButton()
+            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            btn.setIcon(app_icon(icon_name, theme.COLORS["accent"], 26))
+            btn.setIconSize(QSize(26, 26))
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             btn.setFixedHeight(90)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(f"""
-                QPushButton {{
+                QToolButton {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                         stop:0 {color_start}, stop:1 {color_end});
                     border: 1px solid {border_color};
@@ -1644,29 +1643,29 @@ class UibuildMixin:
                     font-size: 10pt;
                     font-weight: 600;
                     font-family: {theme.FONT_FAMILY};
-                    padding: 8px;
+                    padding: 12px 8px;
                     text-align: center;
                 }}
-                QPushButton:hover {{
+                QToolButton:hover {{
                     border: 1px solid {theme.COLORS["accent"]};
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                         stop:0 {theme.COLORS["card_alt"]}, stop:1 {theme.COLORS["panel"]});
                 }}
-                QPushButton:pressed {{
+                QToolButton:pressed {{
                     background: {theme.COLORS["border"]};
                 }}
             """)
-            btn.setText(f"{icon}\n{label}")
+            btn.setText(label)
             btn.clicked.connect(slot)
             return btn
 
         btn_folder = make_action_btn(
-            "📁", "Open Folder",
+            "folder", "Open Folder",
             self.load_folder,
             theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )
         btn_project = make_action_btn(
-            "🗂️", "Load Project",
+            "layers", "Load Project",
             self.load_project,
             theme.COLORS["card_alt"], theme.COLORS["panel"], theme.COLORS["border"]
         )

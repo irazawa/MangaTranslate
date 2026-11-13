@@ -5,213 +5,348 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
+import logging
+
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
+
+logger = logging.getLogger(__name__)
 
 
 class TranslateMixin:
     def _create_translate_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
 
-        # ── OCR & Language ──────────────────────────────────────────────────
-        ocr_group = QGroupBox("OCR & Language")
-        ocr_form = QFormLayout(ocr_group)
-        ocr_form.setContentsMargins(12, 16, 12, 12)
-        ocr_form.setSpacing(10)
-        ocr_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        ocr_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        # ── Header summary card ───────────────────────────────────────────────
+        hero = QFrame()
+        hero.setStyleSheet(
+            f"QFrame {{ background: {theme.COLORS['card']}; border: 1px solid {theme.COLORS['border']}; "
+            f"border-left: 3px solid {theme.COLORS['accent']}; border-radius: 8px; }}"
+        )
+        hero_v = QVBoxLayout(hero)
+        hero_v.setContentsMargins(12, 10, 12, 10)
+        hero_v.setSpacing(6)
+        title_lbl = QLabel("AI OCR & Translation")
+        title_lbl.setMinimumWidth(0)
+        title_lbl.setStyleSheet(f"color: {theme.COLORS['text']}; font-weight: 800; font-size: 10pt; border: none;")
+        hero_v.addWidget(title_lbl)
+
+        badge_lbl = QLabel("AUTO LANG · AUTO ORIENTATION")
+        badge_lbl.setMinimumWidth(0)
+        badge_lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        badge_lbl.setStyleSheet(
+            f"color: {theme.COLORS['accent']}; background: rgba(56, 189, 248, 0.12); "
+            f"border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 999px; "
+            f"padding: 2px 8px; font-size: 7.5pt; font-weight: 700;"
+        )
+        hero_v.addWidget(badge_lbl)
+
+        sub_lbl = QLabel("AI Vision automatically recognizes script language and reading direction.")
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setMinimumWidth(0)
+        sub_lbl.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; border: none;")
+        hero_v.addWidget(sub_lbl)
+        layout.addWidget(hero)
+
+        # ── AI OCR Card ───────────────────────────────────────────────────────
+        ocr_group = QGroupBox("AI OCR Engine")
+        ocr_v = QVBoxLayout(ocr_group)
+        ocr_v.setContentsMargins(12, 14, 12, 12)
+        ocr_v.setSpacing(8)
+
+        engine_lbl = QLabel("Active Engine:")
+        engine_lbl.setMinimumWidth(0)
+        engine_lbl.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; font-weight: 600;")
+        ocr_v.addWidget(engine_lbl)
 
         self.ocr_lang_combo = QComboBox()
+        self._fit_workspace_combo(self.ocr_lang_combo, 12)
         self.ocr_lang_combo.currentIndexChanged.connect(self.on_ocr_lang_changed)
-        ocr_form.addRow("OCR Language:", self.ocr_lang_combo)
+        ocr_v.addWidget(self.ocr_lang_combo)
 
-        self.ocr_engine_info_label = QLabel("Engine akan dipilih otomatis.")
+        self.ocr_engine_info_label = QLabel("AI OCR ready (auto multi-language).")
         self.ocr_engine_info_label.setWordWrap(True)
-        self.ocr_engine_info_label.setStyleSheet("color:#4a5c78; font-size:8.5pt; font-style:italic;")
-        ocr_form.addRow(self.ocr_engine_info_label)
-
-        self.force_ai_ocr_checkbox = QCheckBox("Force AI OCR")
-        self.force_ai_ocr_checkbox.setChecked(bool(SETTINGS.get('force_ai_ocr', False)))
-        self.force_ai_ocr_checkbox.setToolTip("If enabled, all OCR uses the AI provider below.")
-        self.force_ai_ocr_checkbox.stateChanged.connect(lambda val: (
-            SETTINGS.update({'force_ai_ocr': bool(self.force_ai_ocr_checkbox.isChecked())}) or
-            save_settings(SETTINGS) or
-            self.ai_ocr_lang_combo.setEnabled(bool(val))
-        ))
-        ocr_form.addRow(self.force_ai_ocr_checkbox)
-
-        self.ai_ocr_lang_combo = QComboBox()
-        self.ai_ocr_lang_combo.addItems([
-            "Japanese", "English", "Korean", "Chinese (Simplified)", "Chinese (Traditional)",
-            "Indonesian", "Portuguese (Brazil)", "Spanish", "French", "Russian", "Thai", "Vietnamese",
-            "General/Multi-Language"
-        ])
-        saved_ai_lang = SETTINGS.get('ai_ocr_lang', 'Japanese')
-        self.ai_ocr_lang_combo.setCurrentText(saved_ai_lang)
-        self.ai_ocr_lang_combo.currentTextChanged.connect(
-            lambda val: SETTINGS.update({'ai_ocr_lang': val}) or save_settings(SETTINGS)
+        self.ocr_engine_info_label.setMinimumWidth(0)
+        self.ocr_engine_info_label.setStyleSheet(
+            f"background: {theme.COLORS['card_alt']}; color: {theme.COLORS['accent_hover']}; "
+            f"border: 1px solid {theme.COLORS['border']}; border-radius: 6px; "
+            f"padding: 6px 10px; font-size: 8.5pt;"
         )
-        ocr_form.addRow("AI OCR Lang:", self.ai_ocr_lang_combo)
+        ocr_v.addWidget(self.ocr_engine_info_label)
+
+        self.force_ai_ocr_checkbox = QCheckBox("Always use AI OCR (auto)")
+        force_ai_default = SETTINGS.get('force_ai_ocr', True)
+        if 'force_ai_ocr' not in SETTINGS:
+            SETTINGS['force_ai_ocr'] = True
+        self.force_ai_ocr_checkbox.setChecked(bool(force_ai_default))
+        self.force_ai_ocr_checkbox.setMinimumWidth(0)
+        self.force_ai_ocr_checkbox.setToolTip(
+            "Always use AI OCR (recommended): uses your configured AI provider/model with automatic language & orientation detection."
+        )
+        self.force_ai_ocr_checkbox.stateChanged.connect(self._on_force_ai_ocr_toggled)
+        ocr_v.addWidget(self.force_ai_ocr_checkbox)
+
+        cfg_ocr_btn = QPushButton("OCR Providers (Settings)")
+        cfg_ocr_btn.setMinimumWidth(0)
+        cfg_ocr_btn.setToolTip("Configure AI OCR Providers in Settings")
+        cfg_ocr_btn.setIcon(app_icon("settings", theme.COLORS['text'], size=14))
+        cfg_ocr_btn.setIconSize(QSize(14, 14))
+        cfg_ocr_btn.clicked.connect(lambda: self.open_settings_dialog('api'))
+        ocr_v.addWidget(cfg_ocr_btn)
+        layout.addWidget(ocr_group)
+
+        # ── Translation Target Card ───────────────────────────────────────────
+        target_group = QGroupBox("Translation Output")
+        target_v = QVBoxLayout(target_group)
+        target_v.setContentsMargins(12, 14, 12, 12)
+        target_v.setSpacing(8)
+
+        target_row = QHBoxLayout()
+        target_row.setSpacing(8)
+        target_lbl = QLabel("Translate to:")
+        target_row.addWidget(target_lbl)
 
         self.translate_combo = QComboBox()
         self.translate_combo.addItems(["Indonesian", "English"])
-        self.translate_combo.setCurrentText("Indonesian")
-        ocr_form.addRow("Translate to:", self.translate_combo)
-
-        self.orientation_combo = QComboBox()
-        self.orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
-        ocr_form.addRow("Orientation:", self.orientation_combo)
-
-        layout.addWidget(ocr_group)
-
-        # ── Per-Language Orientation ─────────────────────────────────────────
-        lang_ori_group = QGroupBox("Per-Language Orientation")
-        lang_ori_form = QFormLayout(lang_ori_group)
-        lang_ori_form.setContentsMargins(12, 16, 12, 12)
-        lang_ori_form.setSpacing(10)
-        lang_ori_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        lang_ori_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-
-        self.en_orientation_combo = QComboBox()
-        self.en_orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
-        self.en_orientation_combo.setCurrentText(SETTINGS.get('lang_orientation', {}).get('en', 'Auto-Detect'))
-        self.en_orientation_combo.currentTextChanged.connect(lambda val: self._on_lang_orientation_changed('en', val))
-        lang_ori_form.addRow("English:", self.en_orientation_combo)
-
-        self.jp_orientation_combo = QComboBox()
-        self.jp_orientation_combo.addItems(["Auto-Detect", "Horizontal", "Vertical"])
-        self.jp_orientation_combo.setCurrentText(SETTINGS.get('lang_orientation', {}).get('ja', 'Auto-Detect'))
-        self.jp_orientation_combo.currentTextChanged.connect(lambda val: self._on_lang_orientation_changed('ja', val))
-        lang_ori_form.addRow("Japanese:", self.jp_orientation_combo)
-
-        layout.addWidget(lang_ori_group)
-
-        # ── Detection Source ─────────────────────────────────────────────────
-        detection_group = QGroupBox("OCR Detection Source")
-        det_layout = QVBoxLayout(detection_group)
-        det_layout.setContentsMargins(12, 16, 12, 12)
-        det_layout.setSpacing(8)
-
-        self.manga_use_easy_detection_checkbox = QCheckBox("Manga-OCR: use EasyOCR regions")
-        self.manga_use_easy_detection_checkbox.setChecked(True)
-        self.manga_use_easy_detection_checkbox.setToolTip(
-            "When enabled, EasyOCR proposes text regions and Manga-OCR performs recognition."
+        self._fit_workspace_combo(self.translate_combo, 10)
+        saved_target = SETTINGS.get('general', {}).get('default_target_lang', 'Indonesian')
+        if saved_target in ("Indonesian", "English"):
+            self.translate_combo.setCurrentText(saved_target)
+        else:
+            self.translate_combo.setCurrentText("Indonesian")
+        self.translate_combo.currentTextChanged.connect(
+            lambda val: (
+                SETTINGS.setdefault('general', {}).update({'default_target_lang': val})
+                or save_settings(SETTINGS)
+            )
         )
-        det_layout.addWidget(self.manga_use_easy_detection_checkbox)
+        target_row.addWidget(self.translate_combo, 1)
+        target_v.addLayout(target_row)
 
-        self.tesseract_use_easy_detection_checkbox = QCheckBox("Tesseract: use EasyOCR regions")
-        self.tesseract_use_easy_detection_checkbox.setChecked(True)
-        self.tesseract_use_easy_detection_checkbox.setToolTip(
-            "When enabled, EasyOCR proposes text regions before Tesseract recognition."
+        target_hint = QLabel("Target output language used by bubble OCR and Full-Page Translate.")
+        target_hint.setWordWrap(True)
+        target_hint.setMinimumWidth(0)
+        target_hint.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
+        target_v.addWidget(target_hint)
+        layout.addWidget(target_group)
+
+        # ── Shortcut to Full-Page Tab ─────────────────────────────────────────
+        open_full_btn = QPushButton("Open Full-Page Translate")
+        open_full_btn.setMinimumWidth(0)
+        open_full_btn.setMinimumHeight(36)
+        open_full_btn.setToolTip("Open the Full tab to auto-translate current or multiple pages")
+        open_full_btn.setIcon(app_icon("rocket", theme.COLORS["bg"], 14))
+        open_full_btn.setIconSize(QSize(14, 14))
+        open_full_btn.setStyleSheet(compact_primary_button_qss())
+        open_full_btn.clicked.connect(
+            lambda: self.tabs.setCurrentWidget(self._full_translate_tab)
+            if getattr(self, '_full_translate_tab', None) is not None else None
         )
-        det_layout.addWidget(self.tesseract_use_easy_detection_checkbox)
-
-        layout.addWidget(detection_group)
+        layout.addWidget(open_full_btn)
 
         layout.addStretch()
         return tab
 
+    def _on_force_ai_ocr_toggled(self, _state=None):
+        enabled = bool(self.force_ai_ocr_checkbox.isChecked())
+        SETTINGS['force_ai_ocr'] = enabled
+        save_settings(SETTINGS)
+        info = getattr(self, 'ocr_engine_info_label', None)
+        if info is not None:
+            if enabled:
+                info.setText("Active: AI OCR (auto language & orientation)")
+            elif getattr(self, 'ocr_lang_combo', None) is not None:
+                self.on_ocr_lang_changed(self.ocr_lang_combo.currentIndex())
+
+    def _update_full_tab_hints(self):
+        hint_lbl = getattr(self, 'full_mode_hint_label', None)
+        summary_lbl = getattr(self, 'full_pipeline_summary_label', None)
+        if hint_lbl is not None and getattr(self, 'full_mode_combo', None) is not None:
+            use_vision = bool(self.full_mode_combo.currentData())
+            trans_mode = self.full_translator_combo.currentData() if getattr(self, 'full_translator_combo', None) else 'ai_translate'
+            if use_vision and trans_mode == 'ai_ocr':
+                hint_lbl.setText("Single VLM call extracts regions & translates directly — fastest and most token-efficient.")
+            elif use_vision:
+                hint_lbl.setText("AI Vision detects dialogue boxes first, then translates using your active AI Translate model & custom style.")
+            elif trans_mode == 'ai_ocr':
+                hint_lbl.setText("Local region detection + AI OCR translates each bubble in one vision pass.")
+            else:
+                hint_lbl.setText("Per-region detection + AI OCR + IOPaint cleanup + AI Translate model.")
+        if summary_lbl is not None:
+            inpaint_name = SETTINGS.get('cleanup', {}).get('inpaint_model_name', 'IOPaint Server')
+            target_lang = self.translate_combo.currentText() if getattr(self, 'translate_combo', None) else "Indonesian"
+            summary_lbl.setText(f"Target: {target_lang}  ·  Inpaint: {inpaint_name}")
+
     def _create_full_translate_tab(self):
-        """Tab khusus 'Full': one-click full-page auto translation dengan selector mode.
-
-        Tombol dan selector dipindah ke sini dari tab OCR supaya entry-nya jelas.
-        Selector menentukan `use_ai_vision` yang dibaca di start_full_page_translation.
-        """
+        """Tab khusus 'Full': one-click full-page auto translation dengan UI modern."""
         tab = QWidget()
+        self._full_translate_tab = tab
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 16, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
 
-        full_group = QGroupBox("Full-Page Translation")
-        full_layout = QVBoxLayout(full_group)
-        full_layout.setContentsMargins(12, 16, 12, 12)
-        full_layout.setSpacing(10)
-
-        info = QLabel(
-            "Proses otomatis: deteksi → OCR (engine dari tab OCR) → "
-            "IOPaint → translate.\n"
-            "Pilih cakupan: halaman aktif, halaman terpilih, atau seluruh proyek "
-            "(halaman yang sudah di-typeset dilewati).\n"
-            "• Lokal per-region: RF-DETR layout + OCR tiap region.\n"
-            "• AI Vision: kirim 1 halaman utuh ke VLM (Gemini/OpenAI/OpenRouter).\n"
-            "• Penerjemah: model AI Translate (tab AI Cfg) atau langsung dari AI OCR/Vision."
+        # ── Hero banner card ──────────────────────────────────────────────────
+        hero = QFrame()
+        hero.setStyleSheet(
+            f"QFrame {{ background: {theme.COLORS['card']}; border: 1px solid {theme.COLORS['border']}; "
+            f"border-left: 3px solid {theme.COLORS['accent']}; border-radius: 8px; }}"
         )
-        info.setWordWrap(True)
-        info.setStyleSheet("color:#4a5c78; font-size:8.5pt; font-style:italic;")
-        full_layout.addWidget(info)
+        hero_v = QVBoxLayout(hero)
+        hero_v.setContentsMargins(12, 10, 12, 10)
+        hero_v.setSpacing(6)
 
-        mode_form = QFormLayout()
-        mode_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        mode_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        hero_top = QHBoxLayout()
+        hero_top.setSpacing(6)
+        hero_title = QLabel("Full-Page Translate")
+        hero_title.setMinimumWidth(0)
+        hero_title.setStyleSheet(f"color: {theme.COLORS['text']}; font-weight: 800; font-size: 10pt; border: none;")
+        hero_badge = QLabel("AI PIPELINE")
+        hero_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        hero_badge.setStyleSheet(
+            f"color: {theme.COLORS['accent']}; background: rgba(56, 189, 248, 0.12); "
+            f"border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 999px; "
+            f"padding: 2px 8px; font-size: 7.5pt; font-weight: 700;"
+        )
+        hero_top.addWidget(hero_title)
+        hero_top.addStretch()
+        hero_top.addWidget(hero_badge)
+        hero_v.addLayout(hero_top)
+
+        hero_sub = QLabel("Detects bubbles, runs AI OCR, cleans original text via IOPaint, and typesets automatically.")
+        hero_sub.setWordWrap(True)
+        hero_sub.setMinimumWidth(0)
+        hero_sub.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; border: none;")
+        hero_v.addWidget(hero_sub)
+
+        self.full_pipeline_summary_label = QLabel("")
+        self.full_pipeline_summary_label.setWordWrap(True)
+        self.full_pipeline_summary_label.setMinimumWidth(0)
+        self.full_pipeline_summary_label.setStyleSheet(
+            f"color: {theme.COLORS['accent_hover']}; background: {theme.COLORS['card_alt']}; "
+            f"border: 1px solid {theme.COLORS['border']}; border-radius: 6px; "
+            f"padding: 5px 8px; font-size: 8pt;"
+        )
+        hero_v.addWidget(self.full_pipeline_summary_label)
+
+        inpaint_cfg_btn = QPushButton("Inpaint Settings")
+        inpaint_cfg_btn.setMinimumWidth(0)
+        inpaint_cfg_btn.setIcon(app_icon("settings", theme.COLORS['text'], size=13))
+        inpaint_cfg_btn.setIconSize(QSize(13, 13))
+        inpaint_cfg_btn.setToolTip("Configure IOPaint Server & cleanup settings")
+        inpaint_cfg_btn.clicked.connect(lambda: self.open_settings_dialog('cleanup'))
+        hero_v.addWidget(inpaint_cfg_btn)
+        layout.addWidget(hero)
+
+        # ── Pipeline settings card ────────────────────────────────────────────
+        full_group = QGroupBox("Pipeline Configuration")
+        full_layout = QVBoxLayout(full_group)
+        full_layout.setContentsMargins(12, 14, 12, 12)
+        full_layout.setSpacing(8)
+
+        _lbl_style = f"color: {theme.COLORS['muted']}; font-size: 8.5pt; font-weight: 600;"
+
+        mode_lbl = QLabel("Mode:")
+        mode_lbl.setStyleSheet(_lbl_style)
+        full_layout.addWidget(mode_lbl)
         self.full_mode_combo = QComboBox()
         # itemData = nilai use_ai_vision yang dibaca worker
         self.full_mode_combo.addItem("Lokal per-region (morfologi)", False)
         self.full_mode_combo.addItem("AI Vision full-page (1 API call)", True)
         self.full_mode_combo.setCurrentIndex(0)
+        self._fit_workspace_combo(self.full_mode_combo, 12)
         self.full_mode_combo.setToolTip(
-            "Lokal: deteksi morfologi + OCR per blok pakai engine terpilih.\n"
-            "AI Vision: 1 gambar utuh ke VLM, balik JSON box+terjemahan (hemat token)."
+            "Per-region: local region detection + AI OCR per block.\n"
+            "AI Vision: send full page to VLM and receive structured boxes + translations."
         )
-        mode_form.addRow("Mode:", self.full_mode_combo)
+        full_layout.addWidget(self.full_mode_combo)
 
+        trans_lbl = QLabel("Translator:")
+        trans_lbl.setStyleSheet(_lbl_style)
+        full_layout.addWidget(trans_lbl)
         self.full_translator_combo = QComboBox()
         # itemData: 'ai_translate' = model dari tab AI Cfg; 'ai_ocr' = terjemahan
         # langsung oleh model AI OCR/Vision dalam panggilan yang sama
         self.full_translator_combo.addItem("Model AI Translate (tab AI Cfg)", 'ai_translate')
         self.full_translator_combo.addItem("Langsung dari AI OCR/Vision", 'ai_ocr')
         self.full_translator_combo.setCurrentIndex(0)
+        self._fit_workspace_combo(self.full_translator_combo, 12)
         self.full_translator_combo.setToolTip(
-            "Model AI Translate: OCR dulu, lalu terjemahkan pakai model di tab AI Cfg.\n"
-            "Langsung: model AI OCR/Vision menerjemahkan sekaligus dalam satu panggilan."
+            "Model AI Translate: OCR first, then translate with your AI Cfg model & custom style.\n"
+            "Langsung: AI OCR/Vision translates in the same call."
         )
-        mode_form.addRow("Penerjemah:", self.full_translator_combo)
+        full_layout.addWidget(self.full_translator_combo)
 
+        scope_lbl = QLabel("Scope:")
+        scope_lbl.setStyleSheet(_lbl_style)
+        full_layout.addWidget(scope_lbl)
         self.full_scope_combo = QComboBox()
         self.full_scope_combo.addItem(FullPageBatchText.SCOPE_CURRENT, 'current')
         self.full_scope_combo.addItem(FullPageBatchText.SCOPE_SELECTED, 'selected')
         self.full_scope_combo.addItem(FullPageBatchText.SCOPE_PROJECT, 'project')
+        self._fit_workspace_combo(self.full_scope_combo, 12)
         self.full_scope_combo.setToolTip(
             f"{FullPageBatchText.SCOPE_CURRENT_TIP}\n"
             f"{FullPageBatchText.SCOPE_SELECTED_TIP}\n"
             f"{FullPageBatchText.SCOPE_PROJECT_TIP}"
         )
-        mode_form.addRow("Cakupan:", self.full_scope_combo)
+        full_layout.addWidget(self.full_scope_combo)
 
         self._full_selected_pages = []
         self.full_pick_pages_btn = QPushButton(FullPageBatchText.PICK_PAGES_BTN.format(count=0))
+        self.full_pick_pages_btn.setMinimumWidth(0)
         self.full_pick_pages_btn.setToolTip(FullPageBatchText.SCOPE_SELECTED_TIP)
-        self.full_pick_pages_btn.clicked.connect(
-            lambda: self._open_full_page_picker()
-        )
+        self.full_pick_pages_btn.clicked.connect(lambda: self._open_full_page_picker())
         self.full_pick_pages_btn.setVisible(False)
         self.full_scope_combo.currentIndexChanged.connect(self._on_full_scope_changed)
 
-        full_layout.addLayout(mode_form)
         full_layout.addWidget(self.full_pick_pages_btn)
 
+        self.full_mode_hint_label = QLabel("")
+        self.full_mode_hint_label.setWordWrap(True)
+        self.full_mode_hint_label.setMinimumWidth(0)
+        self.full_mode_hint_label.setStyleSheet(
+            f"background: {theme.COLORS['card_alt']}; color: {theme.COLORS['muted']}; "
+            f"border-radius: 6px; padding: 6px 10px; font-size: 8.5pt;"
+        )
+        full_layout.addWidget(self.full_mode_hint_label)
+        self.full_mode_combo.currentIndexChanged.connect(lambda *_: self._update_full_tab_hints())
+        self.full_translator_combo.currentIndexChanged.connect(lambda *_: self._update_full_tab_hints())
+
         self.auto_translate_page_btn = QPushButton(ActionText.FULL_PAGE_TRANSLATE)
+        self.auto_translate_page_btn.setMinimumWidth(0)
+        self.auto_translate_page_btn.setIcon(app_icon("rocket", theme.COLORS['bg'], size=15))
+        self.auto_translate_page_btn.setIconSize(QSize(15, 15))
+        self.auto_translate_page_btn.setMinimumHeight(38)
         self.auto_translate_page_btn.setStyleSheet(compact_primary_button_qss())
         self.auto_translate_page_btn.clicked.connect(self.start_full_page_translation)
         full_layout.addWidget(self.auto_translate_page_btn)
+        layout.addWidget(full_group)
 
-        inpaint_restore_row = QHBoxLayout()
+        # ── Inpaint recovery card ─────────────────────────────────────────────
+        recovery_group = QGroupBox("Inpaint Recovery")
+        inpaint_restore_row = QVBoxLayout(recovery_group)
+        inpaint_restore_row.setContentsMargins(12, 12, 12, 12)
         inpaint_restore_row.setSpacing(6)
         self.full_restore_area_inpaint_btn = QPushButton(FullPageBatchText.RESTORE_AREA_INPAINT_BTN)
+        self.full_restore_area_inpaint_btn.setIcon(app_icon("undo", theme.COLORS['text'], size=14))
+        self.full_restore_area_inpaint_btn.setIconSize(QSize(14, 14))
         self.full_restore_area_inpaint_btn.setToolTip(FullPageBatchText.RESTORE_AREA_INPAINT_TIP)
         self.full_restore_area_inpaint_btn.setEnabled(False)
         self.full_restore_area_inpaint_btn.clicked.connect(lambda: self.restore_selected_area_inpaint())
         inpaint_restore_row.addWidget(self.full_restore_area_inpaint_btn)
 
         self.full_cancel_page_inpaint_btn = QPushButton(FullPageBatchText.CANCEL_PAGE_INPAINT_BTN)
+        self.full_cancel_page_inpaint_btn.setIcon(app_icon("x", theme.COLORS['danger'], size=14))
+        self.full_cancel_page_inpaint_btn.setIconSize(QSize(14, 14))
         self.full_cancel_page_inpaint_btn.setToolTip(FullPageBatchText.CANCEL_PAGE_INPAINT_TIP)
         self.full_cancel_page_inpaint_btn.setEnabled(False)
         self.full_cancel_page_inpaint_btn.clicked.connect(self.cancel_inpaint_result)
         inpaint_restore_row.addWidget(self.full_cancel_page_inpaint_btn)
-        full_layout.addLayout(inpaint_restore_row)
+        layout.addWidget(recovery_group)
 
-        layout.addWidget(full_group)
+        self._update_full_tab_hints()
         layout.addStretch()
         return tab
 
@@ -222,20 +357,27 @@ class TranslateMixin:
             self.translated_label.setText(str(self.translated_count))
 
     def on_translation_mode_changed(self):
-        # [BARU] Mengelola checkbox yang saling eksklusif
-        sender = self.sender()
-        if sender == self.ai_only_translate_checkbox and self.ai_only_translate_checkbox.isChecked():
-            self.deepl_only_checkbox.setChecked(False)
-        elif sender == self.deepl_only_checkbox and self.deepl_only_checkbox.isChecked():
-            self.ai_only_translate_checkbox.setChecked(False)
+        # AI-Only Translate is the streamlined default; guard optional legacy checkboxes safely.
+        ai_cb = getattr(self, 'ai_only_translate_checkbox', None)
+        deepl_cb = getattr(self, 'deepl_only_checkbox', None)
+        enh_cb = getattr(self, 'enhanced_pipeline_checkbox', None)
 
-        is_ai_only = self.ai_only_translate_checkbox.isChecked()
-        is_deepl_only = self.deepl_only_checkbox.isChecked()
-        
-        # Nonaktifkan opsi yang tidak relevan
-        self.translate_combo.setEnabled(not is_ai_only and not is_deepl_only)
-        self.style_combo.setEnabled(is_ai_only)
-        self.ai_model_combo.setEnabled(is_ai_only or self.enhanced_pipeline_checkbox.isChecked())
+        sender = self.sender()
+        if ai_cb and deepl_cb:
+            if sender == ai_cb and ai_cb.isChecked():
+                deepl_cb.setChecked(False)
+            elif sender == deepl_cb and deepl_cb.isChecked():
+                ai_cb.setChecked(False)
+
+        is_ai_only = ai_cb.isChecked() if ai_cb is not None else True
+        is_enhanced = enh_cb.isChecked() if enh_cb is not None else False
+
+        if getattr(self, 'translate_combo', None) is not None:
+            self.translate_combo.setEnabled(True)
+        if getattr(self, 'style_combo', None) is not None:
+            self.style_combo.setEnabled(is_ai_only)
+        if getattr(self, 'ai_model_combo', None) is not None:
+            self.ai_model_combo.setEnabled(is_ai_only or is_enhanced)
 
     # [DIUBAH] Fungsi abstrak untuk memanggil AI dengan perulangan percobaan hingga 5x
     def translate_with_ai(self, text_to_translate, target_lang, provider, model_name, settings, is_enhanced=False, ocr_results=None):
@@ -257,7 +399,12 @@ class TranslateMixin:
                 # Cek apakah hasil menunjukkan kegagalan/error
                 if isinstance(result, str):
                     upper_result = result.upper()
-                    if any(err in upper_result for err in ("[ERROR", "[FAILED", "API KEY NOT CONFIGURED", "REQUEST ERROR")):
+                    stripped_upper = upper_result.lstrip()
+                    is_provider_error = (
+                        any(err in upper_result for err in ("[ERROR", "[FAILED", "API KEY NOT CONFIGURED", "REQUEST ERROR"))
+                        or (stripped_upper.startswith("[") and (" ERROR:" in stripped_upper or " ERROR]" in stripped_upper))
+                    )
+                    if is_provider_error:
                         raise Exception(f"AI Provider error: {result}")
                 
                 # Pasca-proses: Hapus tanda titik tunggal di akhir baris/kalimat agar tidak kelihatan seperti hasil AI kaku
@@ -790,10 +937,11 @@ class TranslateMixin:
         return "[No translation performed: use AI providers]"
 
     def _update_recent_translations_list(self):
-        if not hasattr(self, 'typeset_recent_list'):
+        recent_list = getattr(self, 'typeset_recent_list', None)
+        if not recent_list:
             return
         
-        self.typeset_recent_list.clear()
+        recent_list.clear()
         
         # Get up to 20 unique recent translations
         recent_texts = []
@@ -809,7 +957,7 @@ class TranslateMixin:
             display_text = text if len(text) <= 60 else text[:57] + '...'
             item = QListWidgetItem(display_text)
             item.setData(Qt.UserRole, text)
-            self.typeset_recent_list.addItem(item)
+            recent_list.addItem(item)
 
     def _on_recent_translation_clicked(self, item):
         text = item.data(Qt.UserRole)
@@ -820,7 +968,7 @@ class TranslateMixin:
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
 
-    def _queue_ocr_translate_rect(self, unzoomed_rect, source_pil_image=None):
+    def _queue_ocr_translate_rect(self, unzoomed_rect, source_pil_image=None, settings_overrides=None):
         source = source_pil_image or self.current_image_pil
         if source is None or not unzoomed_rect:
             return False
@@ -834,14 +982,18 @@ class TranslateMixin:
         safe_rect = QRect(left, top, right - left, bottom - top)
         cropped_img = source.crop((left, top, right, bottom))
         cropped_cv_img = cv2.cvtColor(np.array(cropped_img), cv2.COLOR_RGB2BGR)
+        job_settings = self.get_current_settings()
+        if isinstance(settings_overrides, dict):
+            job_settings.update(settings_overrides)
         job = {
             'image_path': self.get_current_data_key(),
             'rect': safe_rect,
             'polygon': None,
             'cropped_cv_img': cropped_cv_img,
-            'settings': self.get_current_settings()
+            'settings': job_settings
         }
-        if self.batch_mode_checkbox.isChecked():
+        batch_cb = getattr(self, 'batch_mode_checkbox', None)
+        if batch_cb is not None and batch_cb.isChecked():
             self.add_to_batch_queue(job)
         else:
             self.add_job_to_queue(job)
@@ -892,18 +1044,92 @@ class TranslateMixin:
         except Exception as e:
             self.statusBar().showMessage(f"Click-to-Translate failed: {e}", 4000)
 
+    def _close_full_page_progress_dialog(self):
+        dialog = getattr(self, '_full_page_dialog', None)
+        if dialog is not None:
+            self._full_page_dialog = None
+            try:
+                dialog.mark_finished()
+                dialog.accept()
+            except Exception:
+                pass
+
     def on_full_page_translation_finished(self, created_areas, msg):
         worker = getattr(self, '_full_page_worker', None)
         cleaned_pil = getattr(worker, 'cleaned_image_pil', None) if worker is not None else None
         inpaint_requested = bool(getattr(worker, 'settings', {}).get('use_inpaint', True)) if worker is not None else False
+        target_key = (
+            getattr(worker, 'target_key', None)
+            or (getattr(worker, 'image_path', None) if worker is not None else None)
+            or self.get_current_data_key()
+        )
+        target_path = getattr(worker, 'image_path', None) if worker is not None else None
+        was_cancelled = bool(getattr(worker, '_is_cancelled', False)) if worker is not None else False
+
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
+        self.auto_translate_page_btn.setIcon(app_icon("rocket", theme.COLORS['bg'], size=15))
         self.auto_translate_page_btn.setEnabled(True)
         if worker is not None:
             worker.wait(3000)  # pastikan thread benar-benar berhenti sebelum referensi dilepas
         self._full_page_worker = None
+        self._close_full_page_progress_dialog()
+
+        if was_cancelled:
+            self.statusBar().showMessage("Full-page translation dibatalkan.", 3000)
+            self.show_toast("Dibatalkan", str(msg or "Full-page translation dibatalkan."), kind="info")
+            return
 
         if not created_areas:
             self.show_toast("Selesai", str(msg), kind="info")
+            return
+
+        active_key = self.get_current_data_key()
+        is_active_page = bool(target_key and active_key and target_key == active_key)
+
+        if not is_active_page and target_key:
+            # Defense-in-depth: jika halaman aktif berbeda dari target_key worker,
+            # simpan hasil ke record halaman target tanpa menyentuh canvas/halaman aktif.
+            page_cleaned = False
+            cleaned_state = None
+            if cleaned_pil is not None:
+                try:
+                    orig_pil = open_source_image_for_key(
+                        target_key, pdf_document=getattr(self, 'pdf_document', None)
+                    )
+                    if orig_pil is None and target_path:
+                        orig_pil = safe_open_pil(target_path)
+                    cleaned_state = self._encode_cleaned_state(cleaned_pil, orig_pil=orig_pil)
+                    page_cleaned = bool(cleaned_state)
+                except Exception as e:
+                    print(f"Gagal meng-encode hasil inpaint halaman target ({target_key}): {e}")
+            new_areas = []
+            for area_payload in created_areas:
+                try:
+                    area = self._create_typeset_area(
+                        rect=area_payload['rect'],
+                        text=area_payload['text'],
+                        settings=area_payload['settings'],
+                        polygon=area_payload['polygon'],
+                        original_text=area_payload['original_text'],
+                        manual_inpaint=False,
+                        is_manual=False
+                    )
+                    area.set_override('use_inpaint', False)
+                    if page_cleaned:
+                        area.set_override('use_background_box', False)
+                    new_areas.append(area)
+                except Exception as e:
+                    print(f"Gagal membuat area typeset ({target_key}): {e}")
+            update_kwargs = {'areas': new_areas, 'redo': []}
+            if isinstance(cleaned_state, dict):
+                update_kwargs['cleaned_state'] = cleaned_state
+            self._update_typeset_record(target_key, **update_kwargs)
+            page_label = os.path.basename(target_path or str(target_key))
+            self.show_toast(
+                "Page translated",
+                f"Halaman {page_label} selesai diterjemahkan ({len(new_areas)} balon) dan disimpan ke record halaman tersebut.",
+                kind="success",
+            )
             return
 
         self._push_undo_snapshot("Full-Page Translate")
@@ -914,7 +1140,7 @@ class TranslateMixin:
         page_cleaned = False
         cleaned_state = None
         pre_inpaint_state = None
-        record_key = self.get_current_data_key()
+        record_key = target_key
         if cleaned_pil is not None:
             try:
                 record = self.all_typeset_data.get(record_key, {}) if record_key else {}
@@ -982,11 +1208,13 @@ class TranslateMixin:
 
     def on_full_page_translation_error(self, err_msg):
         self.auto_translate_page_btn.setText(ActionText.FULL_PAGE_TRANSLATE)
+        self.auto_translate_page_btn.setIcon(app_icon("rocket", theme.COLORS['bg'], size=15))
         self.auto_translate_page_btn.setEnabled(True)
         worker = getattr(self, '_full_page_worker', None)
         if worker is not None:
             worker.wait(3000)  # pastikan thread benar-benar berhenti sebelum referensi dilepas
         self._full_page_worker = None
+        self._close_full_page_progress_dialog()
         self.statusBar().showMessage("Penerjemahan halaman gagal.", 3000)
         self.show_banner("full-page-translation-error", "Penerjemahan halaman gagal", str(err_msg), kind="error")
 

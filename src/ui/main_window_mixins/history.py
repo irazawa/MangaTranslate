@@ -451,16 +451,16 @@ class HistoryMixin:
             is_redo    = (i > self._undo_history_idx)
 
             if is_current:
-                prefix = "▶"
+                icon = app_icon("play", theme.COLORS['accent'], size=10)
                 color  = theme.COLORS['accent']   # state aktif
             elif is_redo:
-                prefix = "◁"
+                icon = app_icon("redo", theme.COLORS['muted'], size=10)
                 color  = theme.COLORS['muted']   # state yang bisa di-redo
             else:
-                prefix = "·"
+                icon = app_icon("dot", theme.COLORS['muted'], size=7)
                 color  = theme.COLORS['muted']   # masa lalu
 
-            item = QListWidgetItem(f"  {prefix}  {i + 1}. {entry['label']}")
+            item = QListWidgetItem(icon, f" {i + 1}. {entry['label']}")
             item.setData(Qt.UserRole, i)
             item.setForeground(QColor(color))
             lst.addItem(item)

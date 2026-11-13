@@ -118,9 +118,14 @@ class DetectMixin:
         painter.drawPath(path)
 
     def on_dl_detector_state_changed(self, state):
+        provider_combo = getattr(self, 'dl_model_provider_combo', None)
+        file_combo = getattr(self, 'dl_model_file_combo', None)
+        dl_cb = getattr(self, 'dl_bubble_detector_checkbox', None)
+        if not (provider_combo and file_combo and dl_cb):
+            return
         is_checked = (state == Qt.Checked)
-        provider = self.dl_model_provider_combo.currentText()
-        model_file = self.dl_model_file_combo.currentText()
+        provider = provider_combo.currentText()
+        model_file = file_combo.currentText()
         is_available = True
         tooltip = f"Uses {provider}'s {model_file} for advanced bubble detection."
 
@@ -134,9 +139,9 @@ class DetectMixin:
                 key = 'ogkalu_pt' if provider == 'Ogkalu' else 'kitsumed_pt'
                 if not os.path.exists(self.dl_models[key]['path']): is_available = False; tooltip = f"Disabled: Model file not found."
 
-        self.dl_bubble_detector_checkbox.setEnabled(is_available)
-        self.dl_bubble_detector_checkbox.setToolTip(tooltip)
-        if not is_available: self.dl_bubble_detector_checkbox.setChecked(False)
+        dl_cb.setEnabled(is_available)
+        dl_cb.setToolTip(tooltip)
+        if not is_available: dl_cb.setChecked(False)
 
     def split_extended_bubbles(self, detections, split_threshold=2.5):
         new_detections = []
@@ -281,7 +286,8 @@ class DetectMixin:
             self.update_confirmation_button_text()
 
     def set_ui_for_detection(self, is_detecting):
-        self.batch_process_button.setEnabled(not is_detecting)
+        if getattr(self, 'batch_process_button', None) is not None:
+            self.batch_process_button.setEnabled(not is_detecting)
         self.file_list_widget.setEnabled(not is_detecting)
         self.prev_button.setEnabled(not is_detecting); self.next_button.setEnabled(not is_detecting)
         if is_detecting:
@@ -644,7 +650,8 @@ class DetectMixin:
             self.show_banner("panel-detect-no-image", "No image", "Buka gambar manga terlebih dahulu.", kind="warning")
             return
 
-        model_path = self.panel_model_path_input.text().strip()
+        panel_inp = getattr(self, 'panel_model_path_input', None)
+        model_path = panel_inp.text().strip() if panel_inp else SETTINGS.get('cleanup', {}).get('panel_model_path', '')
         if not model_path:
             model_path = os.path.join(ROOT_DIR, "src", "models", "manga_panel_detector_fp32.pt")
         
@@ -676,7 +683,8 @@ class DetectMixin:
             if cv_img is None:
                 raise Exception("Gagal membaca file gambar.")
 
-            use_gpu = self.use_gpu_checkbox.isChecked() and self.is_gpu_available
+            gpu_cb = getattr(self, 'use_gpu_checkbox', None)
+            use_gpu = (gpu_cb.isChecked() if gpu_cb else True) and self.is_gpu_available
             device = "cuda" if use_gpu else "cpu"
             
             model = YOLO(model_path)
@@ -696,7 +704,8 @@ class DetectMixin:
             self.detected_panels = detected_rects
             self.statusBar().showMessage(f"Berhasil mendeteksi {len(detected_rects)} panel.", 3000)
             
-            self.show_panels_checkbox.setChecked(True)
+            if getattr(self, 'show_panels_checkbox', None) is not None:
+                self.show_panels_checkbox.setChecked(True)
             self.image_label.update()
             
             if detected_rects:

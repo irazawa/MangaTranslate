@@ -141,7 +141,7 @@ class OcrMixin:
         """
         ocr_engine = settings['ocr_engine']
         # [MODIFIED] Check 'force_ai_ocr' override
-        if SETTINGS.get('force_ai_ocr', False):
+        if SETTINGS.get('force_ai_ocr', True):
             ocr_engine = "AI_OCR"
         orientation = settings.get('orientation', 'Auto-Detect')
         ocr_lang = settings.get('ocr_lang', 'ja')
@@ -422,7 +422,7 @@ class OcrMixin:
             return "[AI OCR ERROR: Encoding image failed]"
 
         image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
-        ai_lang = SETTINGS.get('ai_ocr_lang', 'Japanese')
+        ai_lang = SETTINGS.get('ai_ocr_lang', 'General/Multi-Language')
         prompt_text = self._get_ai_ocr_prompt(ai_lang)
 
         data_url = f"data:image/png;base64,{image_b64}"
@@ -648,7 +648,7 @@ class OcrMixin:
                 return "[MOFRL ERROR: Gagal encode gambar]"
             image_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            ai_lang = SETTINGS.get('ai_ocr_lang', 'Japanese')
+            ai_lang = SETTINGS.get('ai_ocr_lang', 'General/Multi-Language')
             prompt = self._get_ai_ocr_prompt(ai_lang)
             # Prepare temp debug folder
             temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')

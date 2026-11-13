@@ -16,7 +16,10 @@ class TypesetMixin:
             
         # Build current font info
         font = self._build_current_font()
-        area.font_info = area.font_to_dict(font)
+        if hasattr(area, 'apply_font'):
+            area.apply_font(font)
+        else:
+            area.font_info = area.font_to_dict(font)
         if hasattr(self, 'typeset_color'):
             new_color = QColor(self.typeset_color)
             old_color = QColor(getattr(area, 'color_info', '#000000'))
@@ -177,8 +180,8 @@ class TypesetMixin:
         container.setMinimumWidth(0)
         container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(10, 12, 10, 12)
+        layout.setSpacing(12)
 
         # ── Defaults card ──
         defaults_group = QGroupBox("Defaults")
@@ -194,10 +197,12 @@ class TypesetMixin:
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(8)
         self.save_typeset_defaults_button = QPushButton("Save")
+        self.save_typeset_defaults_button.setMinimumWidth(0)
         self.save_typeset_defaults_button.setToolTip("Store the current typography as the default for new areas.")
         self.save_typeset_defaults_button.clicked.connect(self._handle_save_typeset_defaults)
         actions_layout.addWidget(self.save_typeset_defaults_button, 1)
         self.reset_typeset_defaults_button = QPushButton("Reset")
+        self.reset_typeset_defaults_button.setMinimumWidth(0)
         self.reset_typeset_defaults_button.setToolTip("Restore the saved default typography settings.")
         self.reset_typeset_defaults_button.clicked.connect(self._handle_reset_typeset_defaults)
         actions_layout.addWidget(self.reset_typeset_defaults_button, 1)
@@ -224,18 +229,20 @@ class TypesetMixin:
         group_btn_layout = QHBoxLayout()
         group_btn_layout.setSpacing(6)
         self.add_group_btn = QPushButton("New")
+        self.add_group_btn.setMinimumWidth(0)
         self.add_group_btn.setToolTip("Create a new font group.")
         self.add_group_btn.clicked.connect(self._on_add_font_group_clicked)
-        group_btn_layout.addWidget(self.add_group_btn)
+        group_btn_layout.addWidget(self.add_group_btn, 1)
         self.remove_group_btn = QPushButton("Delete")
+        self.remove_group_btn.setMinimumWidth(0)
         self.remove_group_btn.setToolTip("Remove the selected font group.")
         self.remove_group_btn.clicked.connect(self._on_remove_font_group_clicked)
-        group_btn_layout.addWidget(self.remove_group_btn)
-        self.add_font_to_group_btn = QPushButton("Add Font")
-        self.add_font_to_group_btn.setText("Add")
+        group_btn_layout.addWidget(self.remove_group_btn, 1)
+        self.add_font_to_group_btn = QPushButton("Add")
+        self.add_font_to_group_btn.setMinimumWidth(0)
         self.add_font_to_group_btn.setToolTip("Add a font to the selected group.")
         self.add_font_to_group_btn.clicked.connect(self._on_add_font_to_group_clicked)
-        group_btn_layout.addWidget(self.add_font_to_group_btn)
+        group_btn_layout.addWidget(self.add_font_to_group_btn, 1)
         font_layout.addLayout(group_btn_layout, 1, 0, 1, 2)
 
         font_layout.addWidget(QLabel("Family"), 2, 0)
@@ -247,6 +254,7 @@ class TypesetMixin:
         font_layout.addWidget(self.font_dropdown, 2, 1)
 
         self.import_font_button = QPushButton("Import Font...")
+        self.import_font_button.setMinimumWidth(0)
         self.import_font_button.setToolTip("Add new font files from your computer (TTF, OTF, TTC, OTC).")
         self.import_font_button.clicked.connect(self.import_font)
         font_layout.addWidget(self.import_font_button, 3, 0, 1, 2)
@@ -379,58 +387,76 @@ class TypesetMixin:
         layout.addWidget(gradient_group)
 
         # ── Spacing & Size card ──
-        spacing_group = QGroupBox("Spacing & Size")
+        spacing_group = QGroupBox("Spacing && Size")
         spacing_layout = QGridLayout(spacing_group)
-        spacing_layout.setContentsMargins(12, 14, 12, 12)
-        spacing_layout.setHorizontalSpacing(10)
+        spacing_layout.setContentsMargins(8, 12, 8, 10)
+        spacing_layout.setHorizontalSpacing(6)
         spacing_layout.setVerticalSpacing(10)
         spacing_layout.setColumnStretch(1, 1)
 
         spacing_layout.addWidget(QLabel("Font Size"), 0, 0)
+        size_row = QHBoxLayout()
+        size_row.setSpacing(6)
         self.font_size_spin = QDoubleSpinBox()
         self.font_size_spin.setRange(4.0, 220.0)
         self.font_size_spin.setDecimals(1)
         self.font_size_spin.setSingleStep(1.0)
         self.font_size_spin.setSuffix(" pt")
-        self.font_size_spin.setMaximumWidth(100)
+        self.font_size_spin.setMaximumWidth(86)
         self.font_size_spin.valueChanged.connect(self._on_typeset_font_size_changed)
-        self.font_size_spin.setToolTip("Adjust the point size for new text areas.")
-        spacing_layout.addWidget(self.font_size_spin, 0, 1)
+        self.font_size_spin.setToolTip("Adjust the point size for new or selected text areas.")
+        size_row.addWidget(self.font_size_spin)
 
-        spacing_layout.addWidget(QLabel("Line Spacing"), 1, 0)
+        self.fit_font_size_button = QPushButton(TypesetText.FIT_FONT_SIZE_BTN)
+        self.fit_font_size_button.setMinimumWidth(0)
+        self.fit_font_size_button.setToolTip(TypesetText.FIT_FONT_SIZE_TIP)
+        self.fit_font_size_button.clicked.connect(self._on_fit_font_size_clicked)
+        size_row.addWidget(self.fit_font_size_button, 1)
+        spacing_layout.addLayout(size_row, 0, 1)
+
+        self.auto_font_size_checkbox = QCheckBox(TypesetText.AUTO_FONT_SIZE_LABEL)
+        self.auto_font_size_checkbox.setMinimumWidth(0)
+        self.auto_font_size_checkbox.setToolTip(TypesetText.AUTO_FONT_SIZE_TIP)
+        self.auto_font_size_checkbox.setChecked(
+            bool(SETTINGS.get('typeset', {}).get('auto_font_size', True))
+        )
+        self.auto_font_size_checkbox.toggled.connect(self._on_auto_font_size_toggled)
+        spacing_layout.addWidget(self.auto_font_size_checkbox, 1, 0, 1, 2)
+
+        spacing_layout.addWidget(QLabel("Line Spacing"), 2, 0)
         line_row = QHBoxLayout()
-        line_row.setSpacing(8)
+        line_row.setSpacing(6)
         self.line_spacing_input = QDoubleSpinBox()
         self.line_spacing_input.setRange(0.6, 3.0)
         self.line_spacing_input.setDecimals(2)
         self.line_spacing_input.setSingleStep(0.05)
-        self.line_spacing_input.setMaximumWidth(100)
+        self.line_spacing_input.setMaximumWidth(80)
         self.line_spacing_input.setToolTip("Adjust the spacing between lines (0.60x - 3.00x).")
         self.line_spacing_input.valueChanged.connect(self._on_typeset_line_spacing_changed)
         line_row.addWidget(self.line_spacing_input)
         self.line_spacing_value_label = QLabel("1.00x")
-        self.line_spacing_value_label.setMinimumWidth(50)
+        self.line_spacing_value_label.setMinimumWidth(32)
         line_row.addWidget(self.line_spacing_value_label)
         line_row.addStretch(1)
-        spacing_layout.addLayout(line_row, 1, 1)
+        spacing_layout.addLayout(line_row, 2, 1)
 
-        spacing_layout.addWidget(QLabel("Char Spacing"), 2, 0)
+        spacing_layout.addWidget(QLabel("Char Spacing"), 3, 0)
         char_row = QHBoxLayout()
-        char_row.setSpacing(8)
+        char_row.setSpacing(6)
         self.char_spacing_input = QDoubleSpinBox()
         self.char_spacing_input.setRange(10.0, 400.0)
         self.char_spacing_input.setDecimals(0)
         self.char_spacing_input.setSingleStep(1.0)
         self.char_spacing_input.setSuffix(" %")
-        self.char_spacing_input.setMaximumWidth(100)
+        self.char_spacing_input.setMaximumWidth(80)
         self.char_spacing_input.setToolTip("Adjust spacing between characters (percentage).")
         self.char_spacing_input.valueChanged.connect(self._on_typeset_char_spacing_changed)
         char_row.addWidget(self.char_spacing_input)
         self.char_spacing_value_label = QLabel("100%")
-        self.char_spacing_value_label.setMinimumWidth(50)
+        self.char_spacing_value_label.setMinimumWidth(32)
         char_row.addWidget(self.char_spacing_value_label)
         char_row.addStretch(1)
-        spacing_layout.addLayout(char_row, 2, 1)
+        spacing_layout.addLayout(char_row, 3, 1)
         layout.addWidget(spacing_group)
 
         # ── Layout card ──
@@ -476,10 +502,10 @@ class TypesetMixin:
         layout.addWidget(layout_group)
 
         # ── Warp & Curve card ──
-        warp_group = QGroupBox("Text Warp & Curve")
+        warp_group = QGroupBox("Text Warp && Curve")
         warp_layout = QGridLayout(warp_group)
-        warp_layout.setContentsMargins(12, 14, 12, 12)
-        warp_layout.setHorizontalSpacing(10)
+        warp_layout.setContentsMargins(8, 12, 8, 10)
+        warp_layout.setHorizontalSpacing(6)
         warp_layout.setVerticalSpacing(10)
         warp_layout.setColumnStretch(1, 1)
 
@@ -501,14 +527,16 @@ class TypesetMixin:
 
         warp_layout.addWidget(QLabel("Intensity"), 1, 0)
         intensity_row = QHBoxLayout()
+        intensity_row.setSpacing(6)
         self.warp_intensity_slider = QSlider(Qt.Horizontal)
+        self.warp_intensity_slider.setMinimumWidth(50)
         self.warp_intensity_slider.setRange(0, 100)
         self.warp_intensity_slider.setValue(20)
-        self.warp_intensity_slider.setMaximumWidth(120)
+        self.warp_intensity_slider.setMaximumWidth(92)
         self.warp_intensity_slider.valueChanged.connect(self._on_warp_intensity_changed)
         intensity_row.addWidget(self.warp_intensity_slider)
         self.warp_intensity_value_label = QLabel("20.0")
-        self.warp_intensity_value_label.setMinimumWidth(40)
+        self.warp_intensity_value_label.setMinimumWidth(30)
         intensity_row.addWidget(self.warp_intensity_value_label)
         intensity_row.addStretch(1)
         warp_layout.addLayout(intensity_row, 1, 1)
@@ -522,36 +550,8 @@ class TypesetMixin:
 
         layout.addWidget(warp_group)
 
-        # ── Preview card ──
-        preview_group = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_group)
-        preview_layout.setContentsMargins(12, 10, 12, 12)
-        self.typeset_preview_label = QLabel()
-        self.typeset_preview_label.setAlignment(Qt.AlignCenter)
-        self.typeset_preview_label.setMinimumHeight(180)
-        self.typeset_preview_label.setMinimumWidth(0)
-        self.typeset_preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.typeset_preview_label.setStyleSheet(self._preview_label_qss())
-        preview_layout.addWidget(self.typeset_preview_label)
-        layout.addWidget(preview_group)
-
-        # ── Recent Translations card ──
-        recent_group = QGroupBox("Recent Translations")
-        recent_layout = QVBoxLayout(recent_group)
-        recent_layout.setContentsMargins(12, 10, 12, 12)
-        
-        recent_desc = QLabel("Click to apply recent translation to active text area.")
-        recent_desc.setWordWrap(True)
-        recent_desc.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
-        recent_layout.addWidget(recent_desc)
-        
-        self.typeset_recent_list = QListWidget()
-        self.typeset_recent_list.setMaximumHeight(160)
-        self.typeset_recent_list.setMinimumWidth(0)
-        self.typeset_recent_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.typeset_recent_list.itemClicked.connect(self._on_recent_translation_clicked)
-        recent_layout.addWidget(self.typeset_recent_list)
-        layout.addWidget(recent_group)
+        self.typeset_preview_label = None
+        self.typeset_recent_list = None
 
         layout.addStretch(1)
 
@@ -578,10 +578,32 @@ class TypesetMixin:
                 processed_lines.append(stripped)
             text = '\n'.join(processed_lines)
 
+        area_font = QFont(settings['font'])
+        use_auto_font_size = bool(
+            settings.get(
+                'auto_font_size',
+                SETTINGS.get('typeset', {}).get('auto_font_size', True),
+            )
+        )
+        if use_auto_font_size and isinstance(text, str) and text.strip():
+            qrect = to_qrect(rect) if rect is not None else QRect()
+            if qrect.isValid() and qrect.width() >= 16 and qrect.height() >= 16:
+                fitted_pt = compute_auto_font_size(
+                    qrect,
+                    text,
+                    area_font,
+                    orientation=settings.get('orientation_mode', 'horizontal'),
+                    line_spacing=settings.get('line_spacing', 1.1),
+                    char_spacing=settings.get('char_spacing', 100.0),
+                    margins=settings.get('margins', {'top': 0, 'right': 0, 'bottom': 0, 'left': 0}),
+                    alignment=settings.get('alignment', 'center'),
+                )
+                area_font.setPointSizeF(fitted_pt)
+
         area = TypesetArea(
             rect,
             text,
-            settings['font'],
+            area_font,
             settings['color'],
             polygon=polygon,
             orientation=settings.get('orientation_mode', 'horizontal'),
@@ -615,6 +637,35 @@ class TypesetMixin:
             area.review_notes['manual_inpaint'] = bool(manual_inpaint)
         area.ensure_defaults()
         return area
+
+    def _on_fit_font_size_clicked(self):
+        area = getattr(self, 'selected_typeset_area', None)
+        if not area:
+            self.show_toast("Auto Font Size", TypesetText.FIT_FONT_SIZE_NO_SELECTION, kind="info")
+            return
+        fitted_pt = compute_auto_font_size(
+            area.rect,
+            area.text,
+            area.get_font(),
+            orientation=area.get_orientation(),
+            line_spacing=area.get_line_spacing(),
+            char_spacing=area.get_char_spacing(),
+            margins=area.get_margins(),
+            alignment=area.get_alignment(),
+        )
+        if hasattr(self, '_push_undo_snapshot'):
+            self._push_undo_snapshot("Fit Font Size")
+        if hasattr(area, 'apply_point_size'):
+            area.apply_point_size(fitted_pt)
+        else:
+            area.font_info['pointSize'] = fitted_pt
+        if hasattr(self, 'font_size_spin'):
+            with QSignalBlocker(self.font_size_spin):
+                self.font_size_spin.setValue(float(fitted_pt))
+        self.redraw_all_typeset_areas()
+        if hasattr(self, 'update_undo_redo_buttons_state'):
+            self.update_undo_redo_buttons_state()
+        self.show_toast("Auto Font Size", TypesetText.FIT_FONT_SIZE_APPLIED_FMT.format(size=fitted_pt), kind="success")
 
     def _update_typeset_record(
         self,
@@ -820,10 +871,10 @@ class TypesetMixin:
 
     def _update_typeset_preview(self):
         try:
-            if not getattr(self, 'typeset_preview_label', None):
-                return
             self.typeset_font = self._build_current_font()
             self._update_font_preview_label()
+            if not getattr(self, 'typeset_preview_label', None):
+                return
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)

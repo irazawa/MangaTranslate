@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 from src.core.app_info import APP_VERSION
 from src.ui import theme
 from src.ui.dialogs import SettingsCenterDialog
+from src.ui.icons import app_icon, clear_icon_cache
 from src.ui.notifications import notify_toast
 from src.ui.texts import SettingsWorkspaceText, about_html
 from src.ui.unified_help_dialog import UnifiedHelpDialog
@@ -41,7 +42,6 @@ APP_SETTINGS_KEYS = {
     "translation",
     "shortcuts",
     "api",
-    "ocr_plugins",
     "glossary",
 }
 
@@ -288,11 +288,13 @@ class SettingsWorkspace(QWidget):
         super().__init__(main_window)
         self.main_window = main_window
         self._nav_rows = []
-        self._active_key = "profile"
+        self._active_key = "general"
         self._settings_dialog = None
         self._settings_loading = None
         self._settings_host_layout = None
         self._pending_settings_key = None
+        self._workers_host_layout = None
+        self._workers_panel = None
         self._help_dialog = None
         self._help_host_layout = None
         self._profile_labels = {}
@@ -348,20 +350,25 @@ class SettingsWorkspace(QWidget):
 
         self.profile_page = self._build_profile_page()
         self.settings_page = self._build_settings_page()
+        self.workers_page = self._build_workers_page()
         self.help_page = self._build_help_page()
         self.about_page = self._build_about_page()
         self.stack.addWidget(self.profile_page)
         self.stack.addWidget(self.settings_page)
+        self.stack.addWidget(self.workers_page)
         self.stack.addWidget(self.help_page)
         self.stack.addWidget(self.about_page)
 
         self._populate_nav()
-        self.set_active_section("profile")
+        self.set_active_section("general")
 
     def _populate_nav(self):
         self.nav_list.blockSignals(True)
+        self.nav_list.setIconSize(QSize(18, 18))
         self.nav_list.clear()
         self._nav_rows = []
+        muted = theme.COLORS["muted"]
+        accent = theme.COLORS["accent"]
         for section, entries in SettingsWorkspaceText.NAV_SECTIONS:
             header = QListWidgetItem(section)
             header.setData(Qt.UserRole, {"section": True, "text": section.lower()})
@@ -371,10 +378,14 @@ class SettingsWorkspace(QWidget):
             self._nav_rows.append(header)
             for entry in entries:
                 key, label, desc = entry[:3]
-                icon = entry[3] if len(entry) > 3 else "*"
-                item = QListWidgetItem(f"{icon}  {label}\n    {desc}")
-                item.setData(Qt.UserRole, {"key": key, "text": f"{label} {desc} {section}".lower()})
-                item.setSizeHint(QSize(240, 50))
+                icon_name = entry[3] if len(entry) > 3 else "dot"
+                item = QListWidgetItem(f"{label}\n{desc}")
+                item.setIcon(app_icon(icon_name, muted, size=16, active_color=accent))
+                item.setData(
+                    Qt.UserRole,
+                    {"key": key, "icon": icon_name, "text": f"{label} {desc} {section}".lower()},
+                )
+                item.setSizeHint(QSize(240, 52))
                 self.nav_list.addItem(item)
                 self._nav_rows.append(item)
         self.nav_list.blockSignals(False)
@@ -582,7 +593,10 @@ class SettingsWorkspace(QWidget):
         if self._settings_dialog is not None:
             return self._settings_dialog
 
-        dialog = SettingsCenterDialog(self.main_window)
+        initial_tab = self._pending_settings_key or (
+            self._active_key if self._active_key in APP_SETTINGS_KEYS else "general"
+        )
+        dialog = SettingsCenterDialog(self.main_window, initial_tab=initial_tab)
         dialog.setWindowFlags(Qt.Widget)
         dialog.setModal(False)
         dialog.setMinimumSize(0, 0)
@@ -621,16 +635,32 @@ class SettingsWorkspace(QWidget):
         self._settings_host_layout.addWidget(dialog)
         self._settings_dialog = dialog
 
-        try:
-            dialog._apply_settings_styles()
-        except Exception:
-            pass
-
         pending = self._pending_settings_key
         self._pending_settings_key = None
-        if pending:
+        if pending and pending != initial_tab:
             dialog.set_active_tab(pending)
         return dialog
+
+    def _build_workers_page(self):
+        host = QWidget()
+        host.setObjectName("sw-workers-host")
+        self._workers_host_layout = QVBoxLayout(host)
+        self._workers_host_layout.setContentsMargins(0, 0, 0, 0)
+        self._workers_host_layout.setSpacing(0)
+        return host
+
+    def _ensure_workers_panel(self):
+        if self._workers_panel is not None:
+            return self._workers_panel
+        from .workers_panel import WorkersPanel
+
+        panel = WorkersPanel(self.main_window)
+        panel.setObjectName("sw-workers-panel")
+        self._workers_host_layout.addWidget(panel)
+        self._workers_panel = panel
+        if self.main_window is not None:
+            self.main_window.workers_panel = panel
+        return panel
 
     def _build_help_page(self):
         host = QWidget()
@@ -638,7 +668,6 @@ class SettingsWorkspace(QWidget):
         self._help_host_layout = QVBoxLayout(host)
         self._help_host_layout.setContentsMargins(0, 0, 0, 0)
         self._help_host_layout.setSpacing(0)
-        self._rebuild_help_panel()
         return host
 
     def _build_about_page(self):
@@ -773,32 +802,40 @@ class SettingsWorkspace(QWidget):
             self.heatmap_range_label.setText(self.heatmap.range_summary())
 
     def set_active_section(self, key: str):
-        key = key or "profile"
+        key = key or "general"
         key = {
             "help": "help_overview",
             "overview": "help_overview",
             "settings": "general",
             "apis": "api",
-            "ocr": "ocr_plugins",
+            "ocr": "api",
+            "plugins": "api",
+            "ocr_plugins": "api",
+            "inpaint": "cleanup",
+            "iopaint": "cleanup",
         }.get(key, key)
         self._active_key = key
 
         if key == "profile":
             self.stack.setCurrentWidget(self.profile_page)
             self.refresh_profile()
+        elif key == "workers":
+            self.stack.setCurrentWidget(self.workers_page)
+            panel = self._ensure_workers_panel()
+            panel.refresh_view(force=True)
         elif key in APP_SETTINGS_KEYS:
             self.stack.setCurrentWidget(self.settings_page)
             if self._settings_dialog is not None:
                 self._settings_dialog.set_active_tab(key)
             else:
-                # Dialog not yet built — materialize it now so the requested
-                # tab is shown. Building happens once; subsequent opens reuse it.
                 self._pending_settings_key = key
-                QTimer.singleShot(0, self._ensure_settings_dialog)
+                self._ensure_settings_dialog()
         elif key == "help_overview":
             self.stack.setCurrentWidget(self.about_page)
         elif key in HELP_TAB_KEYS:
             self.stack.setCurrentWidget(self.help_page)
+            if self._help_dialog is None:
+                self._rebuild_help_panel()
             if self._help_dialog is not None and hasattr(self._help_dialog, "tabs"):
                 self._help_dialog.tabs.setCurrentIndex(HELP_TAB_KEYS[key])
 
@@ -817,7 +854,10 @@ class SettingsWorkspace(QWidget):
                 return
 
     def refresh(self):
-        self.refresh_profile()
+        if self._active_key == "profile":
+            self.refresh_profile()
+        elif self._active_key == "workers" and self._workers_panel is not None:
+            self._workers_panel.refresh_view(force=True)
         if self._active_key == "help_overview":
             old_about = self.about_page
             idx = self.stack.indexOf(old_about)
@@ -898,7 +938,15 @@ class SettingsWorkspace(QWidget):
             self.refresh()
 
     def refresh_theme(self):
+        clear_icon_cache()
         self.setStyleSheet(_settings_workspace_qss())
+        muted = theme.COLORS["muted"]
+        accent = theme.COLORS["accent"]
+        for item in self._nav_rows:
+            data = item.data(Qt.UserRole) or {}
+            icon_name = data.get("icon")
+            if icon_name:
+                item.setIcon(app_icon(icon_name, muted, size=16, active_color=accent))
         if self._settings_dialog is not None:
             try:
                 self._settings_dialog._apply_settings_styles()

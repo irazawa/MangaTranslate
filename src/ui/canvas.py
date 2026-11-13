@@ -1,8 +1,9 @@
-# Manga OCR & Typeset Tool v14.9.8.8
+# Manga OCR & Typeset Tool v14.9.9.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
 import math
+import re
 import traceback
 import copy
 import time
@@ -10,7 +11,8 @@ import time
 # ==============================
 # ?? Library pihak ketiga
 # ==============================
-# (tidak ada impor pihak ketiga yang dibutuhkan)
+import cv2
+import numpy as np
 
 # ==============================
 # ?? PyQt5 (dibagi per kategori)
@@ -20,7 +22,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QColor, QFont, QPolygon, QPainterPath, QPolygonF,
-    QBrush, QTransform, QImage
+    QBrush, QTransform, QImage, QFontMetrics, QTextDocument,
+    QTextCursor, QTextCharFormat, QTextBlockFormat
 )
 from PyQt5.QtCore import (
     Qt, QRect, QPoint, pyqtSignal, QTimer, QRectF, QPointF, QSize
@@ -30,6 +33,202 @@ from src.core.config import *
 from src.utils.geometry import *
 from src.ui.dialogs import *
 from src.core.fonts import *
+
+
+def _measure_wrapped_segments(
+    segments,
+    scale=1.0,
+    target_width=100.0,
+    line_spacing=1.1,
+    char_spacing=100.0,
+    alignment='center',
+):
+    """Measure rendered width, height, and max single-word width via QTextDocument."""
+    doc = QTextDocument()
+    doc.setDocumentMargin(0)
+    align_map = {
+        'center': Qt.AlignHCenter,
+        'left': Qt.AlignLeft,
+        'right': Qt.AlignRight,
+        'justify': Qt.AlignJustify,
+    }
+    option = doc.defaultTextOption()
+    option.setAlignment(align_map.get(str(alignment or 'center').lower(), Qt.AlignHCenter))
+    doc.setDefaultTextOption(option)
+
+    cursor = QTextCursor(doc)
+    cursor.movePosition(QTextCursor.Start)
+    ls = max(0.6, float(line_spacing or 1.1))
+    cs = float(char_spacing if char_spacing is not None else 100.0)
+    block_format = QTextBlockFormat()
+    block_format.setLineHeight(int(ls * 100), QTextBlockFormat.ProportionalHeight)
+    block_format.setAlignment(option.alignment())
+    cursor.setBlockFormat(block_format)
+
+    max_word_w = 0.0
+    first_segment = True
+    for seg_font, seg_text in segments:
+        if not seg_text:
+            continue
+        test_font = QFont(seg_font)
+        base_pt = test_font.pointSizeF() if test_font.pointSizeF() > 0 else float(max(1, test_font.pointSize() or 14))
+        test_font.setPointSizeF(max(1.0, base_pt * scale))
+        test_font.setLetterSpacing(QFont.PercentageSpacing, cs)
+
+        fm = QFontMetrics(test_font)
+        for token in re.split(r'\s+', seg_text):
+            if token:
+                w_tok = float(fm.horizontalAdvance(token))
+                if w_tok > max_word_w:
+                    max_word_w = w_tok
+
+        fmt = QTextCharFormat()
+        fmt.setFont(test_font)
+        parts = seg_text.split('\n')
+        for idx, part in enumerate(parts):
+            if not first_segment:
+                cursor.mergeBlockFormat(block_format)
+            cursor.insertText(part, fmt)
+            first_segment = False
+            if idx < len(parts) - 1:
+                cursor.insertBlock(block_format)
+                cursor.setBlockFormat(block_format)
+
+    doc.setTextWidth(max(1.0, float(target_width)))
+    size = doc.size()
+    return float(size.width()), float(size.height()), max_word_w
+
+
+def _compute_usable_text_box(rect, margins=None, fill_ratio=0.84):
+    """Return usable (width, height) after subtracting margins and bubble inset."""
+    qrect = QRectF(to_qrect(rect)) if not isinstance(rect, (QRect, QRectF)) else QRectF(rect)
+    if margins and isinstance(margins, dict):
+        qrect = qrect.adjusted(
+            float(margins.get('left', 0) or 0),
+            float(margins.get('top', 0) or 0),
+            -float(margins.get('right', 0) or 0),
+            -float(margins.get('bottom', 0) or 0),
+        )
+    rw = max(1.0, float(qrect.width()))
+    rh = max(1.0, float(qrect.height()))
+    ratio = max(0.5, min(1.0, float(fill_ratio)))
+    avail_w = rw * ratio if rw >= 36.0 else max(4.0, rw - 4.0)
+    avail_h = rh * ratio if rh >= 36.0 else max(4.0, rh - 4.0)
+    return avail_w, avail_h
+
+
+def compute_auto_font_size(
+    rect,
+    text,
+    base_font,
+    orientation='horizontal',
+    line_spacing=1.1,
+    char_spacing=100.0,
+    margins=None,
+    alignment='center',
+    min_pt=7.0,
+    max_pt=64.0,
+    fill_ratio=0.84,
+):
+    """Compute the largest readable font pointSize that word-wraps cleanly inside rect."""
+    clean_text = str(text or '').strip()
+    fallback_pt = float(base_font.pointSizeF()) if base_font and base_font.pointSizeF() > 0 else float(
+        max(1, base_font.pointSize() if base_font else 14)
+    )
+    if not clean_text or rect is None:
+        return fallback_pt
+
+    avail_w, avail_h = _compute_usable_text_box(rect, margins=margins, fill_ratio=fill_ratio)
+    if avail_w < 8.0 or avail_h < 8.0:
+        return fallback_pt
+
+    is_vertical = str(orientation or 'horizontal').lower() == 'vertical'
+    target_w = avail_h if is_vertical else avail_w
+    max_h = avail_w if is_vertical else avail_h
+
+    # Short 1-2 word exclamations ("NO,", "TIDAK", "DRAIN!") shouldn't blow up to poster size inside big bubbles.
+    compact_len = len(re.sub(r'\s+', '', clean_text))
+    minor_dim = min(avail_w, avail_h)
+    if compact_len <= 10:
+        eff_max = max(float(min_pt), min(float(max_pt), max(14.0, minor_dim * 0.20)))
+    else:
+        eff_max = max(float(min_pt), min(float(max_pt), max(18.0, minor_dim * 0.34)))
+    eff_min = min(float(min_pt), eff_max)
+
+    probe_font = QFont(base_font) if base_font is not None else QFont('Arial')
+    probe_font.setPointSizeF(10.0)
+    segments = [(probe_font, clean_text)]
+
+    lo_scale = eff_min / 10.0
+    hi_scale = eff_max / 10.0
+    best_scale = lo_scale
+    for _ in range(12):
+        mid = (lo_scale + hi_scale) / 2.0
+        mw, mh, max_word_w = _measure_wrapped_segments(
+            segments,
+            scale=mid,
+            target_width=target_w,
+            line_spacing=line_spacing,
+            char_spacing=char_spacing,
+            alignment=alignment,
+        )
+        word_ok = (max_word_w <= target_w * 1.02) or ((mid * 10.0) <= eff_min + 0.5)
+        if word_ok and mh <= max_h and mw <= target_w * 1.03:
+            best_scale = mid
+            lo_scale = mid
+        else:
+            hi_scale = mid
+
+    return round(max(eff_min, min(eff_max, best_scale * 10.0)), 1)
+
+
+def compute_auto_font_scale(rect, area, min_scale=0.15, max_scale=4.0, fill_ratio=0.92):
+    """Compute uniform segment font scale factor so a TypesetArea wraps cleanly inside rect."""
+    qrect = QRectF(rect)
+    if qrect.width() <= 4.0 or qrect.height() <= 4.0:
+        return 1.0
+    raw_segments = area.get_segments() if hasattr(area, 'get_segments') else []
+    segments = [
+        (area.segment_to_qfont(seg), seg.get('text', '') or '')
+        for seg in raw_segments
+        if (seg.get('text', '') or '')
+    ]
+    if not segments:
+        return 1.0
+
+    ratio = max(0.5, min(1.0, float(fill_ratio)))
+    avail_w = float(qrect.width()) * ratio if qrect.width() >= 36.0 else float(qrect.width())
+    avail_h = float(qrect.height()) * ratio if qrect.height() >= 36.0 else float(qrect.height())
+    is_vertical = str(area.get_orientation()).lower() == 'vertical'
+    target_w = avail_h if is_vertical else avail_w
+    max_h = avail_w if is_vertical else avail_h
+    line_spacing = area.get_line_spacing()
+    char_spacing = area.get_char_spacing()
+    alignment = area.get_alignment()
+
+    lo = float(min_scale)
+    hi = float(max_scale)
+    best = 1.0
+    found_fit = False
+    for _ in range(10):
+        mid = (lo + hi) / 2.0
+        mw, mh, max_word_w = _measure_wrapped_segments(
+            segments,
+            scale=mid,
+            target_width=target_w,
+            line_spacing=line_spacing,
+            char_spacing=char_spacing,
+            alignment=alignment,
+        )
+        word_ok = (max_word_w <= target_w * 1.02) or (mid <= min_scale + 0.05)
+        if word_ok and mh <= max_h and mw <= target_w * 1.03:
+            best = mid
+            found_fit = True
+            lo = mid
+        else:
+            hi = mid
+    return best if found_fit else float(min_scale)
+
 
 class TypesetArea:
     def __init__(
@@ -688,6 +887,69 @@ class TypesetArea:
         self.text = text or ''
         self.text_segments = self._build_segments_from_plain(self.text, font, color)
 
+    def apply_point_size(self, point_size):
+        """Apply a new pointSize to area.font_info and synchronize text_segments."""
+        try:
+            target_pt = max(1.0, float(point_size))
+        except (TypeError, ValueError):
+            return
+        if not isinstance(getattr(self, 'font_info', None), dict):
+            self.font_info = self.font_to_dict(self.get_font())
+        old_pt = coerce_float(self.font_info.get('pointSize', 14.0), default=14.0, minimum=1.0)
+        self.font_info['pointSize'] = round(target_pt, 1)
+
+        segments = getattr(self, 'text_segments', None)
+        if not isinstance(segments, list) or not segments:
+            self.text_segments = self._build_segments_from_plain(self.text, self.get_font(), self.get_color())
+            return
+
+        distinct_sizes = {
+            round(coerce_float(seg['font'].get('pointSize', old_pt), default=old_pt, minimum=1.0), 1)
+            for seg in segments
+            if isinstance(seg, dict) and isinstance(seg.get('font'), dict)
+        }
+        scale = (target_pt / old_pt) if (old_pt > 0 and len(distinct_sizes) > 1) else None
+        for seg in segments:
+            if not isinstance(seg, dict):
+                continue
+            seg_font = seg.get('font')
+            if not isinstance(seg_font, dict):
+                seg['font'] = copy.deepcopy(self.font_info)
+            elif scale is not None:
+                cur_pt = coerce_float(seg_font.get('pointSize', old_pt), default=old_pt, minimum=1.0)
+                seg_font['pointSize'] = round(max(1.0, cur_pt * scale), 1)
+            else:
+                seg_font['pointSize'] = round(target_pt, 1)
+
+    def apply_font(self, font):
+        """Sync font_info and single-style text_segments when panel font changes."""
+        new_dict = self.font_to_dict(font)
+        old_pt = coerce_float((getattr(self, 'font_info', None) or {}).get('pointSize', 14.0), default=14.0, minimum=1.0)
+        self.font_info = new_dict
+        segments = getattr(self, 'text_segments', None)
+        if not isinstance(segments, list) or not segments:
+            return
+        distinct_fonts = {
+            (
+                (seg['font'].get('family', '') if isinstance(seg.get('font'), dict) else ''),
+                round(coerce_float(seg['font'].get('pointSize', old_pt), default=old_pt, minimum=1.0), 1)
+                if isinstance(seg.get('font'), dict) else round(old_pt, 1),
+            )
+            for seg in segments
+            if isinstance(seg, dict)
+        }
+        if len(distinct_fonts) <= 1:
+            for seg in segments:
+                if isinstance(seg, dict):
+                    seg['font'] = copy.deepcopy(new_dict)
+        else:
+            new_pt = coerce_float(new_dict.get('pointSize', old_pt), default=old_pt, minimum=1.0)
+            scale = (new_pt / old_pt) if old_pt > 0 else 1.0
+            for seg in segments:
+                if isinstance(seg, dict) and isinstance(seg.get('font'), dict):
+                    cur_pt = coerce_float(seg['font'].get('pointSize', old_pt), default=old_pt, minimum=1.0)
+                    seg['font']['pointSize'] = round(max(1.0, cur_pt * scale), 1)
+
     def get_orientation(self):
         return getattr(self, 'orientation', 'horizontal') or 'horizontal'
 
@@ -802,6 +1064,7 @@ class SelectableImageLabel(QLabel):
         self.inpaint_brush_size = 25  # diameter dalam piksel gambar asli
         self.painting_mask = False  # status apakah sedang mendrag kuas
         self._last_paint_pos = None  # posisi terakhir saat stroke
+        self._brush_stroke_points = []  # jejak koordinat satu tarikan kuas untuk deteksi loop tertutup
 
     def sizeHint(self):
         return QSize(0, 0)
@@ -852,6 +1115,71 @@ class SelectableImageLabel(QLabel):
         p.setPen(pen)
         p.drawLine(p1, p2)
         p.end()
+
+    @staticmethod
+    def _find_enclosed_mask_holes(binary_mask):
+        """Return uint8 0/255 mask of regions completely enclosed inside binary_mask (>0)."""
+        if binary_mask is None or binary_mask.size == 0 or not np.any(binary_mask):
+            return None
+        h, w = binary_mask.shape[:2]
+        # Pad 1px of 0 around the canvas so strokes touching image edges don't lock outside background.
+        inv = np.full((h + 2, w + 2), 255, dtype=np.uint8)
+        inv[1:-1, 1:-1][binary_mask > 0] = 0
+        ff_mask = np.zeros((h + 4, w + 4), dtype=np.uint8)
+        cv2.floodFill(inv, ff_mask, (0, 0), 0)
+        holes = inv[1:-1, 1:-1]
+        return holes if np.any(holes) else None
+
+    def _auto_fill_enclosed_inpaint_loops(self):
+        """Fill interior pixels when the painted brush mask forms a closed loop."""
+        mask_img = getattr(self, 'inpaint_mask', None)
+        if mask_img is None or mask_img.isNull():
+            return False
+        w, h = mask_img.width(), mask_img.height()
+        if w < 3 or h < 3:
+            return False
+
+        if mask_img.format() != QImage.Format_Grayscale8:
+            mask_img = mask_img.convertToFormat(QImage.Format_Grayscale8)
+            self.inpaint_mask = mask_img
+
+        bpl = mask_img.bytesPerLine()
+        ptr = mask_img.bits()
+        ptr.setsize(mask_img.byteCount())
+        buf = np.frombuffer(ptr, dtype=np.uint8).reshape((h, bpl))
+        mask_view = buf[:, :w]
+        binary = (mask_view >= 128).astype(np.uint8) * 255
+
+        holes = self._find_enclosed_mask_holes(binary)
+
+        # If the user nearly closed a substantial loop, softly close tiny start->end gap (<= 0.85 * brush_size)
+        pts = list(getattr(self, '_brush_stroke_points', []) or [])
+        if holes is None and len(pts) >= 5:
+            p_start = pts[0]
+            p_end = pts[-1]
+            brush_d = float(max(5, getattr(self, 'inpaint_brush_size', 25)))
+            end_gap = math.hypot(p_end.x() - p_start.x(), p_end.y() - p_start.y())
+            max_span = max(math.hypot(p.x() - p_start.x(), p.y() - p_start.y()) for p in pts)
+            if max_span >= max(24.0, brush_d * 1.4) and 0.0 < end_gap <= max(14.0, brush_d * 0.85):
+                probe = binary.copy()
+                cv2.line(
+                    probe,
+                    (int(p_end.x()), int(p_end.y())),
+                    (int(p_start.x()), int(p_start.y())),
+                    255,
+                    thickness=max(2, int(round(brush_d))),
+                )
+                probe_holes = self._find_enclosed_mask_holes(probe)
+                if probe_holes is not None and int(np.count_nonzero(probe_holes)) >= max(16, int(brush_d)):
+                    self._paint_mask_stroke(p_end, p_start)
+                    binary = (mask_view >= 128).astype(np.uint8) * 255
+                    holes = self._find_enclosed_mask_holes(binary)
+
+        if holes is None:
+            return False
+
+        mask_view[holes > 0] = 255
+        return True
 
     def _set_active_transform(self, transform_data):
         self.active_transform = transform_data
@@ -1593,7 +1921,9 @@ class SelectableImageLabel(QLabel):
                         self.inpaint_mask = QImage(self.main_window.original_pixmap.size(), QImage.Format_Grayscale8)
                         self.inpaint_mask.fill(0)
                     self.painting_mask = True
-                    self._last_paint_pos = img_pt.toPoint()
+                    pt_start = img_pt.toPoint()
+                    self._last_paint_pos = pt_start
+                    self._brush_stroke_points = [pt_start]
                     self._paint_mask_stroke(self._last_paint_pos, self._last_paint_pos)
                     self.update()
                 return
@@ -1839,6 +2169,9 @@ class SelectableImageLabel(QLabel):
                     curr_pos = img_pt.toPoint()
                     self._paint_mask_stroke(self._last_paint_pos, curr_pos)
                     self._last_paint_pos = curr_pos
+                    if not hasattr(self, '_brush_stroke_points'):
+                        self._brush_stroke_points = []
+                    self._brush_stroke_points.append(curr_pos)
             self.update()
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton and getattr(self, 'panning', False):
@@ -1870,8 +2203,10 @@ class SelectableImageLabel(QLabel):
 
         if event.button() == Qt.LeftButton:
             if getattr(self, 'painting_mask', False):
+                self._auto_fill_enclosed_inpaint_loops()
                 self.painting_mask = False
                 self._last_paint_pos = None
+                self._brush_stroke_points = []
                 self.update()
                 return
 

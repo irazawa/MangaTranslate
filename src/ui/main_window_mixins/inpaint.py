@@ -225,7 +225,12 @@ class InpaintMixin:
         clean_base = self._current_clean_base_image(pil_image)
         if run_ocr_translate:
             ocr_source = self._current_pre_inpaint_image(pil_image)
-            if self._queue_ocr_translate_rect(mask_rect, source_pil_image=ocr_source):
+            # Inpaint Brush sudah membersihkan latar; nonaktifkan background box & inpaint per-area.
+            if self._queue_ocr_translate_rect(
+                mask_rect,
+                source_pil_image=ocr_source,
+                settings_overrides={'use_background_box': False, 'use_inpaint': False},
+            ):
                 self.show_toast("OCR Queued", "OCR and translation queued for the painted area.", kind="info")
 
         self.show_toast("Inpainting...", "Running AI Inpainting on painted area...", kind="info")

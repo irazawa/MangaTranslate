@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.8.8
+# Manga OCR & Typeset Tool v14.9.9.1
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -12,7 +12,7 @@ import copy
 # (tidak ada impor pihak ketiga yang dibutuhkan)
 
 # ==============================
-# 🌟 PyQt5 (dibagi per kategori)
+# PyQt5 (dibagi per kategori)
 # ==============================
 from PyQt5.QtWidgets import (
     QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
@@ -41,6 +41,7 @@ from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
 from src.ui.notifications import notify_banner, notify_toast
+from src.ui.icons import app_icon, icon_label, status_dot_pixmap
 from src.ui.texts import AppearanceText, SettingsText, FullPageBatchText
 from src.ui.theme import (
     APPEARANCE_DEFAULTS,
@@ -211,9 +212,10 @@ class SettingsCenterDialog(QDialog):
 
     _NAV_ITEMS = SettingsText.NAV_ITEMS
 
-    def __init__(self, main_window):
+    def __init__(self, main_window, initial_tab="general"):
         super().__init__(main_window)
         self.main_window = main_window
+        self._initial_tab_key = initial_tab or "general"
         self.setWindowTitle(SettingsText.TITLE)
         self.setModal(True)
         self.setObjectName("SettingsCenterDialog")
@@ -324,19 +326,22 @@ class SettingsCenterDialog(QDialog):
         self._pages = QStackedWidget()
         self._pages.setObjectName("settings-pages")
 
-        self.general_tab = self._create_general_tab()
-        self.cleanup_tab = self._create_cleanup_tab()
-        self.appearance_tab = self._create_appearance_tab()
-        self.translation_tab = self._create_translation_tab()
-        self.shortcuts_tab = self._create_shortcuts_tab()
-        self.api_tab = self._create_api_tab()
-        self.ocr_plugins_tab = self._create_ocr_plugins_tab()
-        self.glossary_tab = self._create_glossary_tab()
-
-        for page in (self.general_tab, self.cleanup_tab, self.appearance_tab,
-                     self.translation_tab, self.shortcuts_tab, self.api_tab, self.ocr_plugins_tab,
-                     self.glossary_tab):
-            self._pages.addWidget(page)
+        self._tab_factories = {
+            "general": self._create_general_tab,
+            "cleanup": self._create_cleanup_tab,
+            "appearance": self._create_appearance_tab,
+            "translation": self._create_translation_tab,
+            "api": self._create_api_tab,
+            "shortcuts": self._create_shortcuts_tab,
+            "glossary": self._create_glossary_tab,
+        }
+        self._page_keys = [meta.get("key") for meta in self._NAV_ITEMS if meta.get("key") in self._tab_factories]
+        self._built_tabs = {}
+        self._tab_placeholders = {}
+        for key in self._page_keys:
+            placeholder = QWidget()
+            self._tab_placeholders[key] = placeholder
+            self._pages.addWidget(placeholder)
 
         right_vbox.addWidget(self._pages, 1)
 
@@ -374,14 +379,47 @@ class SettingsCenterDialog(QDialog):
 
         root.addWidget(splitter, 1)
 
-        # Wire nav selection → page switch
+        # Wire nav selection → lazy page switch
         self._nav_list.currentRowChanged.connect(self._on_nav_changed)
-        self._nav_list.setCurrentRow(0)
+        initial_idx = self._nav_index_for_key(getattr(self, "_initial_tab_key", "general"))
+        if initial_idx is None:
+            initial_idx = 0
+        self._nav_list.setCurrentRow(initial_idx)
+        self._on_nav_changed(initial_idx)
 
-        self._apply_settings_styles()
+        self._apply_settings_styles(root_widget=self._built_tabs.get(self._page_keys[initial_idx] if self._page_keys else None))
+
+    def _ensure_tab(self, key: str):
+        """Lazily build and insert a settings tab page the first time it is visited."""
+        if key in self._built_tabs:
+            return self._built_tabs[key]
+        factory = self._tab_factories.get(key)
+        if factory is None:
+            return None
+        page = factory()
+        self._built_tabs[key] = page
+        setattr(self, f"{key}_tab", page)
+        placeholder = self._tab_placeholders.get(key)
+        if placeholder is not None:
+            idx = self._pages.indexOf(placeholder)
+            if idx >= 0:
+                self._pages.insertWidget(idx, page)
+                self._pages.removeWidget(placeholder)
+            placeholder.deleteLater()
+            self._tab_placeholders.pop(key, None)
+        else:
+            self._pages.addWidget(page)
+        self._style_settings_subtree(page)
+        return page
 
     def _on_nav_changed(self, index):
-        """Switch stacked page when user clicks nav item."""
+        """Switch stacked page when user clicks nav item, materializing lazily."""
+        if 0 <= index < len(self._page_keys):
+            key = self._page_keys[index]
+            page = self._ensure_tab(key)
+            if page is not None:
+                self._pages.setCurrentWidget(page)
+                return
         if 0 <= index < self._pages.count():
             self._pages.setCurrentIndex(index)
 
@@ -391,10 +429,13 @@ class SettingsCenterDialog(QDialog):
             "apis": "api",
             "keys": "api",
             "shortcut": "shortcuts",
-            "ocr": "ocr_plugins",
-            "plugins": "ocr_plugins",
+            "ocr": "api",
+            "plugins": "api",
+            "ocr_plugins": "api",
             "theme": "appearance",
             "style": "appearance",
+            "inpaint": "cleanup",
+            "iopaint": "cleanup",
         }
         normalized = aliases.get(normalized, normalized)
         for index, meta in enumerate(self._NAV_ITEMS):
@@ -495,7 +536,7 @@ class SettingsCenterDialog(QDialog):
         ))
 
         # ── Autosave card ────────────────────────────────────────────────
-        as_card = QGroupBox("💾  Autosave")
+        as_card = QGroupBox("Autosave")
         as_card.setObjectName("settings-card")
         as_vbox = QVBoxLayout(as_card)
         as_vbox.setSpacing(4)
@@ -520,7 +561,7 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(as_card)
 
         # ── Output card ──────────────────────────────────────────────────
-        out_card = QGroupBox("🖼  Output")
+        out_card = QGroupBox("Output")
         out_card.setObjectName("settings-card")
         out_vbox = QVBoxLayout(out_card)
         out_vbox.setSpacing(4)
@@ -548,31 +589,11 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(out_card)
 
         # ── Defaults & Preset card ──────────────────────────────────────────
-        def_card = QGroupBox("📋  Default Presets")
+        def_card = QGroupBox("Default Presets")
         def_card.setObjectName("settings-card")
         def_vbox = QVBoxLayout(def_card)
         def_vbox.setSpacing(4)
         def_vbox.setContentsMargins(0, 8, 0, 8)
-
-        # Default OCR Language
-        self.default_ocr_combo = QComboBox()
-        self.default_ocr_combo.setFixedWidth(180)
-        if hasattr(self.main_window, 'ocr_lang_combo'):
-            for i in range(self.main_window.ocr_lang_combo.count()):
-                self.default_ocr_combo.addItem(self.main_window.ocr_lang_combo.itemText(i))
-        current_ocr = SETTINGS.get('general', {}).get('default_ocr_lang', 'Japanese (Manga-OCR)')
-        self.default_ocr_combo.setCurrentText(current_ocr)
-        def_vbox.addWidget(self._make_option_row(
-            "Default OCR Language", "Select the default language used for OCR.",
-            self.default_ocr_combo))
-
-        # Default AI-Only Translate
-        self.default_ai_only_checkbox = QCheckBox()
-        current_ai_only = bool(SETTINGS.get('general', {}).get('default_ai_only_translate', False))
-        self.default_ai_only_checkbox.setChecked(current_ai_only)
-        def_vbox.addWidget(self._make_option_row(
-            "Default AI-Only Translate", "Whether to enable AI-Only Translation mode by default.",
-            self.default_ai_only_checkbox))
 
         # Default AI Model
         self.default_ai_model_combo = QComboBox()
@@ -667,7 +688,7 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(def_card)
 
         # ── Emergency Close card ──────────────────────────────────────────
-        ec_card = QGroupBox("🚨  Emergency Close")
+        ec_card = QGroupBox("Emergency Close")
         ec_card.setObjectName("settings-card")
         ec_vbox = QVBoxLayout(ec_card)
         ec_vbox.setSpacing(4)
@@ -744,17 +765,99 @@ class SettingsCenterDialog(QDialog):
         meta = self._page_meta("cleanup")
         page, layout = self._make_page_scroll()
         layout.addWidget(self._make_page_header(
-            meta.get("title", "Cleanup"),
+            meta.get("title", "Cleanup & Inpainting"),
             meta.get("subtitle", ""),
         ))
 
-        card = QGroupBox("🧹  Text Defaults")
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+
+        # ── Card 1: Inpainting & IOPaint Server ─────────────────────────────
+        inpaint_card = QGroupBox("Inpainting && IOPaint Server")
+        inpaint_card.setObjectName("settings-card")
+        inpaint_vbox = QVBoxLayout(inpaint_card)
+        inpaint_vbox.setSpacing(4)
+        inpaint_vbox.setContentsMargins(0, 8, 0, 8)
+
+        self.cleanup_use_inpaint_checkbox = QCheckBox()
+        self.cleanup_use_inpaint_checkbox.setChecked(bool(cleanup_cfg.get('use_inpaint', True)))
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Enable inpainting by default",
+            "Remove original text beneath translated boxes using the configured backend.",
+            self.cleanup_use_inpaint_checkbox))
+
+        inpaint_models = ["IOPaint Server", "OpenCV-NS", "OpenCV-Telea"]
+        if getattr(self.main_window, 'is_lama_available', False):
+            dl_models = getattr(self.main_window, 'dl_models', {}) or {}
+            if os.path.exists(dl_models.get('big_lama', {}).get('path', '')):
+                inpaint_models.append("Big-LaMa")
+            if os.path.exists(dl_models.get('anime_inpaint', {}).get('path', '')):
+                inpaint_models.append("Anime-Inpainting")
+
+        self.cleanup_inpaint_model_combo = QComboBox()
+        self.cleanup_inpaint_model_combo.setFixedWidth(200)
+        self.cleanup_inpaint_model_combo.addItems(inpaint_models)
+        saved_model = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        if saved_model not in inpaint_models and saved_model:
+            self.cleanup_inpaint_model_combo.addItem(saved_model)
+        self.cleanup_inpaint_model_combo.setCurrentText(saved_model or "IOPaint Server")
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Inpainting engine",
+            "IOPaint Server delivers the cleanest local LaMa/AI text removal.",
+            self.cleanup_inpaint_model_combo))
+
+        self.cleanup_inpaint_padding_spin = QSpinBox()
+        self.cleanup_inpaint_padding_spin.setRange(1, 25)
+        self.cleanup_inpaint_padding_spin.setFixedWidth(90)
+        self.cleanup_inpaint_padding_spin.setSuffix(" px")
+        self.cleanup_inpaint_padding_spin.setValue(int(cleanup_cfg.get('inpaint_padding', 5) or 5))
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Mask padding",
+            "Extra pixels padded around detected text mask before inpainting.",
+            self.cleanup_inpaint_padding_spin))
+
+        self.cleanup_iopaint_url_edit = QLineEdit()
+        self.cleanup_iopaint_url_edit.setFixedWidth(240)
+        self.cleanup_iopaint_url_edit.setPlaceholderText(DEFAULT_INPAINT_SERVER_URL)
+        self.cleanup_iopaint_url_edit.setText(str(cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL) or DEFAULT_INPAINT_SERVER_URL))
+        inpaint_vbox.addWidget(self._make_option_row(
+            "IOPaint server URL",
+            "Base URL of your running IOPaint server (default http://127.0.0.1:8080).",
+            self.cleanup_iopaint_url_edit))
+
+        self.cleanup_iopaint_timeout_spin = QSpinBox()
+        self.cleanup_iopaint_timeout_spin.setRange(5, 600)
+        self.cleanup_iopaint_timeout_spin.setFixedWidth(90)
+        self.cleanup_iopaint_timeout_spin.setSuffix(" s")
+        self.cleanup_iopaint_timeout_spin.setValue(int(cleanup_cfg.get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT) or DEFAULT_INPAINT_SERVER_TIMEOUT))
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Request timeout",
+            "Seconds to wait for IOPaint HTTP response per request.",
+            self.cleanup_iopaint_timeout_spin))
+
+        test_holder = QWidget()
+        test_h = QHBoxLayout(test_holder)
+        test_h.setContentsMargins(0, 0, 0, 0)
+        test_h.setSpacing(8)
+        self.iopaint_status_label = QLabel("Not checked")
+        self.iopaint_status_label.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
+        self.iopaint_test_btn = QPushButton("Test Connection")
+        self.iopaint_test_btn.setObjectName("settings-action-btn")
+        self.iopaint_test_btn.clicked.connect(self._on_test_iopaint_server)
+        test_h.addWidget(self.iopaint_status_label)
+        test_h.addWidget(self.iopaint_test_btn)
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Server connectivity",
+            "Check whether your IOPaint Server is reachable right now.",
+            test_holder))
+
+        layout.addWidget(inpaint_card)
+
+        # ── Card 2: Text Defaults ───────────────────────────────────────────
+        card = QGroupBox("Text Box && Color Defaults")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(4)
         card_vbox.setContentsMargins(0, 8, 0, 8)
-
-        cleanup_cfg = SETTINGS.get('cleanup', {})
 
         self.auto_text_color_checkbox = QCheckBox()
         self.auto_text_color_checkbox.setChecked(bool(cleanup_cfg.get('auto_text_color', True)))
@@ -799,6 +902,45 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
         layout.addStretch(1)
         return page
+
+    def _on_test_iopaint_server(self):
+        import threading
+        import urllib.request
+        url = (self.cleanup_iopaint_url_edit.text() or DEFAULT_INPAINT_SERVER_URL).strip().rstrip("/")
+        if not url:
+            url = DEFAULT_INPAINT_SERVER_URL
+        self.iopaint_test_btn.setEnabled(False)
+        self.iopaint_status_label.setText("Checking…")
+        self.iopaint_status_label.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
+
+        def _finish(ok: bool, detail: str):
+            try:
+                if getattr(self, 'iopaint_test_btn', None) is not None:
+                    self.iopaint_test_btn.setEnabled(True)
+                lbl = getattr(self, 'iopaint_status_label', None)
+                if lbl is not None:
+                    color = theme.COLORS['success'] if ok else theme.COLORS['danger']
+                    lbl.setText(detail)
+                    lbl.setStyleSheet(f"color: {color}; font-size: 8.5pt; font-weight: 700;")
+            except RuntimeError:
+                pass
+
+        def _probe():
+            ok = False
+            detail = "Offline"
+            for suffix in ("/api/v1/model", "/"):
+                try:
+                    req = urllib.request.Request(f"{url}{suffix}", method="GET")
+                    with urllib.request.urlopen(req, timeout=3) as resp:
+                        if 200 <= getattr(resp, "status", 200) < 400:
+                            ok = True
+                            detail = f"Connected (HTTP {getattr(resp, 'status', 200)})"
+                            break
+                except Exception as exc:
+                    detail = f"Offline: {str(exc)[:42]}"
+            QTimer.singleShot(0, self, lambda o=ok, d=detail: _finish(o, d))
+
+        threading.Thread(target=_probe, daemon=True).start()
 
     def _theme_swatch_icon(self, colors: dict):
         pixmap = QPixmap(30, 22)
@@ -1128,13 +1270,15 @@ class SettingsCenterDialog(QDialog):
                 row_layout.addWidget(editor, 1)
 
                 clear_btn = QToolButton()
-                clear_btn.setText("✕")
+                clear_btn.setIcon(app_icon("x", size=12))
+                clear_btn.setIconSize(QSize(12, 12))
                 clear_btn.setToolTip("Clear shortcut")
                 clear_btn.clicked.connect(editor.clear_sequence)
                 row_layout.addWidget(clear_btn)
 
                 default_btn = QToolButton()
-                default_btn.setText("↺")
+                default_btn.setIcon(app_icon("refresh", size=12))
+                default_btn.setIconSize(QSize(12, 12))
                 default_btn.setToolTip("Restore default")
 
                 def _reset_editor(checked=False, target_editor=editor, target_key=key):
@@ -1156,15 +1300,16 @@ class SettingsCenterDialog(QDialog):
         self.api_panel = APIManagerPanel(SETTINGS, self)
         return self._make_panel_page("api", self.api_panel)
 
-    def _apply_settings_styles(self):
-        self.setStyleSheet(settings_center_stylesheet())
-        for table in self.findChildren(QTableWidget):
+    def _style_settings_subtree(self, root):
+        if root is None:
+            return
+        for table in root.findChildren(QTableWidget):
             try:
                 table.setStyleSheet(table_qss())
                 table.horizontalHeader().setStyleSheet(table_header_qss())
             except Exception:
                 pass
-        for combo in self.findChildren(QComboBox):
+        for combo in root.findChildren(QComboBox):
             try:
                 combo.view().setStyleSheet(combo_popup_qss())
             except Exception:
@@ -1173,9 +1318,23 @@ class SettingsCenterDialog(QDialog):
         if not isinstance(appearance_cfg, dict):
             appearance_cfg = {}
         cursor_shape = Qt.PointingHandCursor if appearance_cfg.get('use_pointer_cursors', True) else Qt.ArrowCursor
-        for widget in self.findChildren(QWidget):
+        for widget in root.findChildren(QWidget):
             if isinstance(widget, (QPushButton, QToolButton, QComboBox, QCheckBox, QSlider, QListWidget)):
                 widget.setCursor(cursor_shape)
+
+    def _apply_settings_styles(self, root_widget=None):
+        self.setStyleSheet(settings_center_stylesheet())
+        if root_widget is not None:
+            self._style_settings_subtree(root_widget)
+            return
+        for page in self._built_tabs.values() if hasattr(self, '_built_tabs') else (self,):
+            self._style_settings_subtree(page)
+        self._style_settings_subtree(self._nav_list)
+        if getattr(self, '_cancel_btn', None) is not None:
+            appearance_cfg = SETTINGS.get('appearance', {}) or {}
+            cursor_shape = Qt.PointingHandCursor if appearance_cfg.get('use_pointer_cursors', True) else Qt.ArrowCursor
+            for btn in (self._cancel_btn, self._apply_btn, self._save_btn):
+                btn.setCursor(cursor_shape)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1237,7 +1396,7 @@ class SettingsCenterDialog(QDialog):
             meta.get("subtitle", "")
         ))
 
-        card = QGroupBox("📖  Term Pairs (Source → Target)")
+        card = QGroupBox("Term Pairs (Source -> Target)")
         card.setObjectName("settings-card")
         card_vbox = QVBoxLayout(card)
         card_vbox.setSpacing(8)
@@ -1261,7 +1420,9 @@ class SettingsCenterDialog(QDialog):
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ Add Term")
         add_btn.clicked.connect(self._on_glossary_add)
-        remove_btn = QPushButton("− Remove Selected")
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.setIcon(app_icon("minus", COLORS['danger'], size=12))
+        remove_btn.setIconSize(QSize(12, 12))
         remove_btn.clicked.connect(self._on_glossary_remove)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(remove_btn)
@@ -1271,7 +1432,7 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
 
         # Info box
-        info_card = QGroupBox("ℹ  How it works")
+        info_card = QGroupBox("How it works")
         info_card.setObjectName("settings-card")
         info_vbox = QVBoxLayout(info_card)
         info_label = QLabel(
@@ -1279,9 +1440,9 @@ class SettingsCenterDialog(QDialog):
             "saat menerjemahkan. AI akan selalu menggunakan 'Target Term' untuk setiap "
             "kemunculan 'Source Term' dalam teks.\n\n"
             "Contoh:\n"
-            "  Source: 煉獄杏寿郎  →  Target: Rengoku Kyojuro\n"
-            "  Source: 無惨  →  Target: Muzan\n"
-            "  Source: 全集中  →  Target: Total Concentration"
+            "  Source: 煉獄杏寿郎  ->  Target: Rengoku Kyojuro\n"
+            "  Source: 無惨  ->  Target: Muzan\n"
+            "  Source: 全集中  ->  Target: Total Concentration"
         )
         info_label.setWordWrap(True)
         info_label.setObjectName("settings-option-desc")
@@ -1334,140 +1495,170 @@ class SettingsCenterDialog(QDialog):
         self._commit_settings(close_dialog=True)
 
     def _commit_settings(self, close_dialog=True):
-        # Save OCR plugins config
-        ocr_plugins_cfg = SETTINGS.setdefault('ocr_plugins', {})
-        for name, checkbox in self.plugin_checkboxes.items():
-            ocr_plugins_cfg[name] = bool(checkbox.isChecked())
+        built = getattr(self, '_built_tabs', {})
 
-        api_export = self.api_panel.export_settings()
-        if api_export is None:
-            warnings = "\n".join(self.api_panel.validation_messages())
-            details = f"\n\n{warnings}" if warnings else ""
-            notify_banner(self, "settings-api-validation", "API settings", f"Please fix the highlighted API settings issues before saving.{details}", kind="warning")
-            self.set_active_tab("api")
-            return False
+        api_export = None
+        if "api" in built and getattr(self, 'api_panel', None) is not None:
+            api_export = self.api_panel.export_settings()
+            if api_export is None:
+                warnings = "\n".join(self.api_panel.validation_messages())
+                details = f"\n\n{warnings}" if warnings else ""
+                notify_banner(self, "settings-api-validation", "API settings", f"Please fix the highlighted API settings issues before saving.{details}", kind="warning")
+                self.set_active_tab("api")
+                return False
 
-        translation_settings = self.openrouter_panel.export_settings()
-        appearance_cfg = self._collect_appearance_settings()
-        appearance_changed = appearance_cfg != self._initial_appearance
+        translation_settings = None
+        if "translation" in built and getattr(self, 'openrouter_panel', None) is not None:
+            translation_settings = self.openrouter_panel.export_settings()
 
-        autosave_enabled = bool(self.autosave_checkbox.isChecked())
-        autosave_interval_ms = int(self.autosave_interval_spin.value() * 1000)
-        self._apply_autosave_settings(autosave_enabled, autosave_interval_ms)
+        appearance_cfg = None
+        appearance_changed = False
+        if "appearance" in built:
+            appearance_cfg = self._collect_appearance_settings()
+            appearance_changed = appearance_cfg != self._initial_appearance
 
-        gen_cfg = SETTINGS.setdefault('general', {})
-        gen_cfg['save_format'] = self.save_format_combo.currentText()
-        gen_cfg['save_quality'] = self.save_quality_spin.value()
-        gen_cfg['default_ocr_lang'] = self.default_ocr_combo.currentText()
-        gen_cfg['default_ai_only_translate'] = bool(self.default_ai_only_checkbox.isChecked())
-        gen_cfg['default_ai_model'] = self.default_ai_model_combo.currentText()
-        gen_cfg['default_translation_style'] = self.default_style_combo.currentText()
-        gen_cfg['default_font_family'] = self.default_font_combo.currentText()
-        gen_cfg['default_font_size'] = self.default_font_size_spin.value()
-        gen_cfg['default_font_bold'] = bool(self.default_font_bold_checkbox.isChecked())
+        autosave_enabled = self._initial_autosave_enabled
+        autosave_interval_ms = self._initial_autosave_interval
+        if "general" in built:
+            autosave_enabled = bool(self.autosave_checkbox.isChecked())
+            autosave_interval_ms = int(self.autosave_interval_spin.value() * 1000)
+            self._apply_autosave_settings(autosave_enabled, autosave_interval_ms)
 
-        typeset_cfg = SETTINGS.setdefault('typeset', {})
-        typeset_cfg['outline_enabled'] = bool(self.default_outline_checkbox.isChecked())
-        typeset_cfg['outline_color'] = self.default_outline_color.name()
+            gen_cfg = SETTINGS.setdefault('general', {})
+            gen_cfg['save_format'] = self.save_format_combo.currentText()
+            gen_cfg['save_quality'] = self.save_quality_spin.value()
+            gen_cfg['default_ai_model'] = self.default_ai_model_combo.currentText()
+            gen_cfg['default_translation_style'] = self.default_style_combo.currentText()
+            gen_cfg['default_font_family'] = self.default_font_combo.currentText()
+            gen_cfg['default_font_size'] = self.default_font_size_spin.value()
+            gen_cfg['default_font_bold'] = bool(self.default_font_bold_checkbox.isChecked())
 
-        ec_cfg = SETTINGS.setdefault('emergency_close', {})
-        action_map_reverse = {"Open URL": "url", "Launch Application": "app", "Focus Existing Window": "focus"}
-        ec_cfg['action_type'] = action_map_reverse.get(self.ec_action_combo.currentText(), 'url')
-        ec_cfg['target'] = self.ec_target_edit.text().strip()
+            typeset_cfg = SETTINGS.setdefault('typeset', {})
+            typeset_cfg['outline_enabled'] = bool(self.default_outline_checkbox.isChecked())
+            typeset_cfg['outline_color'] = self.default_outline_color.name()
+
+            ec_cfg = SETTINGS.setdefault('emergency_close', {})
+            action_map_reverse = {"Open URL": "url", "Launch Application": "app", "Focus Existing Window": "focus"}
+            ec_cfg['action_type'] = action_map_reverse.get(self.ec_action_combo.currentText(), 'url')
+            ec_cfg['target'] = self.ec_target_edit.text().strip()
 
         cleanup_cfg = SETTINGS.setdefault('cleanup', {})
         prev_auto_color = bool(cleanup_cfg.get('auto_text_color', True))
         prev_threshold = int(cleanup_cfg.get('text_color_threshold', 128))
         prev_use_box = bool(cleanup_cfg.get('use_background_box', True))
         prev_constrain_text = bool(cleanup_cfg.get('constrain_text', True))
+        prev_inpaint_model = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        prev_inpaint_url = cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL)
 
-        cleanup_cfg['auto_text_color'] = bool(self.auto_text_color_checkbox.isChecked())
-        cleanup_cfg['text_color_threshold'] = int(self.threshold_spin.value())
-        use_box_value = bool(self.use_background_box_checkbox.isChecked())
-        if hasattr(self.main_window, '_set_global_cleanup_default'):
+        if "cleanup" in built:
+            if getattr(self, 'cleanup_use_inpaint_checkbox', None) is not None:
+                use_inpaint_val = bool(self.cleanup_use_inpaint_checkbox.isChecked())
+                if hasattr(self.main_window, '_set_global_cleanup_default'):
+                    try:
+                        self.main_window._set_global_cleanup_default('use_inpaint', use_inpaint_val, persist=False)
+                    except Exception:
+                        cleanup_cfg['use_inpaint'] = use_inpaint_val
+                cleanup_cfg['use_inpaint'] = use_inpaint_val
+            if getattr(self, 'cleanup_inpaint_model_combo', None) is not None:
+                cleanup_cfg['inpaint_model_name'] = self.cleanup_inpaint_model_combo.currentText()
+            if getattr(self, 'cleanup_inpaint_padding_spin', None) is not None:
+                cleanup_cfg['inpaint_padding'] = int(self.cleanup_inpaint_padding_spin.value())
+            if getattr(self, 'cleanup_iopaint_url_edit', None) is not None:
+                url_val = self.cleanup_iopaint_url_edit.text().strip() or DEFAULT_INPAINT_SERVER_URL
+                cleanup_cfg['inpaint_server_url'] = url_val
+            if getattr(self, 'cleanup_iopaint_timeout_spin', None) is not None:
+                cleanup_cfg['inpaint_server_timeout'] = int(self.cleanup_iopaint_timeout_spin.value())
+
+            cleanup_cfg['auto_text_color'] = bool(self.auto_text_color_checkbox.isChecked())
+            cleanup_cfg['text_color_threshold'] = int(self.threshold_spin.value())
+            use_box_value = bool(self.use_background_box_checkbox.isChecked())
+            if hasattr(self.main_window, '_set_global_cleanup_default'):
+                try:
+                    self.main_window._set_global_cleanup_default('use_background_box', use_box_value, persist=False)
+                except Exception:
+                    cleanup_cfg['use_background_box'] = use_box_value
+            cleanup_cfg['use_background_box'] = use_box_value
+            constrain_text_value = bool(self.constrain_text_checkbox.isChecked())
+            if hasattr(self.main_window, '_set_global_cleanup_default'):
+                try:
+                    self.main_window._set_global_cleanup_default('constrain_text', constrain_text_value, persist=False)
+                except Exception:
+                    cleanup_cfg['constrain_text'] = constrain_text_value
+            cleanup_cfg['constrain_text'] = constrain_text_value
             try:
-                self.main_window._set_global_cleanup_default('use_background_box', use_box_value, persist=False)
+                cleanup_cfg['remove_ai_temp_files'] = bool(self.remove_ai_temp_checkbox.isChecked())
             except Exception:
-                cleanup_cfg['use_background_box'] = use_box_value
-        cleanup_cfg['use_background_box'] = use_box_value
-        constrain_text_value = bool(self.constrain_text_checkbox.isChecked())
-        if hasattr(self.main_window, '_set_global_cleanup_default'):
-            try:
-                self.main_window._set_global_cleanup_default('constrain_text', constrain_text_value, persist=False)
-            except Exception:
-                cleanup_cfg['constrain_text'] = constrain_text_value
-        cleanup_cfg['constrain_text'] = constrain_text_value
-        # Persist new AI temp cleanup option
-        try:
-            cleanup_cfg['remove_ai_temp_files'] = bool(self.remove_ai_temp_checkbox.isChecked())
-        except Exception:
-            cleanup_cfg['remove_ai_temp_files'] = bool(cleanup_cfg.get('remove_ai_temp_files', False))
+                cleanup_cfg['remove_ai_temp_files'] = bool(cleanup_cfg.get('remove_ai_temp_files', False))
 
-        shortcut_settings = {}
-        for key, editor in self.shortcut_editors.items():
-            sequence = (editor.sequence() or '').strip()
-            default_seq = DEFAULT_SHORTCUTS.get(key, '')
-            if not sequence:
-                # Only persist blanks when overriding a default binding
-                if default_seq:
-                    shortcut_settings[key] = ''
-            elif sequence != default_seq:
-                shortcut_settings[key] = sequence
+        shortcut_settings = None
+        shortcuts_changed = False
+        if "shortcuts" in built and getattr(self, 'shortcut_editors', None) is not None:
+            shortcut_settings = {}
+            for key, editor in self.shortcut_editors.items():
+                sequence = (editor.sequence() or '').strip()
+                default_seq = DEFAULT_SHORTCUTS.get(key, '')
+                if not sequence:
+                    if default_seq:
+                        shortcut_settings[key] = ''
+                elif sequence != default_seq:
+                    shortcut_settings[key] = sequence
+            shortcuts_changed = shortcut_settings != self._initial_shortcuts
+            SETTINGS['shortcuts'] = shortcut_settings
 
-        shortcuts_changed = shortcut_settings != self._initial_shortcuts
+        if translation_settings is not None:
+            SETTINGS.setdefault('translate', {})
+            SETTINGS['translate'].update(copy.deepcopy(translation_settings))
+        if api_export is not None:
+            SETTINGS['apis'] = copy.deepcopy(api_export.get('apis', {}))
+            SETTINGS['ocr'] = copy.deepcopy(api_export.get('ocr', {}))
+            SETTINGS['tesseract'] = copy.deepcopy(api_export.get('tesseract', {}))
+        if appearance_cfg is not None:
+            SETTINGS['appearance'] = copy.deepcopy(appearance_cfg)
 
-        SETTINGS.setdefault('translate', {})
-        SETTINGS['translate'].update(copy.deepcopy(translation_settings))
-        SETTINGS['apis'] = copy.deepcopy(api_export.get('apis', {}))
-        SETTINGS['ocr'] = copy.deepcopy(api_export.get('ocr', {}))
-        SETTINGS['tesseract'] = copy.deepcopy(api_export.get('tesseract', {}))
-        SETTINGS['shortcuts'] = shortcut_settings
-        SETTINGS['appearance'] = copy.deepcopy(appearance_cfg)
-
-        # Simpan Glossary
-        if hasattr(self, '_glossary_table'):
+        if "glossary" in built and hasattr(self, '_glossary_table'):
             SETTINGS['glossary'] = self._get_glossary_from_table()
 
         save_settings(SETTINGS)
 
-        # Hot-apply custom default values to main window
+        # Hot-apply custom default values & cleanup badges to main window
         if hasattr(self.main_window, 'apply_defaults_from_settings'):
             try:
-                self.main_window.apply_defaults_from_settings(apply_runtime_controls=False)
+                self.main_window.apply_defaults_from_settings(apply_runtime_controls=("cleanup" in built or "general" in built))
             except Exception as e:
                 print(f"Error applying default presets: {e}")
 
-        try:
-            refresh_api_clients()
-        except Exception:
-            pass
+        if api_export is not None:
+            try:
+                refresh_api_clients()
+            except Exception:
+                pass
 
-        if hasattr(self.main_window, 'apply_appearance_from_settings'):
+        if appearance_changed and hasattr(self.main_window, 'apply_appearance_from_settings'):
             try:
                 self.main_window.apply_appearance_from_settings()
                 self._apply_settings_styles()
             except Exception as e:
                 print(f"Error applying appearance settings: {e}")
 
-        # Refresh OpenAI availability flag after API clients are recreated
-        try:
-            self.main_window.is_openai_available = (openai is not None and openai_client is not None)
-        except Exception:
-            pass
+        if api_export is not None:
+            try:
+                self.main_window.is_openai_available = (openai is not None and openai_client is not None)
+            except Exception:
+                pass
 
-        if hasattr(self.main_window, 'reload_shortcuts'):
+        if shortcuts_changed and hasattr(self.main_window, 'reload_shortcuts'):
             try:
                 self.main_window.reload_shortcuts()
             except Exception:
                 pass
 
-        if hasattr(self.main_window, 'populate_ocr_languages'):
+        if api_export is not None and hasattr(self.main_window, 'populate_ocr_languages'):
             try:
                 self.main_window.populate_ocr_languages()
             except Exception:
                 pass
 
-        if hasattr(self.main_window, 'populate_ai_models'):
+        if (api_export is not None or translation_settings is not None) and hasattr(self.main_window, 'populate_ai_models'):
             try:
                 self.main_window.populate_ai_models()
             except Exception:
@@ -1489,11 +1680,13 @@ class SettingsCenterDialog(QDialog):
             or (cleanup_cfg.get('text_color_threshold') != prev_threshold)
             or (cleanup_cfg.get('use_background_box') != prev_use_box)
             or (cleanup_cfg.get('constrain_text') != prev_constrain_text)
+            or (cleanup_cfg.get('inpaint_model_name') != prev_inpaint_model)
+            or (cleanup_cfg.get('inpaint_server_url') != prev_inpaint_url)
         ):
-            status_parts.append("Cleanup defaults updated")
-        if translation_settings != self._initial_translate:
+            status_parts.append("Cleanup & Inpaint settings updated")
+        if translation_settings is not None and translation_settings != self._initial_translate:
             status_parts.append("Translation settings updated")
-        if any(api_export.get(key, {}) != self._initial_api.get(key, {}) for key in ('apis', 'ocr', 'tesseract')):
+        if api_export is not None and any(api_export.get(key, {}) != self._initial_api.get(key, {}) for key in ('apis', 'ocr', 'tesseract')):
             status_parts.append("API settings updated")
         if (autosave_enabled != self._initial_autosave_enabled) or (abs(autosave_interval_ms - self._initial_autosave_interval) > 1):
             status_parts.append("Autosave preferences updated")
@@ -1511,285 +1704,24 @@ class SettingsCenterDialog(QDialog):
         self._initial_autosave_enabled = autosave_enabled
         self._initial_autosave_interval = autosave_interval_ms
         self._initial_cleanup = copy.deepcopy(cleanup_cfg)
-        self._initial_api = {
-            'apis': copy.deepcopy(SETTINGS.get('apis', {})),
-            'ocr': copy.deepcopy(SETTINGS.get('ocr', {})),
-            'tesseract': copy.deepcopy(SETTINGS.get('tesseract', {})),
-        }
-        self._initial_translate = self._translation_settings_snapshot()
-        self._initial_shortcuts = copy.deepcopy(shortcut_settings)
-        self._initial_appearance = copy.deepcopy(appearance_cfg)
+        if api_export is not None:
+            self._initial_api = {
+                'apis': copy.deepcopy(SETTINGS.get('apis', {})),
+                'ocr': copy.deepcopy(SETTINGS.get('ocr', {})),
+                'tesseract': copy.deepcopy(SETTINGS.get('tesseract', {})),
+            }
+        if translation_settings is not None:
+            self._initial_translate = self._translation_settings_snapshot()
+        if shortcut_settings is not None:
+            self._initial_shortcuts = copy.deepcopy(shortcut_settings)
+        if appearance_cfg is not None:
+            self._initial_appearance = copy.deepcopy(appearance_cfg)
 
         if close_dialog:
             self.accept()
         else:
             notify_toast(self, "Settings applied", "Changes saved without closing Settings.", kind="success")
         return True
-
-    def _create_ocr_plugins_tab(self):
-        meta = self._page_meta("ocr_plugins")
-        page, layout = self._make_page_scroll()
-        layout.addWidget(self._make_page_header(
-            meta.get("title", "OCR Plugins Manager"),
-            meta.get("subtitle", ""),
-        ))
-
-        # ── 1. Modular OCR Plugins ────────────────────────────────────────
-        card = QGroupBox("🔌  OCR Engines")
-        card.setObjectName("settings-card")
-        card_vbox = QVBoxLayout(card)
-        card_vbox.setSpacing(4)
-        card_vbox.setContentsMargins(0, 8, 0, 8)
-
-        plugins_cfg = SETTINGS.get('ocr_plugins', {})
-        self.plugin_checkboxes = {}
-        
-        # EasyOCR
-        self.easyocr_checkbox = QCheckBox()
-        self.easyocr_checkbox.setChecked(bool(plugins_cfg.get('EasyOCR', True)))
-        self.plugin_checkboxes['EasyOCR'] = self.easyocr_checkbox
-        card_vbox.addWidget(self._make_option_row(
-            "EasyOCR",
-            "Local deep learning OCR. Supports multiple languages offline.",
-            self.easyocr_checkbox))
-
-        # PaddleOCR
-        self.paddle_checkbox = QCheckBox()
-        self.paddle_checkbox.setChecked(bool(plugins_cfg.get('PaddleOCR', True)))
-        self.plugin_checkboxes['PaddleOCR'] = self.paddle_checkbox
-        card_vbox.addWidget(self._make_option_row(
-            "PaddleOCR",
-            "Ultra-accurate local Chinese/Japanese/English OCR.",
-            self.paddle_checkbox))
-
-        # DocTR
-        self.doctr_checkbox = QCheckBox()
-        self.doctr_checkbox.setChecked(bool(plugins_cfg.get('DocTR', False)))
-        self.plugin_checkboxes['DocTR'] = self.doctr_checkbox
-        card_vbox.addWidget(self._make_option_row(
-            "DocTR",
-            "Document Text Recognition engine. Heavy, recommended for advanced users.",
-            self.doctr_checkbox))
-
-        # RapidOCR
-        self.rapid_checkbox = QCheckBox()
-        self.rapid_checkbox.setChecked(bool(plugins_cfg.get('RapidOCR', False)))
-        self.plugin_checkboxes['RapidOCR'] = self.rapid_checkbox
-        card_vbox.addWidget(self._make_option_row(
-            "RapidOCR",
-            "Fast, lightweight local OCR engine.",
-            self.rapid_checkbox))
-
-        layout.addWidget(card)
-
-        # ── 2. Tesseract Auto-Installer ────────────────────────────────────
-        tess_card = QGroupBox("📦  Tesseract Auto-Installer")
-        tess_card.setObjectName("settings-card")
-        tess_vbox = QVBoxLayout(tess_card)
-        tess_vbox.setSpacing(10)
-        tess_vbox.setContentsMargins(16, 12, 16, 12)
-
-        # Status row
-        status_layout = QHBoxLayout()
-        status_layout.addWidget(QLabel("Current Status:"))
-        
-        from src.core.config import IS_TESSERACT_AVAILABLE, TESSERACT_PATH
-        self.tess_status_label = QLabel()
-        if IS_TESSERACT_AVAILABLE:
-            self.tess_status_label.setText("🟢 Installed & Ready")
-            self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
-        else:
-            self.tess_status_label.setText("🔴 Not Found")
-            self.tess_status_label.setStyleSheet("color: #f87171; font-weight: bold;")
-        status_layout.addWidget(self.tess_status_label)
-        status_layout.addStretch()
-        tess_vbox.addLayout(status_layout)
-
-        # Path display
-        self.tess_path_label = QLabel(f"Path: {TESSERACT_PATH if TESSERACT_PATH else 'None'}")
-        self.tess_path_label.setStyleSheet("color: #94a3b8; font-size: 9pt;")
-        self.tess_path_label.setWordWrap(True)
-        tess_vbox.addWidget(self.tess_path_label)
-
-        # Installer button
-        self.install_tess_btn = QPushButton("🚀 Auto-Install Tesseract")
-        self.install_tess_btn.setObjectName("settings-action-btn")
-        self.install_tess_btn.clicked.connect(self._run_tesseract_installer)
-        tess_vbox.addWidget(self.install_tess_btn)
-
-        layout.addWidget(tess_card)
-
-        # ── 3. Tesseract Language Models ──────────────────────────────────
-        lang_card = QGroupBox("🌐  Tesseract Language Models")
-        lang_card.setObjectName("settings-card")
-        lang_vbox = QVBoxLayout(lang_card)
-        lang_vbox.setSpacing(8)
-        lang_vbox.setContentsMargins(16, 12, 16, 12)
-
-        # Help tip
-        tip_lbl = QLabel("Manage language models for local Tesseract OCR offline processing.")
-        tip_lbl.setStyleSheet("color: #94a3b8; font-size: 9.5pt;")
-        lang_vbox.addWidget(tip_lbl)
-
-        # Table of models
-        self.lang_table = QTableWidget()
-        self.lang_table.setColumnCount(3)
-        self.lang_table.setHorizontalHeaderLabels(["Language", "Code", "Actions"])
-        self.lang_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.lang_table.setFixedHeight(220)
-        self.lang_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.lang_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        
-        self.lang_table.horizontalHeader().setStyleSheet(table_header_qss())
-        self.lang_table.setStyleSheet(table_qss())
-        
-        self._languages_list = [
-            ("Japanese (Horizontal)", "jpn"),
-            ("Japanese (Vertical)", "jpn_vert"),
-            ("English", "eng"),
-            ("Chinese Simplified", "chi_sim"),
-            ("Chinese Traditional", "chi_tra"),
-            ("Korean", "kor"),
-            ("Korean (Vertical)", "kor_vert"),
-            ("French", "fra"),
-            ("German", "deu"),
-            ("Spanish", "spa"),
-            ("Indonesian", "ind")
-        ]
-        
-        self._refresh_tesseract_languages_table()
-        lang_vbox.addWidget(self.lang_table)
-
-        layout.addWidget(lang_card)
-        layout.addStretch(1)
-        return page
-
-    def _refresh_tesseract_languages_table(self):
-        self.lang_table.setRowCount(0)
-        self.lang_table.setRowCount(len(self._languages_list))
-        
-        writable_path = get_writable_tessdata_path()
-        system_path = get_tessdata_path()
-        
-        for idx, (lang_name, lang_code) in enumerate(self._languages_list):
-            self.lang_table.setItem(idx, 0, QTableWidgetItem(lang_name))
-            self.lang_table.setItem(idx, 1, QTableWidgetItem(lang_code))
-            
-            # Check if file exists in system or writable path
-            file_exists = False
-            if writable_path:
-                file_exists = os.path.exists(os.path.join(writable_path, f"{lang_code}.traineddata"))
-            if not file_exists and system_path:
-                file_exists = os.path.exists(os.path.join(system_path, f"{lang_code}.traineddata"))
-            
-            if file_exists:
-                uninstall_btn = QPushButton("🗑 Uninstall")
-                uninstall_btn.setStyleSheet("background: #dc2626; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
-                uninstall_btn.clicked.connect(lambda checked=False, c=lang_code: self._uninstall_lang_model(c))
-                self.lang_table.setCellWidget(idx, 2, uninstall_btn)
-            else:
-                download_btn = QPushButton("📥 Download")
-                download_btn.setStyleSheet("background: #1f6fb5; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-weight: normal;")
-                download_btn.clicked.connect(lambda checked=False, c=lang_code: self._download_lang_model(c))
-                self.lang_table.setCellWidget(idx, 2, download_btn)
-
-    def _uninstall_lang_model(self, lang_code):
-        ret = QMessageBox.question(
-            self, "Uninstall Language Model",
-            f"Are you sure you want to delete the '{lang_code}' language model file to free up disk space?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if ret == QMessageBox.Yes:
-            success, msg = uninstall_tessdata_lang(lang_code)
-            if success:
-                notify_toast(self, "Success", msg, kind="success")
-                self._refresh_tesseract_languages_table()
-                if hasattr(self.main_window, 'populate_ocr_languages'):
-                    self.main_window.populate_ocr_languages()
-            else:
-                notify_banner(self, "tessdata-uninstall-failed", "Error", msg, kind="error")
-
-    def _download_lang_model(self, lang_code):
-        writable_path = get_writable_tessdata_path()
-        if not writable_path:
-            notify_banner(self, "tessdata-path-missing", "Error", "Could not locate a writable tessdata directory.", kind="error")
-            return
-            
-        progress_dlg = QProgressDialog("Downloading language model from GitHub...", "Cancel", 0, 100, self)
-        progress_dlg.setWindowModality(Qt.WindowModal)
-        progress_dlg.setWindowTitle("Downloading...")
-        progress_dlg.setAutoClose(True)
-        progress_dlg.show()
-        
-        worker = TessdataDownloadWorker(lang_code, writable_path)
-        
-        def on_progress(downloaded, total):
-            if total > 0:
-                pct = int(downloaded * 100 / total)
-                progress_dlg.setValue(pct)
-                progress_dlg.setLabelText(f"Downloading '{lang_code}': {pct}% ({downloaded // 1024} KB / {total // 1024} KB)")
-            
-        def on_finished(success, message):
-            progress_dlg.close()
-            if success:
-                notify_toast(self, "Download complete", f"Successfully downloaded '{lang_code}' language model.", kind="success")
-                self._refresh_tesseract_languages_table()
-                if hasattr(self.main_window, 'populate_ocr_languages'):
-                    self.main_window.populate_ocr_languages()
-            else:
-                notify_banner(self, "tessdata-download-failed", "Download failed", f"Failed to download language model: {message}", kind="error")
-                
-        worker.progress.connect(on_progress)
-        worker.finished.connect(on_finished)
-        progress_dlg.canceled.connect(worker.terminate)
-        
-        worker.start()
-        self._active_download_worker = worker
-
-    def _run_tesseract_installer(self):
-        self.install_tess_btn.setEnabled(False)
-        self.install_tess_btn.setText("Installing Tesseract...")
-        
-        progress_dlg = QProgressDialog("Running Tesseract Auto-Installer...", None, 0, 0, self)
-        progress_dlg.setWindowModality(Qt.WindowModal)
-        progress_dlg.setWindowTitle("Installing...")
-        progress_dlg.show()
-        
-        worker = TesseractInstallWorker()
-        
-        def on_progress(status):
-            progress_dlg.setLabelText(status)
-            
-        def on_finished(success, path_or_err):
-            progress_dlg.close()
-            self.install_tess_btn.setEnabled(True)
-            self.install_tess_btn.setText("🚀 Auto-Install Tesseract")
-            if success:
-                notify_toast(self, "Success", f"Tesseract successfully installed. Path: {path_or_err}", kind="success", timeout_ms=5000)
-                self.tess_status_label.setText("🟢 Installed & Ready")
-                self.tess_status_label.setStyleSheet("color: #4ade80; font-weight: bold;")
-                self.tess_path_label.setText(f"Path: {path_or_err}")
-                
-                from src.core.config import SETTINGS, save_settings, reload_tesseract_availability
-                SETTINGS.setdefault('tesseract', {})['path'] = path_or_err
-                SETTINGS.setdefault('tesseract', {})['auto_detected'] = True
-                save_settings(SETTINGS)
-                reload_tesseract_availability()
-                
-                sync_tessdata_files()
-                self._refresh_tesseract_languages_table()
-                
-                if hasattr(self.main_window, 'populate_ocr_languages'):
-                    self.main_window.populate_ocr_languages()
-            else:
-                notify_banner(self, "tesseract-install-failed", "Error", f"Failed to install Tesseract: {path_or_err}", kind="error")
-                
-        worker.progress.connect(on_progress)
-        worker.finished.connect(on_finished)
-        worker.start()
-        self._active_install_worker = worker
-
-        self.accept()
 
 class ReviewDialog(QDialog):
     def __init__(self, text, parent=None):
@@ -1941,7 +1873,9 @@ class AdvancedTextEditDialog(QDialog):
         self.ai_translate_btn.clicked.connect(self._on_ai_translate_clicked)
         toolbar_layout.addWidget(self.ai_translate_btn)
 
-        self.recent_translations_btn = QPushButton("📋 Recent")
+        self.recent_translations_btn = QPushButton("Recent")
+        self.recent_translations_btn.setIcon(app_icon("history", size=14))
+        self.recent_translations_btn.setIconSize(QSize(14, 14))
         self.recent_translations_btn.setToolTip("Apply a recently generated translation to this text area")
         self.recent_translations_btn.clicked.connect(self._show_recent_menu)
         toolbar_layout.addWidget(self.recent_translations_btn)
@@ -1997,7 +1931,7 @@ class AdvancedTextEditDialog(QDialog):
         self.text_edit.cursorPositionChanged.connect(self._remember_cursor_state)
         self.text_edit.cursorPositionChanged.connect(self._sync_toolbar_from_cursor)
 
-        layout_group = QGroupBox("Layout & Effects")
+        layout_group = QGroupBox("Layout && Effects")
         layout_grid = QGridLayout(layout_group)
 
         self.orientation_combo = QComboBox(); self.orientation_combo.addItems(["Horizontal", "Vertical"])
@@ -2030,7 +1964,7 @@ class AdvancedTextEditDialog(QDialog):
 
         content_layout.addWidget(layout_group)
 
-        outline_group = QGroupBox("Text Outline & Glow")
+        outline_group = QGroupBox("Text Outline && Glow")
         outline_layout = QGridLayout(outline_group)
         self.text_outline_checkbox = QCheckBox("Enable outline / glow")
         outline_layout.addWidget(self.text_outline_checkbox, 0, 0, 1, 4)
@@ -2753,8 +2687,8 @@ class AdvancedTextEditDialog(QDialog):
         try:
             fonts = self.font_manager.list_fonts() if self.font_manager else []
             if group and getattr(self.parent(), 'font_groups', None):
-                allowed = set(self.parent().font_groups.get(group, []))
-                fonts = [f for f in fonts if f in allowed]
+                from src.core.fonts import fonts_in_group
+                fonts = fonts_in_group(fonts, self.parent().font_groups.get(group, []), font_manager=self.font_manager)
             with QSignalBlocker(self.font_combo):
                 self.font_combo.clear()
                 for name in fonts:
@@ -3307,7 +3241,7 @@ class HistoryEditDialog(QDialog):
         # Let's assume we can init fields from the `entry` if keys exist, or defaults.
         
         # --- Appearance: Font & Color ---
-        g_font = QGroupBox("Font & Color")
+        g_font = QGroupBox("Font && Color")
         g_font_layout = QGridLayout(g_font)
         
         g_font_layout.addWidget(QLabel("Family:"), 0, 0)
@@ -3611,7 +3545,7 @@ class BatchSaveDialog(QDialog):
         return selected
 
 # ──────────────────────────────────────────────────────────────────
-# 📦 Tesseract & Manga-OCR Background System Integration Helpers & Workers
+# Tesseract & Manga-OCR Background System Integration Helpers & Workers
 # ──────────────────────────────────────────────────────────────────
 
 def get_tessdata_path():
@@ -4004,7 +3938,8 @@ class SessionAnalyticsDialog(QDialog):
         self.total_input_tokens  = total_input_tokens
         self.total_output_tokens = total_output_tokens
 
-        self.setWindowTitle("📈 Session Analytics & Export")
+        self.setWindowTitle("Session Analytics & Export")
+        self.setWindowIcon(app_icon("trending", COLORS['accent'], size=16))
         self.setModal(True)
         self.resize(700, 580)
         self._apply_style()
@@ -4086,19 +4021,23 @@ class SessionAnalyticsDialog(QDialog):
         hdr_layout = QHBoxLayout(header)
         hdr_layout.setContentsMargins(20, 14, 20, 14)
 
-        title_lbl = QLabel("📈  Session Analytics")
+        title_lbl = QLabel("Session Analytics")
         title_lbl.setStyleSheet("font-size: 14pt; font-weight: bold; color: #38bdf8;")
         hdr_layout.addWidget(title_lbl)
         hdr_layout.addStretch(1)
 
         # Tombol export & reset di header
-        export_btn = QPushButton("⬇  Export CSV")
+        export_btn = QPushButton("Export CSV")
+        export_btn.setIcon(app_icon("download", size=13))
+        export_btn.setIconSize(QSize(13, 13))
         export_btn.setObjectName("export_btn")
         export_btn.setFixedHeight(32)
         export_btn.clicked.connect(self._export_csv)
         hdr_layout.addWidget(export_btn)
 
-        reset_btn = QPushButton("🗑  Reset")
+        reset_btn = QPushButton("Reset")
+        reset_btn.setIcon(app_icon("trash", COLORS['danger'], size=13))
+        reset_btn.setIconSize(QSize(13, 13))
         reset_btn.setObjectName("reset_btn")
         reset_btn.setFixedHeight(32)
         reset_btn.clicked.connect(self._reset_usage)
@@ -4160,7 +4099,7 @@ class SessionAnalyticsDialog(QDialog):
         provider_usage = self.usage_data.get('provider_usage', {})
 
         # ── 1. Ringkasan biaya ──────────────────────────────────────────
-        self._section_label("💰 Cost Summary")
+        self._section_label("Cost Summary")
         cost_card = self._make_card()
         cc_layout = QGridLayout(cost_card)
         cc_layout.setContentsMargins(16, 12, 16, 12)
@@ -4185,7 +4124,7 @@ class SessionAnalyticsDialog(QDialog):
         self._vbox.addWidget(cost_card)
 
         # ── 2. Usage per provider & model ────────────────────────────────
-        self._section_label("📊 API Usage per Model")
+        self._section_label("API Usage per Model")
 
         # Kumpulkan total daily_count global untuk menentukan skala bar
         all_counts = []
@@ -4203,7 +4142,7 @@ class SessionAnalyticsDialog(QDialog):
 
             # Header provider
             prov_lbl = QLabel(
-                f"<b style='color:{color}; font-size:10pt;'>▶ {provider}</b>"
+                f"<b style='color:{color}; font-size:10pt;'>{provider}</b>"
             )
             prov_lbl.setTextFormat(Qt.RichText)
             self._vbox.addWidget(prov_lbl)
@@ -4259,7 +4198,7 @@ class SessionAnalyticsDialog(QDialog):
                 self._vbox.addWidget(row_widget)
 
         # ── 3. Rate Limit Status ─────────────────────────────────────────
-        self._section_label("⏱ Rate Limit Status (saat ini)")
+        self._section_label("Rate Limit Status (saat ini)")
 
         has_any = False
         for provider in sorted(provider_usage.keys()):
@@ -4282,19 +4221,21 @@ class SessionAnalyticsDialog(QDialog):
                 if len(display) > 45:
                     display = display[:42] + "…"
 
-                status_icon = "🟢"
+                dot_color = "#22c55e"
                 rpm_pct = int(min(rpm / rpm_limit * 100, 100)) if rpm_limit > 0 else 0
                 if rpm_pct >= 100:
-                    status_icon = "🔴"
+                    dot_color = "#ef4444"
                 elif rpm_pct >= 60:
-                    status_icon = "🟡"
+                    dot_color = "#f59e0b"
 
                 row_w = QWidget()
                 rl = QHBoxLayout(row_w)
                 rl.setContentsMargins(8, 2, 8, 2)
                 rl.setSpacing(10)
 
-                icon_lbl = QLabel(status_icon)
+                icon_lbl = QLabel()
+                icon_lbl.setPixmap(status_dot_pixmap(dot_color, size=10))
+                icon_lbl.setAlignment(Qt.AlignCenter)
                 icon_lbl.setFixedWidth(20)
                 rl.addWidget(icon_lbl)
 
@@ -4408,6 +4349,101 @@ class SessionAnalyticsDialog(QDialog):
 
         notify_toast(self, "Reset selesai", "Usage data berhasil direset.", kind="success")
         self.accept()
+
+
+class FullPageProgressDialog(QDialog):
+    """Modal progres Full-Page Translation untuk satu halaman aktif.
+
+    Selama proses berjalan, dialog bersifat modal terhadap window utama sehingga
+    navigasi halaman, kanvas, dan daftar file terkunci aman dari race condition.
+    """
+
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, parent, page_name):
+        super().__init__(parent)
+        self.setWindowTitle(FullPageBatchText.SINGLE_DIALOG_TITLE)
+        self.setWindowIcon(app_icon("rocket", COLORS['accent'], size=16))
+        self.setModal(True)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowSystemMenuHint)
+        self.setFixedWidth(480)
+        self._finished = False
+
+        self.setStyleSheet(
+            f"QDialog {{ background: {COLORS['panel']}; color: {COLORS['text']}; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(10)
+
+        hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(0, 0, 0, 0)
+        hdr_row.setSpacing(8)
+        hdr_row.addWidget(icon_label("rocket", COLORS['accent'], size=18))
+        title = QLabel(FullPageBatchText.SINGLE_DIALOG_TITLE)
+        title.setStyleSheet(f"color: {COLORS['text']}; font-size: 12pt; font-weight: 700; border: none; background: transparent;")
+        hdr_row.addWidget(title)
+        hdr_row.addStretch(1)
+        layout.addLayout(hdr_row)
+
+        self.page_label = QLabel(
+            FullPageBatchText.SINGLE_PAGE_FMT.format(name=page_name or "—")
+        )
+        self.page_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 10.5pt; font-weight: 600; border: none; background: transparent;")
+        self.page_label.setWordWrap(True)
+        layout.addWidget(self.page_label)
+
+        hint_lbl = QLabel(FullPageBatchText.SINGLE_LOCK_HINT)
+        hint_lbl.setWordWrap(True)
+        hint_lbl.setStyleSheet(f"color: {COLORS['muted']}; font-size: 8.5pt; border: none; background: transparent;")
+        layout.addWidget(hint_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(14)
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar {{ background: {COLORS['bg']}; border: 1px solid {COLORS['border']}; border-radius: 7px;"
+            f" text-align: center; color: {COLORS['text']}; font-size: 8.5pt; }}"
+            f"QProgressBar::chunk {{ background: {COLORS['accent']}; border-radius: 6px; }}"
+        )
+        layout.addWidget(self.progress_bar)
+
+        self.step_label = QLabel(FullPageBatchText.SINGLE_STEP_INIT)
+        self.step_label.setWordWrap(True)
+        self.step_label.setStyleSheet(f"color: {COLORS['muted']}; font-size: 9pt; font-style: italic; border: none; background: transparent;")
+        layout.addWidget(self.step_label)
+
+        self.cancel_btn = QPushButton(FullPageBatchText.DIALOG_CANCEL_BTN)
+        self.cancel_btn.setIcon(app_icon("x", COLORS['danger'], size=13))
+        self.cancel_btn.setIconSize(QSize(13, 13))
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_btn, 0, Qt.AlignRight)
+
+    def set_progress(self, pct, msg=""):
+        try:
+            self.progress_bar.setValue(max(0, min(100, int(pct))))
+        except (TypeError, ValueError):
+            pass
+        if msg is not None:
+            self.step_label.setText(str(msg))
+
+    def mark_finished(self):
+        self._finished = True
+        self.cancel_btn.setVisible(False)
+
+    def _on_cancel(self):
+        if self._finished:
+            return
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText(FullPageBatchText.DIALOG_CANCELLING)
+        self.cancel_requested.emit()
+
+    def reject(self):
+        # Esc / tombol tutup dialog = minta batal & tunggu worker berhenti aman
+        self._on_cancel()
 
 
 class FullPageBatchProgressDialog(QDialog):

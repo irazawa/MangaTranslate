@@ -1089,10 +1089,12 @@ class ProjectioMixin:
         h.setContentsMargins(12, 8, 8, 8)
         h.setSpacing(10)
 
-        icon_lbl = QLabel("🗂️" if exists else "⚠️")
+        icon_lbl = icon_label(
+            "layers" if exists else "alert",
+            theme.COLORS["accent"] if exists else theme.COLORS["warning"],
+            size=18,
+        )
         icon_lbl.setFixedWidth(28)
-        icon_lbl.setAlignment(Qt.AlignCenter)
-        icon_lbl.setStyleSheet("font-size: 18pt; background: transparent; border: none;")
 
         info_col = QVBoxLayout()
         info_col.setSpacing(2)
@@ -1125,7 +1127,9 @@ class ProjectioMixin:
         info_col.addWidget(name_lbl)
         info_col.addWidget(path_lbl)
 
-        remove_btn = QPushButton("✕")
+        remove_btn = QPushButton()
+        remove_btn.setIcon(app_icon("x", theme.COLORS["muted"], size=11))
+        remove_btn.setIconSize(QSize(11, 11))
         remove_btn.setFixedSize(20, 20)
         remove_btn.setCursor(Qt.PointingHandCursor)
         remove_btn.setToolTip("Remove from recent list")
@@ -1134,8 +1138,6 @@ class ProjectioMixin:
                 background: transparent;
                 color: {theme.COLORS["muted"]};
                 border: none;
-                font-size: 9pt;
-                font-weight: bold;
                 border-radius: 10px;
                 padding: 0;
             }}
@@ -1147,7 +1149,7 @@ class ProjectioMixin:
         h.addLayout(info_col, 1)
         h.addWidget(remove_btn)
 
-        # Klik card (bukan tombol ✕) → buka project
+        # Klik card (bukan tombol hapus) -> buka project
         # Gunakan mousePressEvent pada card
         def card_clicked(event, p=proj_path):
             from PyQt5.QtCore import Qt
