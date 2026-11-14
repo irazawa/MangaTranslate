@@ -10,6 +10,8 @@ from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
 class ProjectioMixin:
     def _build_project_snapshot(self, *, copy_metadata=False):
+        if hasattr(self, '_snapshot_current_image_state'):
+            self._snapshot_current_image_state()
         self.paint_mutex.lock()
         try:
             serialized_typeset = serialize_typeset_records(self.all_typeset_data or {})
@@ -347,6 +349,10 @@ class ProjectioMixin:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.all_typeset_data.clear()
         self.reset_history_state()
+        if hasattr(self, 'clear_view'):
+            self.clear_view()
+        self.unmodified_image_pil = None
+        self.unmodified_original_pixmap = None
         folder_name = os.path.basename(self.project_dir.rstrip(os.sep)) or 'project'
         self.current_project_path, note = self._make_project_file_path(folder_name)
         if note:
@@ -430,8 +436,8 @@ class ProjectioMixin:
             img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
             cleaned_image = self._decode_cleaned_image(img_data, orig_pil=self.current_image_pil, key=key)
             self._apply_base_image(cleaned_image or self.current_image_pil)
-            self.typeset_areas = img_data['areas']
-            self.redo_stack = img_data['redo']
+            self.typeset_areas = list(img_data.get('areas', []))
+            self.redo_stack = list(img_data.get('redo', []))
             self.set_selected_area(None, notify=True)
 
             self.rebuild_history_for_image(key, self.typeset_areas)
@@ -472,7 +478,7 @@ class ProjectioMixin:
 
         if self.current_pdf_page != -1 and self.current_pdf_page != page_number:
             key = self.get_current_data_key(page=self.current_pdf_page)
-            self._update_typeset_record(key, areas=self.typeset_areas, redo=self.redo_stack)
+            self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         self.current_pdf_page = page_number
         page = self.pdf_document.load_page(page_number)
@@ -483,8 +489,8 @@ class ProjectioMixin:
         img_data = self.all_typeset_data.get(key, {'areas': [], 'redo': []})
         cleaned_image = self._decode_cleaned_image(img_data, orig_pil=self.current_image_pil, key=key)
         self._apply_base_image(cleaned_image or self.current_image_pil)
-        self.typeset_areas = img_data['areas']
-        self.redo_stack = img_data['redo']
+        self.typeset_areas = list(img_data.get('areas', []))
+        self.redo_stack = list(img_data.get('redo', []))
         self.set_selected_area(None, notify=True)
 
         self.rebuild_history_for_image(key, self.typeset_areas)
@@ -525,6 +531,11 @@ class ProjectioMixin:
         if not self.typeset_pixmap:
             self.show_banner("save-image-no-image", "No image", "There is no image to save.", kind="warning")
             return
+
+        if getattr(self, 'current_image_path', None):
+            key = self.get_current_data_key()
+            if key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         # Get settings
         gen_cfg = SETTINGS.get('general', {})
@@ -656,6 +667,10 @@ class ProjectioMixin:
         os.makedirs(self.cache_dir, exist_ok=True)
 
         self.reset_history_state()
+        if hasattr(self, 'clear_view'):
+            self.clear_view()
+        self.unmodified_image_pil = None
+        self.unmodified_original_pixmap = None
 
         try:
             if self.project_dir not in self.file_watcher.directories():
@@ -846,22 +861,27 @@ class ProjectioMixin:
         self.current_pdf_page = int(saved_pdf_page) if isinstance(saved_pdf_page, int) else -1
         self.current_project_path = os.path.abspath(project_path)
 
-        self.update_file_list()
-        if saved_image_path and saved_image_path in self.image_files:
-            row = self.image_files.index(saved_image_path)
-            self.file_list_widget.setCurrentRow(row)
-        elif saved_image_path and self.image_files:
-            # Try matching by filename basename as last resort (e.g. folder moved but files intact)
-            target_basename = os.path.basename(saved_image_path)
-            matched = [f for f in self.image_files if os.path.basename(f) == target_basename]
-            if matched:
-                row = self.image_files.index(matched[0])
-                self.file_list_widget.setCurrentRow(row)
-            else:
-                self.file_list_widget.setCurrentRow(0)
-                warnings.append(f"Image '{target_basename}' not found in folder; opened first file instead.")
-        elif self.image_files:
-            self.file_list_widget.setCurrentRow(0)
+        target_image_path = None
+        if saved_image_path and self.project_dir:
+            try:
+                dir_paths = self._list_project_image_files(self.project_dir)
+            except OSError:
+                dir_paths = []
+            saved_norm = os.path.normcase(os.path.abspath(saved_image_path))
+            exact_matches = [
+                p for p in dir_paths if os.path.normcase(os.path.abspath(p)) == saved_norm
+            ]
+            if exact_matches:
+                target_image_path = exact_matches[0]
+            elif dir_paths:
+                target_basename = os.path.basename(saved_image_path)
+                matched = [f for f in dir_paths if os.path.basename(f) == target_basename]
+                if matched:
+                    target_image_path = matched[0]
+                else:
+                    warnings.append(f"Image '{target_basename}' not found in folder; opened first file instead.")
+
+        self.update_file_list(preferred_path=target_image_path)
 
         self.refresh_history_views()
         # Sembunyikan welcome screen, tampilkan canvas

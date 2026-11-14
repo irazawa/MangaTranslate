@@ -351,6 +351,10 @@ class HistoryMixin:
                 self.redo_stack.append(undone_area)
                 if self.selected_typeset_area is undone_area:
                     self.clear_selected_area()
+                if getattr(self, 'current_image_path', None):
+                    key = self.get_current_data_key()
+                    if key:
+                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
                 self.redraw_all_typeset_areas()
                 self.update_undo_redo_buttons_state()
                 if hasattr(self, 'image_label'):
@@ -365,6 +369,10 @@ class HistoryMixin:
             if self.redo_stack:
                 redone_area = self.redo_stack.pop()
                 self.typeset_areas.append(redone_area)
+                if getattr(self, 'current_image_path', None):
+                    key = self.get_current_data_key()
+                    if key:
+                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
                 self.set_selected_area(redone_area)
                 self.redraw_all_typeset_areas()
                 self.update_undo_redo_buttons_state()

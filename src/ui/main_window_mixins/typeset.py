@@ -698,11 +698,11 @@ class TypesetMixin:
         if not isinstance(record, dict):
             record = {}
         if areas is not None:
-            record['areas'] = areas
+            record['areas'] = list(areas)
         else:
             record.setdefault('areas', [])
         if redo is not None:
-            record['redo'] = redo
+            record['redo'] = list(redo)
         else:
             record.setdefault('redo', [])
         if remove_cleaned_image:

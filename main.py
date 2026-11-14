@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.3
+# Manga OCR & Typeset Tool v14.9.9.4
 import os
 import sys
 import traceback

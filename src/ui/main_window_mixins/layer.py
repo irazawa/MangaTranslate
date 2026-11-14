@@ -241,6 +241,10 @@ class LayerMixin:
             if idx > 0:
                 self.typeset_areas.remove(area)
                 self.typeset_areas.insert(idx - 1, area)
+                if getattr(self, 'current_image_path', None):
+                    key = self.get_current_data_key()
+                    if key:
+                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
                 self.redraw_all_typeset_areas()
                 self._refresh_layers_list()
 
@@ -250,6 +254,10 @@ class LayerMixin:
             if idx < len(self.typeset_areas) - 1:
                 self.typeset_areas.remove(area)
                 self.typeset_areas.insert(idx + 1, area)
+                if getattr(self, 'current_image_path', None):
+                    key = self.get_current_data_key()
+                    if key:
+                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
                 self.redraw_all_typeset_areas()
                 self._refresh_layers_list()
 
@@ -268,6 +276,10 @@ class LayerMixin:
         new_area = TypesetArea(rect, "SFX Text", font, color)
         self._push_undo_snapshot("New Layer")
         self.typeset_areas.append(new_area)
+        if getattr(self, 'current_image_path', None):
+            key = self.get_current_data_key()
+            if key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
         self.set_selected_area(new_area)
         self.redraw_all_typeset_areas()
         self._refresh_layers_list()

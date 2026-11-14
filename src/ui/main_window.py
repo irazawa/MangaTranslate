@@ -2891,6 +2891,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
             for image_path, entries in updates_by_image.items():
                 image_record = self.all_typeset_data.setdefault(image_path, {'areas': [], 'redo': []})
+                if image_path == current_key and self.current_image_path:
+                    image_record['areas'] = list(self.typeset_areas)
                 new_areas = [area for area, _original, _translated in entries]
                 image_record['areas'].extend(new_areas)
                 image_record['redo'].clear()
@@ -2899,8 +2901,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                     self.register_history_entry(image_path, area, original_text, translated_text)
 
             if relevant_updates:
-                self.typeset_areas = self.all_typeset_data.get(current_key, {'areas': []})['areas']
-                self.redo_stack = self.all_typeset_data.get(current_key, {'redo': []})['redo']
+                current_rec = self.all_typeset_data.get(current_key, {'areas': [], 'redo': []})
+                self.typeset_areas = list(current_rec.get('areas', []))
+                self.redo_stack = list(current_rec.get('redo', []))
                 self.redraw_all_typeset_areas()
                 newest_area = relevant_updates[-1][1]
                 # Use notify=False so the typeset panel is NOT auto-synced to the new
@@ -3669,35 +3672,76 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self.statusBar().showMessage(f"Folder changed, updating list...", 2000)
         self.update_file_list()
 
-    def update_file_list(self):
-        if not self.project_dir: return
-
+    def _list_project_image_files(self, directory=None):
+        target_dir = directory or getattr(self, 'project_dir', None)
+        if not target_dir:
+            return []
         supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.pdf')
         def natural_sort_key(s):
             return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+        dir_files = sorted(
+            [f for f in os.listdir(target_dir) if f.lower().endswith(supported_formats)],
+            key=natural_sort_key,
+        )
+        return [os.path.join(target_dir, fname) for fname in dir_files]
+
+    def update_file_list(self, preferred_path=None):
+        if not self.project_dir:
+            return
+
+        if preferred_path is None and getattr(self, 'current_image_path', None):
+            active_key = self.get_current_data_key()
+            if active_key:
+                self._update_typeset_record(
+                    active_key,
+                    areas=list(self.typeset_areas),
+                    redo=list(self.redo_stack),
+                )
 
         try:
-            dir_files = sorted([f for f in os.listdir(self.project_dir) if f.lower().endswith(supported_formats)], key=natural_sort_key)
-            new_file_paths = [os.path.join(self.project_dir, fname) for fname in dir_files]
+            new_file_paths = self._list_project_image_files(self.project_dir)
         except FileNotFoundError:
             self.statusBar().showMessage(f"Folder not found: {self.project_dir}", 5000)
             return
 
-        current_selection_path = self.current_image_path
-
+        selection_target = preferred_path if preferred_path is not None else self.current_image_path
         self.image_files = new_file_paths
-        self.file_list_widget.clear()
-        self.file_list_widget.addItems([os.path.basename(p) for p in self.image_files])
 
-        if current_selection_path and current_selection_path in self.image_files:
-            try:
-                row_to_select = self.image_files.index(current_selection_path)
-                self.file_list_widget.setCurrentRow(row_to_select)
-            except ValueError:
-                if self.image_files:
-                    self.file_list_widget.setCurrentRow(0)
+        matched_index = None
+        if selection_target:
+            if selection_target in self.image_files:
+                matched_index = self.image_files.index(selection_target)
+            else:
+                target_norm = os.path.normcase(os.path.abspath(selection_target))
+                for idx, candidate in enumerate(self.image_files):
+                    if os.path.normcase(os.path.abspath(candidate)) == target_norm:
+                        matched_index = idx
+                        break
+
+        with QSignalBlocker(self.file_list_widget):
+            self.file_list_widget.clear()
+            self.file_list_widget.addItems([os.path.basename(p) for p in self.image_files])
+            if matched_index is not None:
+                self.file_list_widget.setCurrentRow(matched_index)
+            elif self.image_files:
+                self.file_list_widget.setCurrentRow(0)
+
+        if matched_index is not None:
+            matched_path = self.image_files[matched_index]
+            already_active = (
+                preferred_path is None
+                and self.original_pixmap is not None
+                and self.current_image_path is not None
+                and os.path.normcase(os.path.abspath(self.current_image_path)) == os.path.normcase(os.path.abspath(matched_path))
+            )
+            if already_active:
+                self.update_nav_buttons()
+            else:
+                self.load_item(matched_path)
         elif self.image_files:
-            self.file_list_widget.setCurrentRow(0)
+            self.load_item(self.image_files[0])
+        else:
+            self.clear_view()
 
     def on_file_selected(self, current_item, previous_item):
         if not current_item:
@@ -3706,7 +3750,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         if previous_item and self.current_image_path:
             key = self.get_current_data_key(path=self.current_image_path, page=self.current_pdf_page if self.pdf_document else -1)
-            self._update_typeset_record(key, areas=self.typeset_areas, redo=self.redo_stack)
+            self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         row = self.file_list_widget.row(current_item)
         if 0 <= row < len(self.image_files):
@@ -3842,8 +3886,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             self.typeset_pixmap = None
             self.current_image_path = None
             self.current_image_pil = None
-            self.typeset_areas.clear()
-            self.redo_stack.clear()
+            self.typeset_areas = []
+            self.redo_stack = []
         finally:
             self.paint_mutex.unlock()
         self.clear_selected_area()
@@ -3894,7 +3938,12 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
     def reset_view_to_original(self):
         if self.original_pixmap:
-            self.typeset_areas.clear(); self.redo_stack.clear()
+            self.typeset_areas = []
+            self.redo_stack = []
+            if self.current_image_path:
+                key = self.get_current_data_key()
+                if key:
+                    self._update_typeset_record(key, areas=[], redo=[])
             self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
 
@@ -4482,11 +4531,13 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self._push_undo_snapshot(f"Add Manual: {snippet}" if snippet else "Add Manual Area")
         self.typeset_areas.append(manual_area)
         self.set_selected_area(manual_area, notify=True)
-        self.redo_stack.clear()
+        self.redo_stack = []
         if current_key:
-            image_record = self.all_typeset_data.setdefault(current_key, {'areas': self.typeset_areas, 'redo': []})
-            image_record['areas'] = self.typeset_areas
-            image_record['redo'].clear()
+            self._update_typeset_record(
+                current_key,
+                areas=list(self.typeset_areas),
+                redo=[],
+            )
 
         record = self.register_history_entry(current_key, manual_area, "Manual Input", manual_text)
         if record is not None:
@@ -6731,7 +6782,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 self._apply_find_replace_update(key, area_index, new_text)
 
             if current_key in affected_keys:
-                self.typeset_areas = self.all_typeset_data[current_key]['areas']
+                self.typeset_areas = list(self.all_typeset_data[current_key]['areas'])
                 self.redraw_all_typeset_areas()
                 if hasattr(self, '_refresh_layers_list'):
                     self._refresh_layers_list()
@@ -7904,7 +7955,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         
         current_key = self.get_current_data_key()
         if current_key:
-            self.all_typeset_data.setdefault(current_key, {})['areas'] = self.typeset_areas
+            self._update_typeset_record(
+                current_key,
+                areas=list(self.typeset_areas),
+                redo=list(self.redo_stack),
+            )
 
         self.redraw_all_typeset_areas(refresh_layers=True)
         self.statusBar().showMessage("Urutan balon teks berhasil disortir berdasarkan RTL.", 3000)

@@ -239,6 +239,11 @@ class BatchMixin:
             self.show_banner("batch-save-no-folder", "No folder loaded", "Please load a folder to use the batch save feature.", kind="warning")
             return
 
+        if getattr(self, 'current_image_path', None):
+            key = self.get_current_data_key()
+            if key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+
         dialog = BatchSaveDialog(self.image_files, self)
         if dialog.exec_() == QDialog.Accepted:
             files_to_save = dialog.get_selected_files()
@@ -249,6 +254,11 @@ class BatchMixin:
         if self.batch_save_thread and self.batch_save_thread.isRunning():
             self.show_toast("Batch save in progress", "A batch save process is already running.", kind="info")
             return
+
+        if getattr(self, 'current_image_path', None):
+            key = self.get_current_data_key()
+            if key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
 
         # Get settings
         gen_cfg = SETTINGS.get('general', {})
