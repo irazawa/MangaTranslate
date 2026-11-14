@@ -58,6 +58,18 @@ AGENTS.md
 .agents/
 .agents/skills/*/references/code.md
 
+# Local AI & dev files
+CLAUDE.md
+claude-fable-5.md
+.zcode/
+.codex/
+graphify-out/
+docs/superpowers/
+tools/
+tests/
+requirements-dev.txt
+.pytest_cache/
+
 # Large model checkpoints
 src/models/
 
