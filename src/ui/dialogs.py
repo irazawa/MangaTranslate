@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.2
+# Manga OCR & Typeset Tool v14.9.9.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -41,8 +41,19 @@ from src.core.config import *
 from src.ui.widgets import *
 from src.ui.panels import *
 from src.ui.notifications import notify_banner, notify_toast
-from src.ui.icons import app_icon, icon_label, status_dot_pixmap
-from src.ui.texts import AppearanceText, SettingsText, FullPageBatchText
+from src.ui.icons import app_icon, icon_label, status_dot_icon, status_dot_pixmap
+from src.ui.texts import AppearanceText, SettingsText, FullPageBatchText, InpaintText
+from src.core.workers import InpaintModelDownloadWorker
+from src.core.inpaint import (
+    engine_display_label,
+    format_inpaint_engine_option,
+    get_inpaint_manager,
+    get_inpaint_spec,
+    is_engine_ready,
+    list_inpaint_engines,
+    normalize_inpaint_engine_id,
+    resolve_inpaint_engine_id,
+)
 from src.ui.theme import (
     APPEARANCE_DEFAULTS,
     DARK_THEME_CHOICES,
@@ -418,6 +429,8 @@ class SettingsCenterDialog(QDialog):
             key = self._page_keys[index]
             page = self._ensure_tab(key)
             if page is not None:
+                if key == "cleanup":
+                    self.sync_cleanup_controls_from_settings()
                 self._pages.setCurrentWidget(page)
                 return
         if 0 <= index < self._pages.count():
@@ -500,11 +513,13 @@ class SettingsCenterDialog(QDialog):
         lbl = QLabel(label)
         lbl.setObjectName("settings-option-label")
         lbl.setWordWrap(True)
+        lbl.setMinimumWidth(0)
         text_col.addWidget(lbl)
         if desc:
             dlbl = QLabel(desc)
             dlbl.setObjectName("settings-option-desc")
             dlbl.setWordWrap(True)
+            dlbl.setMinimumWidth(0)
             text_col.addWidget(dlbl)
         hl.addLayout(text_col, 1)
         hl.addWidget(widget)
@@ -770,40 +785,67 @@ class SettingsCenterDialog(QDialog):
         ))
 
         cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        unified_eid = resolve_inpaint_engine_id(cleanup_cfg)
 
-        # ── Card 1: Inpainting & IOPaint Server ─────────────────────────────
-        inpaint_card = QGroupBox("Inpainting && IOPaint Server")
+        # ── Card 1: Integrated Inpainting Engine ──────────────────────────────
+        inpaint_card = QGroupBox(InpaintText.CARD_ENGINES_TITLE)
         inpaint_card.setObjectName("settings-card")
         inpaint_vbox = QVBoxLayout(inpaint_card)
-        inpaint_vbox.setSpacing(4)
+        inpaint_vbox.setSpacing(6)
         inpaint_vbox.setContentsMargins(0, 8, 0, 8)
 
         self.cleanup_use_inpaint_checkbox = QCheckBox()
         self.cleanup_use_inpaint_checkbox.setChecked(bool(cleanup_cfg.get('use_inpaint', True)))
         inpaint_vbox.addWidget(self._make_option_row(
             "Enable inpainting by default",
-            "Remove original text beneath translated boxes using the configured backend.",
+            "Hapus teks asli secara otomatis di balik balon atau kotak terjemahan.",
             self.cleanup_use_inpaint_checkbox))
 
-        inpaint_models = ["IOPaint Server", "OpenCV-NS", "OpenCV-Telea"]
-        if getattr(self.main_window, 'is_lama_available', False):
-            dl_models = getattr(self.main_window, 'dl_models', {}) or {}
-            if os.path.exists(dl_models.get('big_lama', {}).get('path', '')):
-                inpaint_models.append("Big-LaMa")
-            if os.path.exists(dl_models.get('anime_inpaint', {}).get('path', '')):
-                inpaint_models.append("Anime-Inpainting")
+        def _prep_combo(cb, width=210):
+            cb.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(12)
+            cb.setFixedWidth(width)
 
-        self.cleanup_inpaint_model_combo = QComboBox()
-        self.cleanup_inpaint_model_combo.setFixedWidth(200)
-        self.cleanup_inpaint_model_combo.addItems(inpaint_models)
-        saved_model = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
-        if saved_model not in inpaint_models and saved_model:
-            self.cleanup_inpaint_model_combo.addItem(saved_model)
-        self.cleanup_inpaint_model_combo.setCurrentText(saved_model or "IOPaint Server")
+        self.cleanup_inpaint_engine_combo = QComboBox()
+        _prep_combo(self.cleanup_inpaint_engine_combo, 210)
+        for spec in list_inpaint_engines("full"):
+            self.cleanup_inpaint_engine_combo.addItem(spec.short_label, spec.id)
+        e_idx = self.cleanup_inpaint_engine_combo.findData(unified_eid)
+        if e_idx != -1:
+            self.cleanup_inpaint_engine_combo.setCurrentIndex(e_idx)
         inpaint_vbox.addWidget(self._make_option_row(
-            "Inpainting engine",
-            "IOPaint Server delivers the cleanest local LaMa/AI text removal.",
-            self.cleanup_inpaint_model_combo))
+            InpaintText.LABEL_UNIFIED_ENGINE,
+            "Dipakai bersama untuk Full-Page Auto Translate dan Inpainting Brush (default: Big-LaMa bawaan).",
+            self.cleanup_inpaint_engine_combo))
+
+        self.cleanup_inpaint_device_combo = QComboBox()
+        _prep_combo(self.cleanup_inpaint_device_combo, 210)
+        self.cleanup_inpaint_device_combo.addItem("Otomatis (CUDA jika ada)", "auto")
+        self.cleanup_inpaint_device_combo.addItem("GPU NVIDIA CUDA", "cuda")
+        self.cleanup_inpaint_device_combo.addItem("CPU Saja", "cpu")
+        saved_dev = str(cleanup_cfg.get('inpaint_device', 'auto') or 'auto').lower()
+        dev_idx = self.cleanup_inpaint_device_combo.findData(saved_dev)
+        self.cleanup_inpaint_device_combo.setCurrentIndex(dev_idx if dev_idx != -1 else 0)
+        inpaint_vbox.addWidget(self._make_option_row(
+            InpaintText.LABEL_DEVICE,
+            "Big-LaMa, Manga Inpaintor, dan MI-GAN berjalan cepat di CPU maupun GPU CUDA.",
+            self.cleanup_inpaint_device_combo))
+
+        hw_text = InpaintText.HARDWARE_CPU_ONLY
+        hw_color = theme.COLORS['muted']
+        try:
+            import torch
+            if torch.cuda.is_available():
+                hw_text = InpaintText.HARDWARE_CUDA_FMT.format(name=torch.cuda.get_device_name(0))
+                hw_color = theme.COLORS['success']
+        except Exception:
+            pass
+        self.cleanup_hw_info_label = QLabel(hw_text)
+        self.cleanup_hw_info_label.setWordWrap(True)
+        self.cleanup_hw_info_label.setStyleSheet(
+            f"color: {hw_color}; font-size: 8.5pt; padding: 4px 12px 6px 12px;"
+        )
+        inpaint_vbox.addWidget(self.cleanup_hw_info_label)
 
         self.cleanup_inpaint_padding_spin = QSpinBox()
         self.cleanup_inpaint_padding_spin.setRange(1, 25)
@@ -812,16 +854,92 @@ class SettingsCenterDialog(QDialog):
         self.cleanup_inpaint_padding_spin.setValue(int(cleanup_cfg.get('inpaint_padding', 5) or 5))
         inpaint_vbox.addWidget(self._make_option_row(
             "Mask padding",
-            "Extra pixels padded around detected text mask before inpainting.",
+            "Ekstra piksel di sekeliling mask teks sebelum inpainting.",
             self.cleanup_inpaint_padding_spin))
+
+        unload_btn = QPushButton(InpaintText.BTN_UNLOAD)
+        unload_btn.setObjectName("settings-action-btn")
+        unload_btn.clicked.connect(self._on_unload_inpaint_memory)
+        inpaint_vbox.addWidget(self._make_option_row(
+            "Manajemen RAM / VRAM",
+            "Kosongkan model AI yang tersimpan di cache memori saat ini.",
+            unload_btn))
+
+        layout.addWidget(inpaint_card)
+
+        # ── Card 2: Model Status & One-Click Downloads ────────────────────────
+        models_card = QGroupBox(InpaintText.CARD_MODELS_TITLE)
+        models_card.setObjectName("settings-card")
+        models_vbox = QVBoxLayout(models_card)
+        models_vbox.setSpacing(6)
+        models_vbox.setContentsMargins(0, 8, 0, 8)
+
+        models_desc = QLabel(InpaintText.CARD_MODELS_DESC)
+        models_desc.setWordWrap(True)
+        models_desc.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; padding: 2px 12px 4px 12px;")
+        models_vbox.addWidget(models_desc)
+
+        self._inpaint_model_status_labels = {}
+        self._inpaint_model_dl_buttons = {}
+        self._inpaint_dl_worker = None
+
+        for eid in ("big_lama", "manga_inpaintor", "migan"):
+            spec = get_inpaint_spec(eid)
+            ctrl_w = QWidget()
+            ctrl_h = QHBoxLayout(ctrl_w)
+            ctrl_h.setContentsMargins(0, 0, 0, 0)
+            ctrl_h.setSpacing(8)
+            status_lbl = QLabel("")
+            status_lbl.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt;")
+            dl_btn = QPushButton(InpaintText.BTN_DOWNLOAD)
+            dl_btn.setObjectName("settings-action-btn")
+            dl_btn.setIcon(app_icon("download", theme.COLORS["accent"], 13))
+            dl_btn.setIconSize(QSize(13, 13))
+            dl_btn.clicked.connect(lambda _checked=False, target_id=eid: self._on_download_inpaint_model(target_id))
+            ctrl_h.addWidget(status_lbl)
+            ctrl_h.addWidget(dl_btn)
+            self._inpaint_model_status_labels[eid] = status_lbl
+            self._inpaint_model_dl_buttons[eid] = dl_btn
+            models_vbox.addWidget(self._make_option_row(
+                f"{spec.short_label} ({spec.size_hint})",
+                spec.description,
+                ctrl_w))
+
+        self.inpaint_dl_progress = QProgressBar()
+        self.inpaint_dl_progress.setRange(0, 100)
+        self.inpaint_dl_progress.setVisible(False)
+        self.inpaint_dl_progress.setFixedHeight(8)
+        self.inpaint_dl_status_label = QLabel("")
+        self.inpaint_dl_status_label.setWordWrap(True)
+        self.inpaint_dl_status_label.setVisible(False)
+        self.inpaint_dl_status_label.setStyleSheet(
+            f"color: {theme.COLORS['accent_hover']}; font-size: 8.5pt; padding: 2px 12px 4px 12px;"
+        )
+        models_vbox.addWidget(self.inpaint_dl_progress)
+        models_vbox.addWidget(self.inpaint_dl_status_label)
+        self._refresh_inpaint_model_statuses()
+
+        layout.addWidget(models_card)
+
+        # ── Card 3: External IOPaint Server (Optional) ────────────────────────
+        ext_card = QGroupBox(InpaintText.CARD_EXTERNAL_TITLE)
+        ext_card.setObjectName("settings-card")
+        ext_vbox = QVBoxLayout(ext_card)
+        ext_vbox.setSpacing(4)
+        ext_vbox.setContentsMargins(0, 8, 0, 8)
+
+        ext_desc = QLabel(InpaintText.CARD_EXTERNAL_DESC)
+        ext_desc.setWordWrap(True)
+        ext_desc.setStyleSheet(f"color: {theme.COLORS['muted']}; font-size: 8.5pt; padding: 2px 12px 4px 12px;")
+        ext_vbox.addWidget(ext_desc)
 
         self.cleanup_iopaint_url_edit = QLineEdit()
         self.cleanup_iopaint_url_edit.setFixedWidth(240)
         self.cleanup_iopaint_url_edit.setPlaceholderText(DEFAULT_INPAINT_SERVER_URL)
         self.cleanup_iopaint_url_edit.setText(str(cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL) or DEFAULT_INPAINT_SERVER_URL))
-        inpaint_vbox.addWidget(self._make_option_row(
+        ext_vbox.addWidget(self._make_option_row(
             "IOPaint server URL",
-            "Base URL of your running IOPaint server (default http://127.0.0.1:8080).",
+            "URL server IOPaint eksternal (default http://127.0.0.1:8080).",
             self.cleanup_iopaint_url_edit))
 
         self.cleanup_iopaint_timeout_spin = QSpinBox()
@@ -829,9 +947,9 @@ class SettingsCenterDialog(QDialog):
         self.cleanup_iopaint_timeout_spin.setFixedWidth(90)
         self.cleanup_iopaint_timeout_spin.setSuffix(" s")
         self.cleanup_iopaint_timeout_spin.setValue(int(cleanup_cfg.get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT) or DEFAULT_INPAINT_SERVER_TIMEOUT))
-        inpaint_vbox.addWidget(self._make_option_row(
+        ext_vbox.addWidget(self._make_option_row(
             "Request timeout",
-            "Seconds to wait for IOPaint HTTP response per request.",
+            "Batas waktu tunggu HTTP per request ke server IOPaint.",
             self.cleanup_iopaint_timeout_spin))
 
         test_holder = QWidget()
@@ -845,12 +963,12 @@ class SettingsCenterDialog(QDialog):
         self.iopaint_test_btn.clicked.connect(self._on_test_iopaint_server)
         test_h.addWidget(self.iopaint_status_label)
         test_h.addWidget(self.iopaint_test_btn)
-        inpaint_vbox.addWidget(self._make_option_row(
+        ext_vbox.addWidget(self._make_option_row(
             "Server connectivity",
-            "Check whether your IOPaint Server is reachable right now.",
+            "Periksa apakah server IOPaint eksternal sedang berjalan.",
             test_holder))
 
-        layout.addWidget(inpaint_card)
+        layout.addWidget(ext_card)
 
         # ── Card 2: Text Defaults ───────────────────────────────────────────
         card = QGroupBox("Text Box && Color Defaults")
@@ -902,6 +1020,122 @@ class SettingsCenterDialog(QDialog):
         layout.addWidget(card)
         layout.addStretch(1)
         return page
+
+    def _refresh_cleanup_engine_combo_items(self):
+        combo = getattr(self, 'cleanup_inpaint_engine_combo', None)
+        if combo is None:
+            return
+        current_eid = combo.currentData()
+        with QSignalBlocker(combo):
+            combo.clear()
+            for spec in list_inpaint_engines("full"):
+                text, badge, ready = format_inpaint_engine_option(spec)
+                dot_color = (
+                    theme.COLORS['muted']
+                    if spec.id == "iopaint_server"
+                    else (theme.COLORS['success'] if ready else theme.COLORS['warning'])
+                )
+                combo.addItem(status_dot_icon(dot_color, 8), text, spec.id)
+                idx = combo.count() - 1
+                combo.setItemData(
+                    idx,
+                    f"{spec.label}\nStatus: {badge}\n{spec.description}",
+                    Qt.ToolTipRole,
+                )
+            if current_eid:
+                idx = combo.findData(current_eid)
+                if idx != -1:
+                    combo.setCurrentIndex(idx)
+
+    def _refresh_inpaint_model_statuses(self):
+        labels = getattr(self, '_inpaint_model_status_labels', None) or {}
+        buttons = getattr(self, '_inpaint_model_dl_buttons', None) or {}
+        worker_active = getattr(self, '_inpaint_dl_worker', None) is not None
+        for eid, lbl in labels.items():
+            ready = is_engine_ready(eid)
+            try:
+                if ready:
+                    lbl.setText(InpaintText.STATUS_READY)
+                    lbl.setStyleSheet(f"color: {theme.COLORS['success']}; font-size: 8.5pt; font-weight: 700;")
+                else:
+                    lbl.setText(InpaintText.STATUS_MISSING)
+                    lbl.setStyleSheet(f"color: {theme.COLORS['warning']}; font-size: 8.5pt; font-weight: 700;")
+                btn = buttons.get(eid)
+                if btn is not None:
+                    btn.setEnabled((not ready) and (not worker_active))
+                    btn.setText(InpaintText.STATUS_READY if ready else InpaintText.BTN_DOWNLOAD)
+            except RuntimeError:
+                pass
+        self._refresh_cleanup_engine_combo_items()
+
+    def _on_unload_inpaint_memory(self):
+        try:
+            get_inpaint_manager().unload_loaded_model()
+            notify_toast(self, "Memori Dibersihkan", InpaintText.UNLOAD_DONE, kind="info")
+        except Exception as exc:
+            notify_toast(self, "Inpaint", str(exc), kind="warning")
+
+    def _on_download_inpaint_model(self, engine_id: str):
+        if getattr(self, '_inpaint_dl_worker', None) is not None:
+            return
+        for btn in (getattr(self, '_inpaint_model_dl_buttons', None) or {}).values():
+            try:
+                btn.setEnabled(False)
+            except RuntimeError:
+                pass
+        try:
+            self.inpaint_dl_progress.setValue(0)
+            self.inpaint_dl_progress.setVisible(True)
+            self.inpaint_dl_status_label.setText(
+                InpaintText.DOWNLOAD_STARTED_FMT.format(name=engine_display_label(engine_id, short=True))
+            )
+            self.inpaint_dl_status_label.setVisible(True)
+        except RuntimeError:
+            pass
+
+        worker = InpaintModelDownloadWorker(engine_id)
+        worker.progress.connect(self._on_inpaint_dl_progress)
+        worker.finished_ok.connect(self._on_inpaint_dl_finished)
+        worker.finished.connect(self._on_inpaint_dl_thread_done)
+        self._inpaint_dl_worker = worker
+        worker.start()
+
+    def _on_inpaint_dl_progress(self, pct: int, msg: str):
+        try:
+            if getattr(self, 'inpaint_dl_progress', None) is not None:
+                self.inpaint_dl_progress.setValue(max(0, min(100, int(pct))))
+            if getattr(self, 'inpaint_dl_status_label', None) is not None:
+                self.inpaint_dl_status_label.setText(msg)
+        except RuntimeError:
+            pass
+
+    def _on_inpaint_dl_finished(self, engine_id: str, success: bool, detail: str):
+        try:
+            if getattr(self, 'inpaint_dl_progress', None) is not None:
+                self.inpaint_dl_progress.setValue(100 if success else 0)
+            if getattr(self, 'inpaint_dl_status_label', None) is not None:
+                color = theme.COLORS['success'] if success else theme.COLORS['danger']
+                self.inpaint_dl_status_label.setStyleSheet(
+                    f"color: {color}; font-size: 8.5pt; padding: 2px 12px 4px 12px;"
+                )
+                self.inpaint_dl_status_label.setText(detail)
+            notify_toast(
+                self,
+                "Model Inpaint" if success else "Unduhan Gagal",
+                detail,
+                kind="success" if success else "warning",
+            )
+        except RuntimeError:
+            pass
+
+    def _on_inpaint_dl_thread_done(self):
+        self._inpaint_dl_worker = None
+        self._refresh_inpaint_model_statuses()
+        if getattr(self, 'main_window', None) is not None and hasattr(self.main_window, '_refresh_inpaint_summary_badges'):
+            try:
+                self.main_window._refresh_inpaint_summary_badges()
+            except Exception:
+                pass
 
     def _on_test_iopaint_server(self):
         import threading
@@ -1547,7 +1781,8 @@ class SettingsCenterDialog(QDialog):
         prev_threshold = int(cleanup_cfg.get('text_color_threshold', 128))
         prev_use_box = bool(cleanup_cfg.get('use_background_box', True))
         prev_constrain_text = bool(cleanup_cfg.get('constrain_text', True))
-        prev_inpaint_model = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        prev_inpaint_model = cleanup_cfg.get('inpaint_model_name', 'Built-in Big-LaMa')
+        prev_unified_engine = resolve_inpaint_engine_id(cleanup_cfg)
         prev_inpaint_url = cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL)
 
         if "cleanup" in built:
@@ -1559,8 +1794,14 @@ class SettingsCenterDialog(QDialog):
                     except Exception:
                         cleanup_cfg['use_inpaint'] = use_inpaint_val
                 cleanup_cfg['use_inpaint'] = use_inpaint_val
-            if getattr(self, 'cleanup_inpaint_model_combo', None) is not None:
-                cleanup_cfg['inpaint_model_name'] = self.cleanup_inpaint_model_combo.currentText()
+            if getattr(self, 'cleanup_inpaint_engine_combo', None) is not None:
+                unified_eid = normalize_inpaint_engine_id(self.cleanup_inpaint_engine_combo.currentData())
+                cleanup_cfg['inpaint_engine'] = unified_eid
+                cleanup_cfg['full_inpaint_engine'] = unified_eid
+                cleanup_cfg['brush_inpaint_engine'] = unified_eid
+                cleanup_cfg['inpaint_model_name'] = engine_display_label(unified_eid)
+            if getattr(self, 'cleanup_inpaint_device_combo', None) is not None:
+                cleanup_cfg['inpaint_device'] = str(self.cleanup_inpaint_device_combo.currentData() or 'auto')
             if getattr(self, 'cleanup_inpaint_padding_spin', None) is not None:
                 cleanup_cfg['inpaint_padding'] = int(self.cleanup_inpaint_padding_spin.value())
             if getattr(self, 'cleanup_iopaint_url_edit', None) is not None:
@@ -1626,6 +1867,11 @@ class SettingsCenterDialog(QDialog):
                 self.main_window.apply_defaults_from_settings(apply_runtime_controls=("cleanup" in built or "general" in built))
             except Exception as e:
                 print(f"Error applying default presets: {e}")
+        if "cleanup" in built and hasattr(self.main_window, '_refresh_inpaint_summary_badges'):
+            try:
+                self.main_window._refresh_inpaint_summary_badges()
+            except Exception:
+                pass
 
         if api_export is not None:
             try:
@@ -1681,6 +1927,7 @@ class SettingsCenterDialog(QDialog):
             or (cleanup_cfg.get('use_background_box') != prev_use_box)
             or (cleanup_cfg.get('constrain_text') != prev_constrain_text)
             or (cleanup_cfg.get('inpaint_model_name') != prev_inpaint_model)
+            or (resolve_inpaint_engine_id(cleanup_cfg) != prev_unified_engine)
             or (cleanup_cfg.get('inpaint_server_url') != prev_inpaint_url)
         ):
             status_parts.append("Cleanup & Inpaint settings updated")
@@ -1722,6 +1969,27 @@ class SettingsCenterDialog(QDialog):
         else:
             notify_toast(self, "Settings applied", "Changes saved without closing Settings.", kind="success")
         return True
+
+    def sync_cleanup_controls_from_settings(self):
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        unified_eid = resolve_inpaint_engine_id(cleanup_cfg)
+        combo = getattr(self, 'cleanup_inpaint_engine_combo', None)
+        if combo is not None:
+            with QSignalBlocker(combo):
+                idx = combo.findData(unified_eid)
+                if idx != -1:
+                    combo.setCurrentIndex(idx)
+        self._refresh_inpaint_model_statuses()
+
+    def closeEvent(self, event):
+        worker = getattr(self, '_inpaint_dl_worker', None)
+        if worker is not None:
+            try:
+                worker.cancel()
+                worker.wait(500)
+            except Exception:
+                pass
+        super().closeEvent(event)
 
 class ReviewDialog(QDialog):
     def __init__(self, text, parent=None):

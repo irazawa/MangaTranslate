@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.2
+# Manga OCR & Typeset Tool v14.9.9.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -137,6 +137,11 @@ def default_settings() -> dict:
         "cleanup": {
             "use_background_box": True,
             "use_inpaint": True,
+            "inpaint_engine": "big_lama",
+            "full_inpaint_engine": "big_lama",
+            "brush_inpaint_engine": "big_lama",
+            "inpaint_model_name": "Built-in Big-LaMa",
+            "inpaint_device": "auto",
             "inpaint_server_url": DEFAULT_INPAINT_SERVER_URL,
             "inpaint_server_timeout": DEFAULT_INPAINT_SERVER_TIMEOUT,
             "apply_mode": "selected",
@@ -352,9 +357,22 @@ def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
             merged['apis'].setdefault(p, {'keys': []})
         merged.setdefault('tesseract', base['tesseract'])
         cleanup_defaults = base.get('cleanup', {})
+        raw_cleanup = data.get('cleanup', {}) if isinstance(data, dict) else {}
         cleanup_settings = merged.setdefault('cleanup', {})
         for key, value in cleanup_defaults.items():
             cleanup_settings.setdefault(key, value)
+        try:
+            from src.core.inpaint import engine_display_label, resolve_inpaint_engine_id
+
+            unified_eid = resolve_inpaint_engine_id(raw_cleanup if isinstance(raw_cleanup, dict) else {})
+            cleanup_settings['inpaint_engine'] = unified_eid
+            cleanup_settings['full_inpaint_engine'] = unified_eid
+            cleanup_settings['brush_inpaint_engine'] = unified_eid
+            cleanup_settings['inpaint_model_name'] = engine_display_label(unified_eid)
+        except Exception:
+            cleanup_settings.setdefault('inpaint_engine', 'big_lama')
+            cleanup_settings.setdefault('full_inpaint_engine', 'big_lama')
+            cleanup_settings.setdefault('brush_inpaint_engine', 'big_lama')
         ocr_defaults = base.get('ocr', {})
         ocr_settings = merged.setdefault('ocr', {})
         for provider, defaults in ocr_defaults.items():

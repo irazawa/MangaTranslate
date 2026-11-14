@@ -1013,9 +1013,48 @@ class UibuildMixin:
         brush_size_row.addWidget(self.brush_size_spinbox, 1)
         brush_v.addLayout(brush_size_row)
 
+        brush_eng_lbl = QLabel(InpaintText.WORKSPACE_ENGINE_LABEL)
+        brush_eng_lbl.setStyleSheet(f"color: {theme.COLORS['text']}; font-size: 8.5pt;")
+        brush_v.addWidget(brush_eng_lbl)
+        self.brush_inpaint_engine_combo = QComboBox()
+        self._populate_inpaint_engine_combo(self.brush_inpaint_engine_combo, "brush")
+        self._fit_workspace_combo(self.brush_inpaint_engine_combo, 12)
+        self.brush_inpaint_engine_combo.setToolTip(
+            "Model AI inpainting aktif (sinkron otomatis dengan pilihan di tab Full dan Settings)."
+        )
+        self.brush_inpaint_engine_combo.currentIndexChanged.connect(
+            lambda *_: self._on_inpaint_engine_changed(self.brush_inpaint_engine_combo)
+        )
+        brush_v.addWidget(self.brush_inpaint_engine_combo)
+
+        self.brush_inpaint_status_row = QWidget()
+        self.brush_inpaint_status_row.setMinimumWidth(0)
+        brush_status_hl = QHBoxLayout(self.brush_inpaint_status_row)
+        brush_status_hl.setContentsMargins(0, 0, 0, 0)
+        brush_status_hl.setSpacing(6)
+        self.brush_inpaint_status_label = QLabel("")
+        self.brush_inpaint_status_label.setMinimumWidth(0)
+        self.brush_inpaint_status_label.setWordWrap(True)
+        self.brush_inpaint_status_label.setStyleSheet(
+            f"color: {theme.COLORS['warning']}; font-size: 8pt;"
+        )
+        brush_status_hl.addWidget(self.brush_inpaint_status_label, 1)
+        self.brush_inpaint_download_btn = QPushButton(InpaintText.BTN_DOWNLOAD_INLINE)
+        self.brush_inpaint_download_btn.setMinimumWidth(0)
+        self.brush_inpaint_download_btn.setStyleSheet("padding: 4px 10px;")
+        self.brush_inpaint_download_btn.setIcon(app_icon("download", theme.COLORS['accent'], 13))
+        self.brush_inpaint_download_btn.setIconSize(QSize(13, 13))
+        self.brush_inpaint_download_btn.setToolTip("Unduh model inpainting terpilih langsung.")
+        self.brush_inpaint_download_btn.clicked.connect(
+            lambda: self._download_selected_workspace_inpaint_engine("brush")
+        )
+        brush_status_hl.addWidget(self.brush_inpaint_download_btn)
+        self.brush_inpaint_status_row.setVisible(False)
+        brush_v.addWidget(self.brush_inpaint_status_row)
+
         brush_btn_row = QGridLayout()
         brush_btn_row.setSpacing(6)
-        self.inpaint_confirm_button = QPushButton("Clean")
+        self.inpaint_confirm_button = QPushButton(InpaintText.BTN_CLEAN_LABEL)
         self.inpaint_confirm_button.setMinimumWidth(0)
         self.inpaint_confirm_button.setToolTip("Apply inpainting to the painted brush mask")
         self.inpaint_confirm_button.clicked.connect(lambda: self.apply_inpaint_brush_selection(run_ocr_translate=self._is_inpaint_ocr_mode()))
@@ -1039,6 +1078,47 @@ class UibuildMixin:
         self.inpaint_cancel_button.clicked.connect(self.cancel_inpaint_result)
         brush_btn_row.addWidget(self.inpaint_cancel_button, 1, 1)
         brush_v.addLayout(brush_btn_row)
+
+        self.inpaint_running_panel = QFrame()
+        self.inpaint_running_panel.setMinimumWidth(0)
+        self.inpaint_running_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        self.inpaint_running_panel.setStyleSheet(
+            f"QFrame {{ background: {theme.COLORS['card_alt']}; "
+            f"border: 1px solid {theme.COLORS['accent']}; border-radius: 6px; }}"
+        )
+        run_panel_v = QVBoxLayout(self.inpaint_running_panel)
+        run_panel_v.setContentsMargins(10, 9, 10, 9)
+        run_panel_v.setSpacing(6)
+        run_head = QHBoxLayout()
+        run_head.setContentsMargins(0, 0, 0, 0)
+        run_head.setSpacing(6)
+        self.inpaint_running_label = QLabel(InpaintText.JOB_STATUS_STARTED)
+        self.inpaint_running_label.setMinimumWidth(0)
+        self.inpaint_running_label.setWordWrap(True)
+        self.inpaint_running_label.setStyleSheet(
+            f"color: {theme.COLORS['accent_hover']}; font-size: 8pt; font-weight: 600; border: none;"
+        )
+        run_head.addWidget(self.inpaint_running_label, 1)
+        self.inpaint_elapsed_label = QLabel("0 dtk")
+        self.inpaint_elapsed_label.setStyleSheet(
+            f"color: {theme.COLORS['muted']}; font-size: 8pt; border: none;"
+        )
+        run_head.addWidget(self.inpaint_elapsed_label)
+        run_panel_v.addLayout(run_head)
+        self.inpaint_running_bar = QProgressBar()
+        self.inpaint_running_bar.setFixedHeight(6)
+        self.inpaint_running_bar.setRange(0, 0)
+        self.inpaint_running_bar.setTextVisible(False)
+        run_panel_v.addWidget(self.inpaint_running_bar)
+        self.inpaint_cancel_job_btn = QPushButton(InpaintText.BTN_CANCEL_JOB)
+        self.inpaint_cancel_job_btn.setMinimumWidth(0)
+        self.inpaint_cancel_job_btn.setStyleSheet("padding: 4px 10px;")
+        self.inpaint_cancel_job_btn.setIcon(app_icon("x", theme.COLORS['danger'], 13))
+        self.inpaint_cancel_job_btn.setIconSize(QSize(13, 13))
+        self.inpaint_cancel_job_btn.clicked.connect(self._cancel_inpaint_brush_job)
+        run_panel_v.addWidget(self.inpaint_cancel_job_btn)
+        self.inpaint_running_panel.setVisible(False)
+        brush_v.addWidget(self.inpaint_running_panel)
 
         self.brush_controls_widget.setVisible(False)
         pen_buttons_layout.addWidget(self.brush_controls_widget)
@@ -1189,18 +1269,29 @@ class UibuildMixin:
         )
         layout.addWidget(selection_group)
 
-        # ── Inpainting Server Configuration Card (delegated to Settings) ──────
-        inpaint_card = QGroupBox("Inpainting Engine (IOPaint Server)")
+        # ── Integrated Inpainting Engine Card (Unified Full & Brush) ────────────
+        inpaint_card = QGroupBox("Inpainting Engine (Full && Brush)")
         inpaint_v = QVBoxLayout(inpaint_card)
         inpaint_v.setContentsMargins(12, 12, 12, 12)
         inpaint_v.setSpacing(8)
-        cleanup_cfg = SETTINGS.get('cleanup', {})
-        model_name = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
-        server_url = cleanup_cfg.get('inpaint_server_url', 'http://127.0.0.1:8080')
-        self.cleanup_inpaint_summary_label = QLabel(
-            f"Active Engine: {model_name}\nServer URL: {server_url}"
+
+        cleanup_eng_lbl = QLabel(InpaintText.LABEL_UNIFIED_ENGINE)
+        cleanup_eng_lbl.setStyleSheet(f"color: {theme.COLORS['text']}; font-size: 8.5pt;")
+        inpaint_v.addWidget(cleanup_eng_lbl)
+        self.cleanup_inpaint_engine_combo = QComboBox()
+        self._populate_inpaint_engine_combo(self.cleanup_inpaint_engine_combo, "full")
+        self._fit_workspace_combo(self.cleanup_inpaint_engine_combo, 12)
+        self.cleanup_inpaint_engine_combo.setToolTip(
+            "Model inpainting tunggal untuk Full-Page Translate dan Inpainting Brush (default: Built-in Big-LaMa)."
         )
+        self.cleanup_inpaint_engine_combo.currentIndexChanged.connect(
+            lambda *_: self._on_inpaint_engine_changed(self.cleanup_inpaint_engine_combo)
+        )
+        inpaint_v.addWidget(self.cleanup_inpaint_engine_combo)
+
+        self.cleanup_inpaint_summary_label = QLabel("")
         self.cleanup_inpaint_summary_label.setWordWrap(True)
+        self.cleanup_inpaint_summary_label.setMinimumWidth(0)
         self.cleanup_inpaint_summary_label.setStyleSheet(
             f"background: {theme.COLORS['card_alt']}; color: {theme.COLORS['accent_hover']}; "
             f"border: 1px solid {theme.COLORS['border']}; border-radius: 6px; "
@@ -1208,15 +1299,33 @@ class UibuildMixin:
         )
         inpaint_v.addWidget(self.cleanup_inpaint_summary_label)
 
-        cfg_inpaint_btn = QPushButton("IOPaint && Inpaint Settings")
+        self.cleanup_download_missing_btn = QPushButton(InpaintText.BTN_DOWNLOAD)
+        self.cleanup_download_missing_btn.setMinimumWidth(0)
+        self.cleanup_download_missing_btn.setIcon(app_icon("download", theme.COLORS["accent"], 14))
+        self.cleanup_download_missing_btn.setIconSize(QSize(14, 14))
+        self.cleanup_download_missing_btn.setToolTip("Unduh model AI yang dipilih di atas jika belum tersedia lokal.")
+        self.cleanup_download_missing_btn.clicked.connect(lambda: self._download_next_missing_inpaint_engine())
+        self.cleanup_download_missing_btn.setVisible(False)
+        inpaint_v.addWidget(self.cleanup_download_missing_btn)
+
+        self.cleanup_inpaint_dl_bar = QProgressBar()
+        self.cleanup_inpaint_dl_bar.setFixedHeight(6)
+        self.cleanup_inpaint_dl_bar.setRange(0, 100)
+        self.cleanup_inpaint_dl_bar.setTextVisible(False)
+        self.cleanup_inpaint_dl_bar.setVisible(False)
+        inpaint_v.addWidget(self.cleanup_inpaint_dl_bar)
+
+        cfg_inpaint_btn = QPushButton("Kelola Model && Settings Inpaint")
         cfg_inpaint_btn.setMinimumWidth(0)
-        cfg_inpaint_btn.setToolTip("Configure IOPaint & Inpainting in Settings")
+        cfg_inpaint_btn.setToolTip("Unduh model AI bawaan, atur GPU/CPU, atau konfigurasi opsional IOPaint server")
         cfg_inpaint_btn.setIcon(app_icon("settings", theme.COLORS["accent"], 14))
         cfg_inpaint_btn.setIconSize(QSize(14, 14))
         cfg_inpaint_btn.clicked.connect(lambda: self.open_settings_dialog('cleanup'))
         inpaint_v.addWidget(cfg_inpaint_btn)
         layout.addWidget(inpaint_card)
 
+        self._sync_inpaint_engine_combos()
+        self._refresh_inpaint_summary_badges()
         self._sync_cleanup_controls_from_selection()
         layout.addStretch()
         return tab

@@ -78,6 +78,28 @@ class BootstrapWorker(QObject):
             "Installing requirements",
         )
 
+        # Best-effort: siapkan model default Built-in Big-LaMa (~196 MB) selama setup.
+        # Non-fatal jika offline — bisa diunduh nanti otomatis atau lewat Settings.
+        self.statusChanged.emit(BootstrapText.STATUS_DOWNLOADING_INPAINT)
+        try:
+            self._run_command(
+                [
+                    venv_python,
+                    "-c",
+                    (
+                        "from src.core.inpaint import is_engine_ready, download_engine_models; "
+                        "print('Big-LaMa already ready.') if is_engine_ready('big_lama') "
+                        "else download_engine_models('big_lama', progress_cb=lambda p, m: print(f'[{p}%] {m}'))"
+                    ),
+                ],
+                "Preparing Built-in Big-LaMa Inpainting Model",
+            )
+        except Exception as dl_exc:
+            self.logLine.emit(
+                f"[WARN] Gagal menyiapkan Big-LaMa saat setup ({dl_exc}). "
+                "Aplikasi tetap bisa dibuka dan model dapat diunduh dari Settings -> Cleanup & Inpaint."
+            )
+
         self.statusChanged.emit(BootstrapText.STATUS_READY)
         self.logLine.emit("[OK] Virtual environment is ready.")
         self.finished.emit(True, "")

@@ -79,12 +79,8 @@ class DetectMixin:
             self._download_model_file(url, model_path, self.start_interactive_batch_detection, "Unduh Model Bubble")
         return False
 
-    def find_speech_bubble_mask(self, full_cv_image, text_rect, settings, for_saving=False):
-        if settings['use_dl_detector']:
-            if not for_saving:
-                self.statusBar().showMessage(f"Detecting bubble with {settings['dl_provider']} model...", 2000)
-                QApplication.processEvents()
-
+    def find_speech_bubble_mask(self, full_cv_image, text_rect, settings, for_saving=False, allow_dl=True):
+        if allow_dl and settings.get('use_dl_detector'):
             combined_dl_mask = self.detect_bubble_with_dl_model(full_cv_image, settings)
 
             if combined_dl_mask is not None:
@@ -97,9 +93,6 @@ class DetectMixin:
                         cv2.drawContours(single_bubble_mask, [cnt], -1, 255, thickness=cv2.FILLED)
                         return single_bubble_mask
 
-        if not for_saving:
-            self.statusBar().showMessage("Detecting bubble with contour method...", 2000)
-            QApplication.processEvents()
         return self._find_speech_bubble_mask_contour(full_cv_image, text_rect)
 
     def draw_area_bubble(self, painter, area):

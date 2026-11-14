@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.2
+# Manga OCR & Typeset Tool v14.9.9.3
 # ==============================
 # ?? Import modul bawaan Python (hanya yang digunakan di workers)
 # ==============================
@@ -794,6 +794,8 @@ class InpaintBrushSignals(QObject):
     finished = pyqtSignal(object)  # Mengembalikan PIL.Image hasil bersih
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
+    progress_percent = pyqtSignal(int, str)
+    cancelled = pyqtSignal()
 
 
 class InpaintBrushWorker(QThread):
@@ -804,70 +806,126 @@ class InpaintBrushWorker(QThread):
         self.pil_mask = pil_mask
         self.settings = settings
         self.signals = InpaintBrushSignals()
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
+    def _emit_progress(self, pct: int, msg: str):
+        text = str(msg or "")
+        self.signals.progress.emit(text)
+        self.signals.progress_percent.emit(int(pct), text)
 
     def run(self):
         try:
-            self.signals.progress.emit("Running AI Inpainting...")
-            cv_original = cv2.cvtColor(np.array(self.pil_image), cv2.COLOR_RGB2BGR)
+            cfg = self.settings or {}
+            from src.core.inpaint import (
+                engine_display_label,
+                get_inpaint_manager,
+                resolve_inpaint_engine_id,
+                run_opencv_inpaint,
+            )
+
+            if self._is_cancelled:
+                self.signals.cancelled.emit()
+                return
+
+            engine_id = resolve_inpaint_engine_id(cfg)
+            engine_label = engine_display_label(engine_id, short=True)
+            self._emit_progress(-1, f"Menjalankan inpaint brush ({engine_label})...")
+
             mask_arr = np.array(self.pil_mask)
             if len(mask_arr.shape) > 2:
                 mask_arr = mask_arr[:, :, 0]
-            final_inpaint_mask = (mask_arr > 0).astype(np.uint8) * 255
+            pil_mask = Image.fromarray((mask_arr > 0).astype(np.uint8) * 255).convert("L")
 
-            inpainted_cv = None
-            model_name = self.settings.get('inpaint_model_name', 'IOPaint Server') if self.settings else 'IOPaint Server'
-            if str(model_name).startswith("IOPaint"):
-                self.signals.progress.emit("Running IOPaint server...")
+            if engine_id == "iopaint_server":
+                self._emit_progress(-1, "Menghubungi IOPaint Server eksternal...")
                 server_result = run_iopaint_inpaint(
                     self.pil_image,
-                    Image.fromarray(final_inpaint_mask).convert("L"),
-                    self.settings.get('inpaint_server_url') if self.settings else None,
-                    self.settings.get('inpaint_server_timeout') if self.settings else None,
+                    pil_mask,
+                    cfg.get('inpaint_server_url'),
+                    cfg.get('inpaint_server_timeout'),
                 )
+                if self._is_cancelled:
+                    self.signals.cancelled.emit()
+                    return
                 if server_result is not None:
-                    inpainted_cv = cv2.cvtColor(np.array(server_result), cv2.COLOR_RGB2BGR)
+                    self._emit_progress(100, "Inpaint IOPaint server selesai.")
+                    self.signals.finished.emit(server_result.convert("RGB"))
+                    return
+                self._emit_progress(-1, "IOPaint server tidak aktif, beralih ke OpenCV fallback...")
+                self.signals.finished.emit(run_opencv_inpaint(self.pil_image, pil_mask, method="opencv_ns"))
+                return
 
-            model_key = self.settings.get('inpaint_model_key') if self.settings else None
-            if inpainted_cv is None and model_key:
-                try:
-                    if (self.main_app.inpaint_model is None or
-                        self.main_app.current_inpaint_model_key != model_key):
-                        self.main_app.initialize_inpaint_engine(self.settings)
-
-                    if self.main_app.inpaint_model:
-                        pil_orig = Image.fromarray(cv2.cvtColor(cv_original, cv2.COLOR_BGR2RGB))
-                        pil_msk = Image.fromarray(final_inpaint_mask).convert("L")
-                        out_arr = self.main_app.inpaint_model(pil_orig, pil_msk)
-                        if out_arr is not None:
-                            if isinstance(out_arr, np.ndarray):
-                                if out_arr.shape[2] == 3:
-                                    inpainted_cv = cv2.cvtColor(out_arr, cv2.COLOR_BGR2RGB)
-                                    inpainted_cv = cv2.cvtColor(inpainted_cv, cv2.COLOR_RGB2BGR)
-                                else:
-                                    inpainted_cv = out_arr
-                            else:
-                                try:
-                                    inpainted_cv = cv2.cvtColor(np.array(out_arr.convert("RGB")), cv2.COLOR_RGB2BGR)
-                                except Exception:
-                                    inpainted_cv = None
-                except Exception as e:
-                    print(f"Advanced inpainting failed in worker: {e}")
-                    inpainted_cv = None
-
-            if inpainted_cv is None:
-                try:
-                    self.signals.progress.emit("Running OpenCV Inpainting fallback...")
-                    algo_map = {"OpenCV-NS": cv2.INPAINT_NS, "OpenCV-Telea": cv2.INPAINT_TELEA}
-                    algo = algo_map.get(self.settings.get('inpaint_model_name', 'OpenCV-NS') if self.settings else 'OpenCV-NS', cv2.INPAINT_NS)
-                    inpainted_cv = cv2.inpaint(cv_original, final_inpaint_mask, 3, algo)
-                except Exception as e:
-                    raise RuntimeError(f"Inpainting failed: {e}")
-
-            if inpainted_cv is None:
-                raise RuntimeError("Inpainting returned null result.")
-
-            rgb_result = cv2.cvtColor(inpainted_cv, cv2.COLOR_BGR2RGB)
-            result_pil = Image.fromarray(rgb_result)
-            self.signals.finished.emit(result_pil)
+            mgr = get_inpaint_manager()
+            try:
+                result_pil = mgr.inpaint(
+                    self.pil_image,
+                    pil_mask,
+                    engine_id=engine_id,
+                    device=str(cfg.get('inpaint_device', 'auto') or 'auto'),
+                    auto_download=bool(cfg.get('auto_download_inpaint', True)),
+                    progress_cb=self._emit_progress,
+                    check_cancel=lambda: bool(self._is_cancelled),
+                )
+                if self._is_cancelled:
+                    self.signals.cancelled.emit()
+                    return
+                self.signals.finished.emit(result_pil.convert("RGB"))
+                return
+            except FileNotFoundError:
+                raise
+            except Exception as e:
+                if self._is_cancelled:
+                    self.signals.cancelled.emit()
+                    return
+                print(f"Built-in brush inpainting ({engine_id}) failed, using OpenCV fallback: {e}")
+                self._emit_progress(-1, "Menggunakan OpenCV Inpainting fallback...")
+                fallback_method = "opencv_telea" if engine_id == "opencv_telea" else "opencv_ns"
+                result_pil = run_opencv_inpaint(self.pil_image, pil_mask, method=fallback_method)
+                self.signals.finished.emit(result_pil.convert("RGB"))
         except Exception as e:
-            self.signals.error.emit(str(e))
+            if self._is_cancelled:
+                self.signals.cancelled.emit()
+            else:
+                self.signals.error.emit(str(e))
+
+
+class InpaintModelDownloadWorker(QThread):
+    """Shared background worker for downloading local inpainting model weights."""
+    progress = pyqtSignal(int, str)
+    finished_ok = pyqtSignal(str, bool, str)
+
+    def __init__(self, engine_id: str, sd_repo_id: str = ""):
+        super().__init__()
+        self.engine_id = str(engine_id or "")
+        self.sd_repo_id = str(sd_repo_id or "")
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from src.core.inpaint import download_engine_models, engine_display_label
+        from src.ui.texts import InpaintText
+
+        label = engine_display_label(self.engine_id, short=True)
+        try:
+            download_engine_models(
+                self.engine_id,
+                sd_repo_id=self.sd_repo_id,
+                progress_cb=lambda pct, msg: self.progress.emit(int(pct), str(msg)),
+                check_cancel=lambda: bool(self._cancelled),
+            )
+            self.finished_ok.emit(
+                self.engine_id,
+                True,
+                InpaintText.DOWNLOAD_DONE_FMT.format(name=label),
+            )
+        except Exception as exc:
+            self.finished_ok.emit(
+                self.engine_id,
+                False,
+                InpaintText.DOWNLOAD_FAIL_FMT.format(name=label, error=str(exc)),
+            )

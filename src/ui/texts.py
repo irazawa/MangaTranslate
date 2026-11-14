@@ -49,9 +49,9 @@ class SettingsText:
         {
             "key": "cleanup",
             "label": "Cleanup & Inpaint",
-            "description": "IOPaint server & cleanup",
+            "description": "Engine AI & pembersihan",
             "title": "Cleanup & Inpainting",
-            "subtitle": "Configure IOPaint server URL, inpainting backend, padding, and text box defaults.",
+            "subtitle": "Atur engine AI inpainting bawaan (Full vs Brush), model lokal, padding, dan background teks.",
         },
         {
             "key": "appearance",
@@ -93,7 +93,7 @@ class SettingsText:
 
 class SettingsWorkspaceText:
     TITLE = "Settings"
-    SUBTITLE = "App settings, IOPaint configuration, workers monitor, and insights in one clean workspace."
+    SUBTITLE = "App settings, inpainting engines, workers monitor, and insights in one clean workspace."
     BACK_TO_APP = "Back to app"
     SEARCH_PLACEHOLDER = "Search settings..."
     PROFILE_NAME_FALLBACK = "MangaTranslate User"
@@ -113,7 +113,7 @@ class SettingsWorkspaceText:
             "App Settings",
             [
                 ("general", "General", "Export, autosave, presets", "settings"),
-                ("cleanup", "Cleanup & Inpaint", "IOPaint server & cleanup", "paintbrush"),
+                ("cleanup", "Cleanup & Inpaint", "Engine AI & pembersihan", "paintbrush"),
                 ("appearance", "Appearance", "Theme, fonts, motion", "palette"),
                 ("translation", "Translation", "Local/cloud models", "languages"),
                 ("api", "API Keys", "Providers and tokens", "key"),
@@ -207,6 +207,7 @@ class BootstrapText:
     STATUS_CREATING_VENV = "Membuat virtual environment..."
     STATUS_UPGRADING_PIP = "Mengupdate pip..."
     STATUS_INSTALLING_REQUIREMENTS = "Menginstall requirements.txt..."
+    STATUS_DOWNLOADING_INPAINT = "Menyiapkan model AI Inpainting bawaan (Big-LaMa)..."
     STATUS_READY = "Setup selesai. Membuka aplikasi..."
     STATUS_FAILED = "Setup gagal. Periksa log di bawah."
     PYTHON_MISSING = (
@@ -422,6 +423,53 @@ class AdvancedEditorText:
     BTN_CANCEL = "Batal"
     BTN_APPLY = "Terapkan"
     TIP_APPLY = "Simpan semua perubahan dan render ulang teks di kanvas."
+
+
+class InpaintText:
+    CARD_ENGINES_TITLE = "Integrated Inpainting Engine"
+    CARD_ENGINES_DESC = (
+        "Satu pilihan model inpainting dipakai bersama untuk Full-Page Translate dan "
+        "Inpainting Brush agar pengaturan sederhana dan cepat."
+    )
+    LABEL_UNIFIED_ENGINE = "Model Inpainting (Full & Brush):"
+    LABEL_FULL_ENGINE = LABEL_UNIFIED_ENGINE
+    LABEL_BRUSH_ENGINE = LABEL_UNIFIED_ENGINE
+    LABEL_DEVICE = "Hardware Inferensi:"
+    CARD_MODELS_TITLE = "Status Model Bawaan"
+    CARD_MODELS_DESC = (
+        "Model tersimpan lokal di folder src/models/inpainting atau cache Torch. "
+        "Klik Unduh jika model belum tersedia."
+    )
+    CARD_EXTERNAL_TITLE = "External IOPaint Server (Opsional)"
+    CARD_EXTERNAL_DESC = (
+        "Hanya dipakai bila Anda memilih engine External IOPaint Server di atas. "
+        "Pengguna biasa cukup memakai model Built-in."
+    )
+    BTN_DOWNLOAD = "Unduh Model"
+    BTN_DOWNLOAD_INLINE = "Unduh"
+    BTN_DOWNLOAD_MISSING_FMT = "Unduh Model ({names})"
+    BTN_DOWNLOADING = "Mengunduh..."
+    BTN_UNLOAD = "Kosongkan Memori Model"
+    BTN_CANCEL_JOB = "Batalkan"
+    BTN_CLEAN_LABEL = "Clean"
+    BTN_CLEAN_RUNNING = "Memproses..."
+    STATUS_READY = "Siap dipakai"
+    STATUS_MISSING = "Belum diunduh"
+    STATUS_OFFLINE_BUILTIN = "Siap (Tanpa download)"
+    STATUS_EXTERNAL = "Server Eksternal"
+    BADGE_MISSING_FMT = "Model {name} ({size}) belum diunduh"
+    BRUSH_CANCELLING = "Membatalkan proses inpainting..."
+    BRUSH_CANCELLED = "Proses inpainting dibatalkan."
+    JOB_STATUS_STARTED = "Menjalankan inpainting..."
+    HARDWARE_CUDA_FMT = "GPU NVIDIA CUDA terdeteksi ({name}) — model Built-in berjalan cepat di GPU."
+    HARDWARE_CPU_ONLY = "Mode CPU — Big-LaMa, Manga Inpaintor, dan MI-GAN berjalan optimal dengan ROI crop cepat."
+    WORKSPACE_ENGINE_LABEL = "Inpaint Model (Full & Brush):"
+    WORKSPACE_FULL_ENGINE_LABEL = WORKSPACE_ENGINE_LABEL
+    WORKSPACE_BRUSH_ENGINE_LABEL = WORKSPACE_ENGINE_LABEL
+    DOWNLOAD_STARTED_FMT = "Mengunduh model {name} di latar belakang..."
+    DOWNLOAD_DONE_FMT = "Model {name} selesai diunduh dan siap digunakan."
+    DOWNLOAD_FAIL_FMT = "Gagal mengunduh {name}: {error}"
+    UNLOAD_DONE = "Memori model AI inpainting telah dikosongkan."
 
 
 def welcome_subtitle_html() -> str:

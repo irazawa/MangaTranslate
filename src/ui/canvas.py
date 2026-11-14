@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.2
+# Manga OCR & Typeset Tool v14.9.9.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -1364,10 +1364,76 @@ class SelectableImageLabel(QLabel):
     def get_inpaint_mask(self):
         return getattr(self, 'inpaint_mask', None)
 
+    def _invalidate_inpaint_overlay(self):
+        self._inpaint_overlay_dirty = True
+
     def clear_inpaint_mask(self):
         if getattr(self, 'inpaint_mask', None) is not None:
             self.inpaint_mask.fill(0)
-            self.update()
+        overlay = getattr(self, '_inpaint_overlay_image', None)
+        if overlay is not None and not overlay.isNull():
+            overlay.fill(Qt.transparent)
+            self._inpaint_overlay_dirty = False
+        self.update()
+
+    def _get_inpaint_overlay_image(self):
+        mask = getattr(self, 'inpaint_mask', None)
+        if mask is None or mask.isNull():
+            self._inpaint_overlay_image = None
+            self._inpaint_overlay_dirty = False
+            self._inpaint_overlay_source_id = None
+            return None
+        cached = getattr(self, '_inpaint_overlay_image', None)
+        cache_valid = (
+            cached is not None
+            and not cached.isNull()
+            and cached.size() == mask.size()
+            and not getattr(self, '_inpaint_overlay_dirty', False)
+            and getattr(self, '_inpaint_overlay_source_id', None) == id(mask)
+        )
+        if not cache_valid:
+            overlay = QImage(mask.size(), QImage.Format_ARGB32_Premultiplied)
+            overlay.fill(QColor(56, 189, 248, 160))
+            overlay.setAlphaChannel(mask)
+            self._inpaint_overlay_image = overlay
+            self._inpaint_overlay_dirty = False
+            self._inpaint_overlay_source_id = id(mask)
+        return self._inpaint_overlay_image
+
+    def _paint_event_image_dirty_rect(self, widget_rect, offset_x, offset_y, scale, img_size):
+        if widget_rect is None or widget_rect.isEmpty() or img_size.isEmpty():
+            return QRect(0, 0, img_size.width(), img_size.height())
+        eff_scale = float(scale) if scale and scale > 0 else 1.0
+        left = max(0, int(math.floor((widget_rect.left() - offset_x) / eff_scale)) - 2)
+        top = max(0, int(math.floor((widget_rect.top() - offset_y) / eff_scale)) - 2)
+        right = min(img_size.width(), int(math.ceil((widget_rect.right() + 1 - offset_x) / eff_scale)) + 2)
+        bottom = min(img_size.height(), int(math.ceil((widget_rect.bottom() + 1 - offset_y) / eff_scale)) + 2)
+        if right <= left or bottom <= top:
+            return QRect()
+        return QRect(left, top, right - left, bottom - top)
+
+    def _brush_widget_dirty_rect(self, img_pt1, img_pt2=None):
+        """Return widget-space bounding rect around one or two image points + brush radius."""
+        pts = [p for p in (img_pt1, img_pt2) if p is not None]
+        if not pts:
+            return QRect()
+        pixmap = self.pixmap()
+        scale = getattr(self.main_window, 'zoom_factor', 1.0) or 1.0
+        offset_x = 0
+        offset_y = 0
+        if pixmap and not pixmap.isNull():
+            label_size = self.size()
+            pixmap_size = pixmap.size()
+            offset_x = max(0, (label_size.width() - pixmap_size.width()) // 2)
+            offset_y = max(0, (label_size.height() - pixmap_size.height()) // 2)
+        radius = float(getattr(self, 'inpaint_brush_size', 25)) / 2.0 + 4.0
+        xs = [p.x() for p in pts]
+        ys = [p.y() for p in pts]
+        wl = int(math.floor((min(xs) - radius) * scale + offset_x)) - 4
+        wt = int(math.floor((min(ys) - radius) * scale + offset_y)) - 4
+        wr = int(math.ceil((max(xs) + radius) * scale + offset_x)) + 4
+        wb = int(math.ceil((max(ys) + radius) * scale + offset_y)) + 4
+        return QRect(wl, wt, max(1, wr - wl), max(1, wb - wt)).intersected(self.rect())
 
     def set_inpaint_brush_size(self, size):
         self.inpaint_brush_size = max(1, int(size))
@@ -1376,13 +1442,31 @@ class SelectableImageLabel(QLabel):
     def _paint_mask_stroke(self, p1, p2):
         if self.inpaint_mask is None:
             return
+        brush_w = float(getattr(self, 'inpaint_brush_size', 25))
         p = QPainter(self.inpaint_mask)
         p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(Qt.white, float(getattr(self, 'inpaint_brush_size', 25)),
+        pen = QPen(Qt.white, brush_w,
                    Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         p.setPen(pen)
         p.drawLine(p1, p2)
         p.end()
+
+        overlay = getattr(self, '_inpaint_overlay_image', None)
+        if (
+            overlay is None
+            or overlay.isNull()
+            or overlay.size() != self.inpaint_mask.size()
+            or getattr(self, '_inpaint_overlay_dirty', False)
+            or getattr(self, '_inpaint_overlay_source_id', None) != id(self.inpaint_mask)
+        ):
+            overlay = self._get_inpaint_overlay_image()
+        if overlay is not None and not overlay.isNull():
+            op = QPainter(overlay)
+            op.setCompositionMode(QPainter.CompositionMode_Source)
+            op.setPen(QPen(QColor(56, 189, 248, 160), brush_w,
+                           Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            op.drawLine(p1, p2)
+            op.end()
 
     @staticmethod
     def _find_enclosed_mask_holes(binary_mask):
@@ -2431,16 +2515,25 @@ class SelectableImageLabel(QLabel):
                                 break
                 self.update()
         elif self._is_inpaint_brush_mode(mode):
+            img_pt = self._widget_point_to_image(event.pos())
+            prev_cursor = getattr(self, '_prev_brush_cursor_pos', None)
+            stroke_rect = QRect()
             if getattr(self, 'painting_mask', False):
-                img_pt = self._widget_point_to_image(event.pos())
                 if img_pt and self._last_paint_pos:
                     curr_pos = img_pt.toPoint()
                     self._paint_mask_stroke(self._last_paint_pos, curr_pos)
+                    stroke_rect = self._brush_widget_dirty_rect(self._last_paint_pos, curr_pos)
                     self._last_paint_pos = curr_pos
                     if not hasattr(self, '_brush_stroke_points'):
                         self._brush_stroke_points = []
                     self._brush_stroke_points.append(curr_pos)
-            self.update()
+            cursor_rect = self._brush_widget_dirty_rect(img_pt, prev_cursor)
+            self._prev_brush_cursor_pos = img_pt
+            dirty = stroke_rect.united(cursor_rect)
+            if not dirty.isEmpty():
+                self.update(dirty)
+            else:
+                self.update()
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton and getattr(self, 'panning', False):
             self.panning = False
@@ -2471,7 +2564,8 @@ class SelectableImageLabel(QLabel):
 
         if event.button() == Qt.LeftButton:
             if getattr(self, 'painting_mask', False):
-                self._auto_fill_enclosed_inpaint_loops()
+                if self._auto_fill_enclosed_inpaint_loops():
+                    self._invalidate_inpaint_overlay()
                 self.painting_mask = False
                 self._last_paint_pos = None
                 self._brush_stroke_points = []
@@ -2810,22 +2904,27 @@ class SelectableImageLabel(QLabel):
 
         if self._is_inpaint_brush_mode():
             if getattr(self, 'inpaint_mask', None) is not None and not self.inpaint_mask.isNull():
-                painter.save()
-                scale = getattr(self.main_window, 'zoom_factor', 1.0)
-                pixmap = self.pixmap()
-                if pixmap and not pixmap.isNull():
-                    label_size = self.size()
-                    pixmap_size = pixmap.size()
-                    offset_x = max(0, (label_size.width() - pixmap_size.width()) // 2)
-                    offset_y = max(0, (label_size.height() - pixmap_size.height()) // 2)
-                    painter.translate(offset_x, offset_y)
-                    painter.scale(scale, scale)
+                overlay_img = self._get_inpaint_overlay_image()
+                if overlay_img is not None and not overlay_img.isNull():
+                    painter.save()
+                    scale = getattr(self.main_window, 'zoom_factor', 1.0) or 1.0
+                    pixmap = self.pixmap()
+                    offset_x = 0
+                    offset_y = 0
+                    if pixmap and not pixmap.isNull():
+                        label_size = self.size()
+                        pixmap_size = pixmap.size()
+                        offset_x = max(0, (label_size.width() - pixmap_size.width()) // 2)
+                        offset_y = max(0, (label_size.height() - pixmap_size.height()) // 2)
+                        painter.translate(offset_x, offset_y)
+                        painter.scale(scale, scale)
 
-                color_overlay = QImage(self.inpaint_mask.size(), QImage.Format_ARGB32_Premultiplied)
-                color_overlay.fill(QColor(56, 189, 248, 160)) # accent cyan
-                color_overlay.setAlphaChannel(self.inpaint_mask)
-                painter.drawImage(0, 0, color_overlay)
-                painter.restore()
+                    img_dirty = self._paint_event_image_dirty_rect(
+                        event.rect(), offset_x, offset_y, scale, overlay_img.size()
+                    )
+                    if not img_dirty.isEmpty():
+                        painter.drawImage(QRectF(img_dirty), overlay_img, QRectF(img_dirty))
+                    painter.restore()
 
             if self.current_mouse_pos:
                 painter.save()

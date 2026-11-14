@@ -163,6 +163,9 @@ class TranslateMixin:
     def _update_full_tab_hints(self):
         hint_lbl = getattr(self, 'full_mode_hint_label', None)
         summary_lbl = getattr(self, 'full_pipeline_summary_label', None)
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        inpaint_eid = resolve_inpaint_engine_id(cleanup_cfg)
+        inpaint_short = engine_display_label(inpaint_eid, short=True)
         if hint_lbl is not None and getattr(self, 'full_mode_combo', None) is not None:
             use_vision = bool(self.full_mode_combo.currentData())
             trans_mode = self.full_translator_combo.currentData() if getattr(self, 'full_translator_combo', None) else 'ai_translate'
@@ -173,11 +176,10 @@ class TranslateMixin:
             elif trans_mode == 'ai_ocr':
                 hint_lbl.setText("Local region detection + AI OCR translates each bubble in one vision pass.")
             else:
-                hint_lbl.setText("Per-region detection + AI OCR + IOPaint cleanup + AI Translate model.")
+                hint_lbl.setText(f"Deteksi area + AI OCR + {inpaint_short} cleanup + model AI Translate.")
         if summary_lbl is not None:
-            inpaint_name = SETTINGS.get('cleanup', {}).get('inpaint_model_name', 'IOPaint Server')
             target_lang = self.translate_combo.currentText() if getattr(self, 'translate_combo', None) else "Indonesian"
-            summary_lbl.setText(f"Target: {target_lang}  ·  Inpaint: {inpaint_name}")
+            summary_lbl.setText(f"Target: {target_lang}  ·  Inpaint: {inpaint_short}")
 
     def _create_full_translate_tab(self):
         """Tab khusus 'Full': one-click full-page auto translation dengan UI modern."""
@@ -303,6 +305,52 @@ class TranslateMixin:
 
         full_layout.addWidget(self.full_pick_pages_btn)
 
+        inpaint_eng_lbl = QLabel(InpaintText.WORKSPACE_ENGINE_LABEL)
+        inpaint_eng_lbl.setStyleSheet(_lbl_style)
+        full_layout.addWidget(inpaint_eng_lbl)
+        self.full_inpaint_engine_combo = QComboBox()
+        self._populate_inpaint_engine_combo(self.full_inpaint_engine_combo, "full")
+        self._fit_workspace_combo(self.full_inpaint_engine_combo, 12)
+        self.full_inpaint_engine_combo.setToolTip(
+            "Pilih model inpainting terpadu yang dipakai untuk Full-Page Translate dan Inpainting Brush."
+        )
+        self.full_inpaint_engine_combo.currentIndexChanged.connect(
+            lambda *_: self._on_inpaint_engine_changed(self.full_inpaint_engine_combo)
+        )
+        full_layout.addWidget(self.full_inpaint_engine_combo)
+
+        self.full_inpaint_status_row = QWidget()
+        self.full_inpaint_status_row.setMinimumWidth(0)
+        full_status_hl = QHBoxLayout(self.full_inpaint_status_row)
+        full_status_hl.setContentsMargins(0, 0, 0, 0)
+        full_status_hl.setSpacing(6)
+        self.full_inpaint_status_label = QLabel("")
+        self.full_inpaint_status_label.setMinimumWidth(0)
+        self.full_inpaint_status_label.setWordWrap(True)
+        self.full_inpaint_status_label.setStyleSheet(
+            f"color: {theme.COLORS['warning']}; font-size: 8pt;"
+        )
+        full_status_hl.addWidget(self.full_inpaint_status_label, 1)
+        self.full_inpaint_download_btn = QPushButton(InpaintText.BTN_DOWNLOAD_INLINE)
+        self.full_inpaint_download_btn.setMinimumWidth(0)
+        self.full_inpaint_download_btn.setStyleSheet("padding: 4px 10px;")
+        self.full_inpaint_download_btn.setIcon(app_icon("download", theme.COLORS['accent'], 13))
+        self.full_inpaint_download_btn.setIconSize(QSize(13, 13))
+        self.full_inpaint_download_btn.setToolTip("Unduh model inpainting Full-Page langsung tanpa membuka Settings.")
+        self.full_inpaint_download_btn.clicked.connect(
+            lambda: self._download_selected_workspace_inpaint_engine("full")
+        )
+        full_status_hl.addWidget(self.full_inpaint_download_btn)
+        self.full_inpaint_status_row.setVisible(False)
+        full_layout.addWidget(self.full_inpaint_status_row)
+
+        self.full_inpaint_dl_bar = QProgressBar()
+        self.full_inpaint_dl_bar.setFixedHeight(6)
+        self.full_inpaint_dl_bar.setRange(0, 100)
+        self.full_inpaint_dl_bar.setTextVisible(False)
+        self.full_inpaint_dl_bar.setVisible(False)
+        full_layout.addWidget(self.full_inpaint_dl_bar)
+
         self.full_mode_hint_label = QLabel("")
         self.full_mode_hint_label.setWordWrap(True)
         self.full_mode_hint_label.setMinimumWidth(0)
@@ -346,7 +394,7 @@ class TranslateMixin:
         inpaint_restore_row.addWidget(self.full_cancel_page_inpaint_btn)
         layout.addWidget(recovery_group)
 
-        self._update_full_tab_hints()
+        self._refresh_inpaint_summary_badges()
         layout.addStretch()
         return tab
 

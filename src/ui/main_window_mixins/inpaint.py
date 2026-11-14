@@ -233,26 +233,128 @@ class InpaintMixin:
             ):
                 self.show_toast("OCR Queued", "OCR and translation queued for the painted area.", kind="info")
 
-        self.show_toast("Inpainting...", "Running AI Inpainting on painted area...", kind="info")
+        if getattr(self, '_inpaint_brush_worker', None) is not None:
+            self.show_toast("Inpainting Aktif", "Tunggu proses inpainting sebelumnya selesai.", kind="info")
+            return
+
+        current_cfg = self.get_current_settings()
+        try:
+            from src.core.inpaint import engine_display_label, resolve_inpaint_engine_id
+            brush_eid = resolve_inpaint_engine_id(current_cfg)
+            brush_label = engine_display_label(brush_eid, short=True)
+        except Exception:
+            brush_label = "AI Inpainting"
+        self.show_toast("Inpainting...", f"Menjalankan {brush_label} pada area kuas...", kind="info")
         if hasattr(self, 'inpaint_confirm_button'):
             self.inpaint_confirm_button.setEnabled(False)
+            self.inpaint_confirm_button.setText(InpaintText.BTN_CLEAN_RUNNING)
+
+        self._start_inpaint_brush_progress_ui(brush_label)
 
         from src.core.workers import InpaintBrushWorker
-        worker = InpaintBrushWorker(self, clean_base, pil_mask, self.get_current_settings())
-        worker.signals.progress.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
+        worker = InpaintBrushWorker(self, clean_base, pil_mask, current_cfg)
+        if hasattr(worker.signals, 'progress_percent'):
+            worker.signals.progress_percent.connect(self._on_inpaint_brush_progress_percent)
+        elif hasattr(worker.signals, 'progress'):
+            worker.signals.progress.connect(lambda msg: self._on_inpaint_brush_progress_percent(-1, msg))
+        if hasattr(worker.signals, 'cancelled'):
+            worker.signals.cancelled.connect(self._on_inpaint_brush_cancelled)
         worker.signals.error.connect(self._on_inpaint_brush_error)
         worker.signals.finished.connect(self._on_inpaint_brush_finished)
         worker.finished.connect(self._on_inpaint_brush_thread_finished)
         self._inpaint_brush_worker = worker
-        worker.start()
+        try:
+            worker.start(QThread.LowPriority)
+        except TypeError:
+            worker.start()
+
+    def _start_inpaint_brush_progress_ui(self, brush_label: str):
+        self._inpaint_job_started_ts = time.monotonic()
+        timer = getattr(self, '_inpaint_elapsed_timer', None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(1000)
+            timer.timeout.connect(self._tick_inpaint_elapsed_timer)
+            self._inpaint_elapsed_timer = timer
+        if getattr(self, 'inpaint_running_label', None) is not None:
+            self.inpaint_running_label.setText(f"Menyiapkan {brush_label}...")
+        if getattr(self, 'inpaint_elapsed_label', None) is not None:
+            self.inpaint_elapsed_label.setText("0 dtk")
+        if getattr(self, 'inpaint_running_bar', None) is not None:
+            self.inpaint_running_bar.setRange(0, 0)
+        if getattr(self, 'inpaint_cancel_job_btn', None) is not None:
+            self.inpaint_cancel_job_btn.setEnabled(True)
+            self.inpaint_cancel_job_btn.setText(InpaintText.BTN_CANCEL_JOB)
+        if getattr(self, 'inpaint_running_panel', None) is not None:
+            self.inpaint_running_panel.setVisible(True)
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(f"Menyiapkan {brush_label}...", 0)
+        timer.start()
+
+    def _tick_inpaint_elapsed_timer(self):
+        started = getattr(self, '_inpaint_job_started_ts', None)
+        if started is None:
+            return
+        secs = max(0, int(time.monotonic() - float(started)))
+        lbl = getattr(self, 'inpaint_elapsed_label', None)
+        if lbl is not None:
+            lbl.setText(f"{secs} dtk")
+
+    def _on_inpaint_brush_progress_percent(self, pct: int, msg: str):
+        text = str(msg or InpaintText.JOB_STATUS_STARTED)
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(text, 0)
+        lbl = getattr(self, 'inpaint_running_label', None)
+        if lbl is not None:
+            lbl.setText(text)
+        bar = getattr(self, 'inpaint_running_bar', None)
+        if bar is not None:
+            if int(pct) >= 0:
+                bar.setRange(0, 100)
+                bar.setValue(max(0, min(100, int(pct))))
+            else:
+                bar.setRange(0, 0)
+
+    def _cancel_inpaint_brush_job(self):
+        worker = getattr(self, '_inpaint_brush_worker', None)
+        if worker is None:
+            return
+        try:
+            worker.cancel()
+        except Exception:
+            pass
+        if getattr(self, 'inpaint_cancel_job_btn', None) is not None:
+            self.inpaint_cancel_job_btn.setEnabled(False)
+        if getattr(self, 'inpaint_running_label', None) is not None:
+            self.inpaint_running_label.setText(InpaintText.BRUSH_CANCELLING)
+        if getattr(self, 'inpaint_running_bar', None) is not None:
+            self.inpaint_running_bar.setRange(0, 0)
+
+    def _finish_inpaint_brush_ui(self, final_status: str = "", timeout_ms: int = 3000):
+        timer = getattr(self, '_inpaint_elapsed_timer', None)
+        if timer is not None:
+            timer.stop()
+        self._inpaint_job_started_ts = None
+        if hasattr(self, 'inpaint_confirm_button'):
+            self.inpaint_confirm_button.setEnabled(True)
+            self.inpaint_confirm_button.setText(InpaintText.BTN_CLEAN_LABEL)
+        if getattr(self, 'inpaint_running_panel', None) is not None:
+            self.inpaint_running_panel.setVisible(False)
+        if getattr(self, 'inpaint_running_bar', None) is not None:
+            self.inpaint_running_bar.setRange(0, 0)
+        if final_status and hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(final_status, timeout_ms)
+
+    def _on_inpaint_brush_cancelled(self):
+        self._finish_inpaint_brush_ui(InpaintText.BRUSH_CANCELLED, 3500)
+        self.show_toast("Dibatalkan", InpaintText.BRUSH_CANCELLED, kind="info")
 
     def _on_inpaint_brush_thread_finished(self):
         # Lepas referensi hanya setelah QThread benar-benar selesai (aturan thread safety repo)
         self._inpaint_brush_worker = None
 
     def _on_inpaint_brush_error(self, err_msg):
-        if hasattr(self, 'inpaint_confirm_button'):
-            self.inpaint_confirm_button.setEnabled(True)
+        self._finish_inpaint_brush_ui(f"Inpainting gagal: {err_msg}", 4500)
         self.show_banner("inpaint-brush-err", "Inpainting Failed", f"Error: {err_msg}", kind="error")
 
     def _current_inpaint_record(self):
@@ -446,8 +548,7 @@ class InpaintMixin:
         self.show_toast("Inpainting Cancelled", "Restored the page before inpainting.", kind="success")
 
     def _on_inpaint_brush_finished(self, result_pil):
-        if hasattr(self, 'inpaint_confirm_button'):
-            self.inpaint_confirm_button.setEnabled(True)
+        self._finish_inpaint_brush_ui("Inpaint brush selesai.", 3000)
         try:
             key = self.get_current_data_key()
             record = self.all_typeset_data.get(key, {}) if key else {}
@@ -470,6 +571,8 @@ class InpaintMixin:
 
             self.redraw_all_typeset_areas()
             self._refresh_inpaint_result_controls()
+            if hasattr(self, '_refresh_inpaint_summary_badges'):
+                self._refresh_inpaint_summary_badges()
             self.show_toast("Inpaint Cleaned", "Background area cleaned successfully.", kind="success")
         except Exception as e:
             self._on_inpaint_brush_error(str(e))

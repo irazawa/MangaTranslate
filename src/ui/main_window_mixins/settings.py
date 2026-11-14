@@ -123,11 +123,12 @@ class SettingsMixin:
             if getattr(self, 'ai_only_translate_checkbox', None) is not None:
                 self.ai_only_translate_checkbox.setChecked(default_ai_only)
 
-            # 3. Cleanup toggles synced from Settings
+            # 3. Cleanup toggles & engines synced from Settings
             cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
             if getattr(self, 'inpaint_checkbox', None) is not None and not getattr(self, 'selected_typeset_area', None):
                 with QSignalBlocker(self.inpaint_checkbox):
                     self.inpaint_checkbox.setChecked(bool(cleanup_cfg.get('use_inpaint', True)))
+            self._sync_inpaint_engine_combos()
             self._refresh_inpaint_summary_badges()
 
             # 4. AI Model default
@@ -286,15 +287,238 @@ class SettingsMixin:
         SETTINGS['ai_model_overrides'] = overrides
         save_settings(SETTINGS)
 
+    def _populate_inpaint_engine_combo(
+        self,
+        combo,
+        context: str = "full",
+        sd_repo: str | None = None,
+        option_cache: dict | None = None,
+    ):
+        if combo is None:
+            return
+        current_eid = combo.currentData()
+        with QSignalBlocker(combo):
+            combo.clear()
+            for spec in list_inpaint_engines(context):
+                if option_cache is not None and spec.id in option_cache:
+                    text, badge, ready = option_cache[spec.id]
+                else:
+                    text, badge, ready = format_inpaint_engine_option(spec)
+                    if option_cache is not None:
+                        option_cache[spec.id] = (text, badge, ready)
+                dot_color = (
+                    theme.COLORS['muted']
+                    if spec.id == "iopaint_server"
+                    else (theme.COLORS['success'] if ready else theme.COLORS['warning'])
+                )
+                combo.addItem(status_dot_icon(dot_color, 8), text, spec.id)
+                idx = combo.count() - 1
+                tip = f"{spec.label}\nStatus: {badge}\n{spec.description}"
+                combo.setItemData(idx, tip, Qt.ToolTipRole)
+            if current_eid:
+                sel = combo.findData(current_eid)
+                if sel != -1:
+                    combo.setCurrentIndex(sel)
+
+    def _refresh_all_inpaint_engine_combos(self, sd_repo: str | None = None, option_cache: dict | None = None):
+        cache = option_cache if option_cache is not None else {}
+        for attr_name in (
+            'full_inpaint_engine_combo',
+            'cleanup_inpaint_engine_combo',
+            'brush_inpaint_engine_combo',
+        ):
+            combo = getattr(self, attr_name, None)
+            if combo is not None:
+                self._populate_inpaint_engine_combo(combo, context="full", option_cache=cache)
+        self._sync_inpaint_engine_combos()
+
+    def _sync_inpaint_engine_combos(self):
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        unified_eid = resolve_inpaint_engine_id(cleanup_cfg)
+
+        for attr_name in (
+            'full_inpaint_engine_combo',
+            'cleanup_inpaint_engine_combo',
+            'brush_inpaint_engine_combo',
+        ):
+            combo = getattr(self, attr_name, None)
+            if combo is None:
+                continue
+            with QSignalBlocker(combo):
+                idx = combo.findData(unified_eid)
+                if idx != -1:
+                    combo.setCurrentIndex(idx)
+
+    def _notify_inpaint_engine_selection(self, engine_id: str, role_label: str = "Full & Brush"):
+        spec = get_inpaint_spec(engine_id)
+        if not is_engine_ready(spec.id):
+            msg = (
+                f"{role_label}: {spec.short_label} ({spec.size_hint}) belum ada di lokal. "
+                "Klik tombol Unduh atau biarkan terunduh otomatis saat dijalankan."
+            )
+            if hasattr(self, 'show_toast'):
+                self.show_toast("Model Inpaint", msg, kind="info")
+
+    def _set_inpaint_engine(self, engine_id: str, *, persist: bool = True, notify: bool = False):
+        norm_id = normalize_inpaint_engine_id(engine_id, default=DEFAULT_INPAINT_ENGINE)
+        cleanup_cfg = SETTINGS.setdefault('cleanup', {})
+        cleanup_cfg['inpaint_engine'] = norm_id
+        cleanup_cfg['full_inpaint_engine'] = norm_id
+        cleanup_cfg['brush_inpaint_engine'] = norm_id
+        cleanup_cfg['inpaint_model_name'] = engine_display_label(norm_id)
+        if persist:
+            save_settings(SETTINGS)
+        self._refresh_inpaint_summary_badges()
+        if notify:
+            self._notify_inpaint_engine_selection(norm_id, "Inpainting Model")
+
+    def _set_full_inpaint_engine(self, engine_id: str, *, persist: bool = True, notify: bool = False):
+        self._set_inpaint_engine(engine_id, persist=persist, notify=notify)
+
+    def _set_brush_inpaint_engine(self, engine_id: str, *, persist: bool = True, notify: bool = False):
+        self._set_inpaint_engine(engine_id, persist=persist, notify=notify)
+
+    def _on_inpaint_engine_changed(self, combo=None):
+        src = combo if combo is not None else self.sender()
+        eid = src.currentData() if src is not None else None
+        if eid:
+            self._set_inpaint_engine(str(eid), persist=True, notify=True)
+
+    def _on_full_inpaint_engine_changed(self, combo=None):
+        self._on_inpaint_engine_changed(combo)
+
+    def _on_brush_inpaint_engine_changed(self, combo=None):
+        self._on_inpaint_engine_changed(combo)
+
     def _refresh_inpaint_summary_badges(self):
         cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
-        model_name = cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
-        server_url = cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL)
+        unified_eid = resolve_inpaint_engine_id(cleanup_cfg)
+        hw_label = "GPU CUDA" if getattr(self, 'is_gpu_available', False) else "CPU"
+        option_cache: dict = {}
+
+        self._refresh_all_inpaint_engine_combos(option_cache=option_cache)
+
+        spec_obj = get_inpaint_spec(unified_eid)
+        _, badge, is_ready_flag = option_cache.get(
+            unified_eid, format_inpaint_engine_option(spec_obj)
+        )
+        dl_active = getattr(self, '_workspace_inpaint_dl_worker', None) is not None
+
         summary_lbl = getattr(self, 'cleanup_inpaint_summary_label', None)
         if summary_lbl is not None:
-            summary_lbl.setText(f"Active Engine: {model_name}\nServer URL: {server_url}")
+            summary_lbl.setText(
+                f"Full & Brush: {spec_obj.short_label} ({badge})\n"
+                f"Mode Hardware: {hw_label}"
+            )
+
+        needs_dl = bool(spec_obj.needs_download and not is_ready_flag)
+        for row_attr, lbl_attr, btn_attr in (
+            ('full_inpaint_status_row', 'full_inpaint_status_label', 'full_inpaint_download_btn'),
+            ('brush_inpaint_status_row', 'brush_inpaint_status_label', 'brush_inpaint_download_btn'),
+        ):
+            row_w = getattr(self, row_attr, None)
+            lbl_w = getattr(self, lbl_attr, None)
+            btn_w = getattr(self, btn_attr, None)
+            if row_w is not None:
+                row_w.setVisible(needs_dl)
+            if lbl_w is not None and needs_dl:
+                lbl_w.setText(
+                    InpaintText.BADGE_MISSING_FMT.format(
+                        name=spec_obj.short_label,
+                        size=spec_obj.size_hint,
+                    )
+                )
+            if btn_w is not None:
+                btn_w.setEnabled(needs_dl and not dl_active)
+                btn_w.setText(InpaintText.BTN_DOWNLOADING if dl_active else InpaintText.BTN_DOWNLOAD_INLINE)
+
+        dl_missing_btn = getattr(self, 'cleanup_download_missing_btn', None)
+        if dl_missing_btn is not None:
+            dl_missing_btn.setVisible(needs_dl)
+            if needs_dl:
+                dl_missing_btn.setText(
+                    InpaintText.BTN_DOWNLOADING
+                    if dl_active
+                    else InpaintText.BTN_DOWNLOAD_MISSING_FMT.format(names=spec_obj.short_label)
+                )
+                dl_missing_btn.setEnabled(not dl_active)
+
         if hasattr(self, '_update_full_tab_hints'):
             self._update_full_tab_hints()
+
+    def _download_selected_workspace_inpaint_engine(self, role: str = "full"):
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        target = resolve_inpaint_engine_id(cleanup_cfg)
+        spec = get_inpaint_spec(target)
+        if not spec.needs_download or is_engine_ready(target):
+            self._refresh_inpaint_summary_badges()
+            return
+        self._start_workspace_inpaint_download(target)
+
+    def _download_next_missing_inpaint_engine(self):
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        missing = get_missing_engine_ids(cleanup_cfg)
+        if not missing:
+            self._refresh_inpaint_summary_badges()
+            return
+        self._start_workspace_inpaint_download(missing[0])
+
+    def _start_workspace_inpaint_download(self, engine_id: str):
+        if getattr(self, '_workspace_inpaint_dl_worker', None) is not None:
+            if hasattr(self, 'show_toast'):
+                self.show_toast("Unduhan Aktif", "Tunggu unduhan model sebelumnya selesai dulu.", kind="info")
+            return
+        cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
+        norm_id = normalize_inpaint_engine_id(engine_id)
+        label = engine_display_label(norm_id, short=True)
+
+        for bar_attr in ('full_inpaint_dl_bar', 'cleanup_inpaint_dl_bar'):
+            bar = getattr(self, bar_attr, None)
+            if bar is not None:
+                bar.setRange(0, 100)
+                bar.setValue(0)
+                bar.setVisible(True)
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(InpaintText.DOWNLOAD_STARTED_FMT.format(name=label), 0)
+        if hasattr(self, 'show_toast'):
+            self.show_toast("Mengunduh Model", InpaintText.DOWNLOAD_STARTED_FMT.format(name=label), kind="info")
+
+        from src.core.workers import InpaintModelDownloadWorker
+        worker = InpaintModelDownloadWorker(norm_id)
+        worker.progress.connect(self._on_workspace_inpaint_dl_progress)
+        worker.finished_ok.connect(self._on_workspace_inpaint_dl_finished)
+        worker.finished.connect(self._on_workspace_inpaint_dl_thread_done)
+        self._workspace_inpaint_dl_worker = worker
+        self._refresh_inpaint_summary_badges()
+        worker.start()
+
+    def _on_workspace_inpaint_dl_progress(self, pct: int, msg: str):
+        val = max(0, min(100, int(pct)))
+        for bar_attr in ('full_inpaint_dl_bar', 'cleanup_inpaint_dl_bar'):
+            bar = getattr(self, bar_attr, None)
+            if bar is not None:
+                bar.setValue(val)
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(f"{msg} ({val}%)", 0)
+
+    def _on_workspace_inpaint_dl_finished(self, engine_id: str, success: bool, detail: str):
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage(detail, 4500)
+        if hasattr(self, 'show_toast'):
+            self.show_toast(
+                "Model Siap" if success else "Unduhan Gagal",
+                detail,
+                kind="success" if success else "warning",
+            )
+
+    def _on_workspace_inpaint_dl_thread_done(self):
+        self._workspace_inpaint_dl_worker = None
+        for bar_attr in ('full_inpaint_dl_bar', 'cleanup_inpaint_dl_bar'):
+            bar = getattr(self, bar_attr, None)
+            if bar is not None:
+                bar.setVisible(False)
+                bar.setValue(0)
+        self._refresh_inpaint_summary_badges()
 
     def get_current_settings(self):
         ocr_combo = getattr(self, 'ocr_lang_combo', None)
@@ -322,13 +546,14 @@ class SettingsMixin:
         selected_model_label = selected_model_info.get('display') or selected_model_info.get('name')
 
         cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
-        inpaint_combo = getattr(self, 'inpaint_model_combo', None)
-        inpaint_model_text = inpaint_combo.currentText() if inpaint_combo is not None else cleanup_cfg.get('inpaint_model_name', 'IOPaint Server')
+        unified_eid = resolve_inpaint_engine_id(cleanup_cfg)
+        for attr_name in ('full_inpaint_engine_combo', 'cleanup_inpaint_engine_combo', 'brush_inpaint_engine_combo'):
+            combo = getattr(self, attr_name, None)
+            if combo is not None and combo.currentData():
+                unified_eid = normalize_inpaint_engine_id(combo.currentData(), default=unified_eid)
+                break
+        inpaint_model_text = engine_display_label(unified_eid)
         inpaint_model_key = None
-        if "Big-LaMa" in inpaint_model_text:
-            inpaint_model_key = 'big_lama'
-        elif "Anime" in inpaint_model_text:
-            inpaint_model_key = 'anime_inpaint'
 
         inpaint_pad_spin = getattr(self, 'inpaint_padding_spinbox', None)
         inpaint_padding_val = int(inpaint_pad_spin.value()) if inpaint_pad_spin is not None else int(cleanup_cfg.get('inpaint_padding', 5) or 5)
@@ -388,8 +613,12 @@ class SettingsMixin:
             'use_gpu': bool(gpu_cb.isChecked()) if gpu_cb is not None else bool(getattr(self, 'is_gpu_available', False)),
             # Optimasi CPU / Cleanup
             'use_inpaint': use_inpaint_value,
+            'inpaint_engine': unified_eid,
+            'full_inpaint_engine': unified_eid,
+            'brush_inpaint_engine': unified_eid,
             'inpaint_model_name': inpaint_model_text,
             'inpaint_model_key': inpaint_model_key,
+            'inpaint_device': cleanup_cfg.get('inpaint_device', 'auto'),
             'inpaint_server_url': cleanup_cfg.get('inpaint_server_url', DEFAULT_INPAINT_SERVER_URL),
             'inpaint_server_timeout': cleanup_cfg.get('inpaint_server_timeout', DEFAULT_INPAINT_SERVER_TIMEOUT),
             'inpaint_padding': inpaint_padding_val,

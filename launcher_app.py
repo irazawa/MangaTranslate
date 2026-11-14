@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -108,6 +109,24 @@ def _stop_inpainting(proc):
             pass
 
 
+def _should_start_external_inpainting(base_dir):
+    settings_path = os.path.join(base_dir, "settings.json")
+    if not os.path.isfile(settings_path):
+        return False
+    try:
+        with open(settings_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        cleanup = data.get("cleanup", {}) if isinstance(data, dict) else {}
+        unified_eng = str(cleanup.get("inpaint_engine", "") or "").strip().lower()
+        if unified_eng:
+            return unified_eng == "iopaint_server"
+        full_eng = str(cleanup.get("full_inpaint_engine", "") or "").strip().lower()
+        brush_eng = str(cleanup.get("brush_inpaint_engine", "") or "").strip().lower()
+        return full_eng == "iopaint_server" or brush_eng == "iopaint_server"
+    except Exception:
+        return False
+
+
 def _run_main_app(base_dir):
     python_exe, pythonw_exe = _venv_python_paths(base_dir)
     launcher_python = pythonw_exe if os.path.exists(pythonw_exe) else python_exe
@@ -119,7 +138,9 @@ def _run_main_app(base_dir):
         _message_box("MangaTranslate", "main.py tidak ditemukan di folder aplikasi.")
         return 1
 
-    inpainting_proc = _start_inpainting(base_dir)
+    # Built-in Big-LaMa / Manga Inpaintor / MI-GAN / SD berjalan in-process.
+    # Jalankan Inpainting\run.bat hanya jika user secara eksplisit memilih iopaint_server.
+    inpainting_proc = _start_inpainting(base_dir) if _should_start_external_inpainting(base_dir) else None
     try:
         app_proc = subprocess.Popen([launcher_python, main_py], cwd=base_dir)
         return app_proc.wait()

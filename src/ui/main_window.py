@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.2
+# Manga OCR & Typeset Tool v14.9.9.3
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -627,7 +627,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self.queue_mutex = QMutex()
 
         # Mutex to protect painting operations that use QPixmap/QImage paint devices
-        self.paint_mutex = QMutex()
+        self.paint_mutex = QMutex(QMutex.Recursive)
 
         self.batch_save_worker = None
         self.batch_save_thread = None
@@ -4538,7 +4538,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                         continue
                     if not getattr(area, 'visible', True):
                         continue
-                    self.draw_single_area(painter, area, self.current_image_pil, for_saving=True, settings=settings)
+                    self.draw_single_area(painter, area, self.current_image_pil, for_saving=False, settings=settings)
             finally:
                 try:
                     painter.end()
@@ -4816,128 +4816,135 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         cleanup_polygon = area.get_cleanup_polygon()
         text_rect = area.get_text_rect()
 
-        cv_original = cv2.cvtColor(np.array(source_pil_image), cv2.COLOR_RGB2BGR)
-        img_height, img_width = cv_original.shape[:2]
+        cv_original = None
+        if use_inpaint or use_box:
+            cv_original = cv2.cvtColor(np.array(source_pil_image), cv2.COLOR_RGB2BGR)
+            img_height, img_width = cv_original.shape[:2]
 
-        # 1. Buat mask dari bentuk area (polygon atau rectangle)
+            # 1. Buat mask dari bentuk area (polygon atau rectangle)
+            base_mask = np.zeros(cv_original.shape[:2], dtype=np.uint8)
+            if cleanup_polygon:
+                cv_poly_points = np.array([[p.x(), p.y()] for p in cleanup_polygon], dtype=np.int32)
+                cv2.fillPoly(base_mask, [cv_poly_points], 255)
+            else:
+                cv2.rectangle(base_mask,
+                            (cleanup_rect.x(), cleanup_rect.y()),
+                            (cleanup_rect.right(), cleanup_rect.bottom()),
+                            255, -1)
 
-        base_mask = np.zeros(cv_original.shape[:2], dtype=np.uint8)
-        if cleanup_polygon:
-            cv_poly_points = np.array([[p.x(), p.y()] for p in cleanup_polygon], dtype=np.int32)
-            cv2.fillPoly(base_mask, [cv_poly_points], 255)
-        else:
-            cv2.rectangle(base_mask,
-                        (cleanup_rect.x(), cleanup_rect.y()),
-                        (cleanup_rect.right(), cleanup_rect.bottom()),
-                        255, -1)
+            # 2. Gunakan bubble detector (skip heavy DL model on interactive GUI redraws)
+            bubble_mask = self.find_speech_bubble_mask(
+                cv_original,
+                cleanup_rect,
+                settings,
+                for_saving=for_saving,
+                allow_dl=bool(for_saving),
+            )
 
-        # 2. Gunakan bubble detector
-        if skip_heavy_cleanup:
-            bubble_mask = None
-            use_inpaint = False
-        else:
-            bubble_mask = self.find_speech_bubble_mask(cv_original, cleanup_rect, settings, for_saving=for_saving)
+            # 3. Gabungkan mask area dengan mask bubble
+            combined_mask = cv2.bitwise_and(base_mask, bubble_mask) if bubble_mask is not None else base_mask
 
-        # 3. Gabungkan mask area dengan mask bubble
-        combined_mask = cv2.bitwise_and(base_mask, bubble_mask) if bubble_mask is not None else base_mask
+            # 4. Tambahkan padding
+            padding = settings['inpaint_padding']
+            kernel = np.ones((max(1, padding), max(1, padding)), np.uint8)
+            final_inpaint_mask = cv2.dilate(combined_mask, kernel, iterations=1)
 
-        # 4. Tambahkan padding
-        padding = settings['inpaint_padding']
-        kernel = np.ones((max(1, padding), max(1, padding)), np.uint8)
-        final_inpaint_mask = cv2.dilate(combined_mask, kernel, iterations=1)
+            # 5. Proses Inpainting
+            if use_inpaint:
+                inpainted_patch = None  # (x1, y1, rgb_contiguous_array)
+                # Never block interactive canvas redraws on heavy AI/network inpaint engines;
+                # background export workers pass for_saving=True.
+                if for_saving:
+                    try:
+                        from src.core.inpaint import (
+                            get_inpaint_manager,
+                            is_engine_ready,
+                            resolve_inpaint_engine_id,
+                        )
 
-        # 5. Proses Inpainting
-        if use_inpaint:
-            inpainted_cv = None
+                        area_engine = resolve_inpaint_engine_id(settings)
+                        if (
+                            area_engine not in ('opencv_ns', 'opencv_telea', 'iopaint_server')
+                            and is_engine_ready(area_engine)
+                        ):
+                            pil_original = Image.fromarray(cv2.cvtColor(cv_original, cv2.COLOR_BGR2RGB))
+                            pil_mask = Image.fromarray((final_inpaint_mask > 0).astype(np.uint8) * 255).convert("L")
+                            out_pil = get_inpaint_manager().inpaint(
+                                pil_original,
+                                pil_mask,
+                                engine_id=area_engine,
+                                device=str(settings.get('inpaint_device', 'auto') or 'auto'),
+                                auto_download=False,
+                            )
+                            rgb_full = np.ascontiguousarray(np.array(out_pil.convert("RGB")))
+                            inpainted_patch = (0, 0, rgb_full)
+                    except Exception as e:
+                        print(f"Integrated per-area inpainting failed: {e}")
+                        inpainted_patch = None
 
-            # Coba advanced inpainting dengan LaMa
-            model_key = settings.get('inpaint_model_key')
-            if model_key:
-                try:
-                    if (self.inpaint_model is None or
-                        self.current_inpaint_model_key != model_key):
-                        self.initialize_inpaint_engine(settings)
+                # Fallback / fast interactive OpenCV inpaint (cropped ROI for responsiveness)
+                if inpainted_patch is None:
+                    try:
+                        algo_map = {"OpenCV-NS": cv2.INPAINT_NS, "OpenCV-Telea": cv2.INPAINT_TELEA}
+                        algo = algo_map.get(settings.get('inpaint_model_name', 'OpenCV-NS'), cv2.INPAINT_NS)
+                        ys, xs = np.nonzero(final_inpaint_mask)
+                        if ys.size > 0:
+                            roi_pad = 24
+                            x1 = max(0, int(xs.min()) - roi_pad)
+                            y1 = max(0, int(ys.min()) - roi_pad)
+                            x2 = min(img_width, int(xs.max()) + 1 + roi_pad)
+                            y2 = min(img_height, int(ys.max()) + 1 + roi_pad)
+                            roi_mask = (final_inpaint_mask[y1:y2, x1:x2] > 0).astype(np.uint8) * 255
+                            roi_cv = cv2.inpaint(cv_original[y1:y2, x1:x2], roi_mask, 3, algo)
+                            if roi_cv.dtype != np.uint8:
+                                roi_cv = np.clip(roi_cv, 0, 255).astype(np.uint8)
+                            rgb_roi = np.ascontiguousarray(cv2.cvtColor(roi_cv, cv2.COLOR_BGR2RGB))
+                            inpainted_patch = (x1, y1, rgb_roi)
+                    except Exception as e:
+                        print(f"OpenCV inpainting also failed: {e}")
+                        background_color = self.get_background_color(cv_original, cleanup_rect)
+                        use_box_global = bool(area.get_override('use_background_box', default_background_box))
+                        if use_box_global:
+                            painter.save()
+                            path = QPainterPath()
+                            contours, _ = cv2.findContours(final_inpaint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            for cnt in contours:
+                                polygon = QPolygonF([QPoint(p[0][0], p[0][1]) for p in cnt])
+                                path.addPolygon(polygon)
+                            painter.setClipPath(path)
+                            painter.fillRect(painter.window(), background_color)
+                            painter.restore()
+                            return
 
-                    if self.inpaint_model:
-                        pil_original = Image.fromarray(cv2.cvtColor(cv_original, cv2.COLOR_BGR2RGB))
-                        pil_mask = Image.fromarray((final_inpaint_mask > 0).astype(np.uint8) * 255).convert("L")
+                # Gambar hasil inpainting
+                if inpainted_patch is not None:
+                    patch_x, patch_y, rgb_patch = inpainted_patch
+                    h, w, ch = rgb_patch.shape
+                    bytes_per_line = ch * w
+                    inpainted_qimage = QImage(rgb_patch.data, w, h, bytes_per_line, QImage.Format_RGB888)
 
-                        out_arr = self.inpaint_model(pil_original, pil_mask)
-                        if out_arr is None:
-                            raise RuntimeError("LaMa inpaint returned None")
+                    painter.save()
+                    clip_path = QPainterPath()
+                    contours, _ = cv2.findContours(final_inpaint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for cnt in contours:
+                        polygon = QPolygonF([QPoint(p[0][0], p[0][1]) for p in cnt])
+                        clip_path.addPolygon(polygon)
+                    painter.setClipPath(clip_path)
+                    painter.drawImage(patch_x, patch_y, inpainted_qimage)
+                    painter.restore()
 
-                        if isinstance(out_arr, np.ndarray):
-                            if out_arr.shape[2] == 3:
-                                inpainted_cv = cv2.cvtColor(out_arr, cv2.COLOR_BGR2RGB)
-                                inpainted_cv = cv2.cvtColor(inpainted_cv, cv2.COLOR_RGB2BGR)
-                            else:
-                                inpainted_cv = out_arr
-                        else:
-                            try:
-                                inpainted_cv = cv2.cvtColor(np.array(out_arr.convert("RGB")), cv2.COLOR_RGB2BGR)
-                            except Exception:
-                                inpainted_cv = None
-
-                except Exception as e:
-                    print(f"Advanced inpainting failed: {e}")
-                    inpainted_cv = None
-
-            # Fallback ke OpenCV
-            if inpainted_cv is None:
-                try:
-                    algo_map = {"OpenCV-NS": cv2.INPAINT_NS, "OpenCV-Telea": cv2.INPAINT_TELEA}
-                    algo = algo_map.get(settings.get('inpaint_model_name', 'OpenCV-NS'), cv2.INPAINT_NS)
-                    inpaint_mask_for_cv = (final_inpaint_mask > 0).astype(np.uint8) * 255
-                    inpainted_cv = cv2.inpaint(cv_original, inpaint_mask_for_cv, 3, algo)
-                except Exception as e:
-                    print(f"OpenCV inpainting also failed: {e}")
-                    background_color = self.get_background_color(cv_original, cleanup_rect)
-                    use_box_global = bool(area.get_override('use_background_box', default_background_box))
-                    if use_box_global:
-                        painter.save()
-                        path = QPainterPath()
-                        contours, _ = cv2.findContours(final_inpaint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        for cnt in contours:
-                            polygon = QPolygonF([QPoint(p[0][0], p[0][1]) for p in cnt])
-                            path.addPolygon(polygon)
-                        painter.setClipPath(path)
-                        painter.fillRect(painter.window(), background_color)
-                        painter.restore()
-                        return
-
-            # Gambar hasil inpainting
-            if inpainted_cv is not None:
-                if inpainted_cv.dtype != np.uint8:
-                    inpainted_cv = (np.clip(inpainted_cv, 0, 255)).astype(np.uint8)
-
-                rgb_img = cv2.cvtColor(inpainted_cv, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_img.shape
-                bytes_per_line = ch * w
-                inpainted_qimage = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
+            else:
+                # CLEANUP MANUAL (tanpa inpainting)
+                background_color = self.get_background_color(cv_original, cleanup_rect)
                 painter.save()
-                clip_path = QPainterPath()
+                path = QPainterPath()
                 contours, _ = cv2.findContours(final_inpaint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for cnt in contours:
                     polygon = QPolygonF([QPoint(p[0][0], p[0][1]) for p in cnt])
-                    clip_path.addPolygon(polygon)
-                painter.setClipPath(clip_path)
-                painter.drawImage(0, 0, inpainted_qimage)
-                painter.restore()
-
-        else:
-            # CLEANUP MANUAL (tanpa inpainting)
-            background_color = self.get_background_color(cv_original, cleanup_rect)
-            painter.save()
-            path = QPainterPath()
-            contours, _ = cv2.findContours(final_inpaint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in contours:
-                polygon = QPolygonF([QPoint(p[0][0], p[0][1]) for p in cnt])
-                path.addPolygon(polygon)
-            painter.setClipPath(path)
-            if use_box:
+                    path.addPolygon(polygon)
+                painter.setClipPath(path)
                 painter.fillRect(painter.window(), background_color)
-            painter.restore()
+                painter.restore()
 
         # 6. Render bubble (optional) dan text
         rotation = area.get_rotation() if hasattr(area, 'get_rotation') else float(getattr(area, 'rotation', 0.0))
@@ -4958,15 +4965,27 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         # Tetapkan/bersihkan auto text color sesuai setting
         if use_auto:
+            def _sample_bg_color():
+                if cv_original is not None:
+                    return self.get_background_color(cv_original, text_rect)
+                crop_pil = source_pil_image.crop((
+                    text_rect.left(),
+                    text_rect.top(),
+                    text_rect.left() + text_rect.width(),
+                    text_rect.top() + text_rect.height(),
+                ))
+                crop_bgr = cv2.cvtColor(np.array(crop_pil), cv2.COLOR_RGB2BGR)
+                return self.get_background_color(crop_bgr, QRect(0, 0, crop_bgr.shape[1], crop_bgr.shape[0]))
+
             if not use_box:
-                bg_col = self.get_background_color(cv_original, text_rect)
+                bg_col = _sample_bg_color()
                 area._auto_text_color = self._auto_text_color_for_base(bg_col)
             else:
                 bubble_fill = area.get_bubble_fill_color() if getattr(area, 'bubble_enabled', False) else None
                 if bubble_fill and bubble_fill.isValid():
                     area._auto_text_color = self._auto_text_color_for_base(bubble_fill)
                 else:
-                    bg_col = self.get_background_color(cv_original, text_rect)
+                    bg_col = _sample_bg_color()
                     area._auto_text_color = self._auto_text_color_for_base(bg_col)
         else:
             if hasattr(area, '_auto_text_color'):
@@ -7134,7 +7153,18 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         return '\\\\?\\' + norm_path
 
     def wheelEvent(self, event):
-        if self.pdf_document and not (self.detection_thread and self.detection_thread.isRunning()):
+        brush_worker = getattr(self, '_inpaint_brush_worker', None)
+        brush_busy = False
+        if brush_worker is not None:
+            try:
+                brush_busy = bool(brush_worker.isRunning())
+            except RuntimeError:
+                brush_busy = False
+        if (
+            self.pdf_document
+            and not (self.detection_thread and self.detection_thread.isRunning())
+            and not brush_busy
+        ):
             if event.angleDelta().y() < 0: self.load_next_image()
             elif event.angleDelta().y() > 0: self.load_prev_image()
         super().wheelEvent(event)
@@ -9065,47 +9095,68 @@ Input:
             cleaned = None
             nz_count = int(cv2.countNonZero(mask)) if mask is not None else 0
             if nz_count >= 16:
-                model_name = str(self.settings.get('inpaint_model_name', 'IOPaint Server'))
-                if model_name.startswith("IOPaint"):
-                    timeout = max(int(self.settings.get('inpaint_server_timeout') or 0), 600)
-                    server_url = self.settings.get('inpaint_server_url')
-                    h, w = work_bgr.shape[:2]
-                    # Kelompokkan piksel mask yang berdekatan menjadi ROI agar IOPaint
-                    # tidak perlu memproses gambar 1 halaman penuh jika hanya beberapa
-                    # area kecil yang butuh LaMa inpainting.
-                    grp_k = cv2.getStructuringElement(cv2.MORPH_RECT, (65, 65))
-                    grouped = cv2.dilate(mask, grp_k)
-                    num_c, _lbl, stats, _ = cv2.connectedComponentsWithStats(grouped, connectivity=8)
-                    rois = []
-                    pad_roi = 48
-                    total_roi_area = 0
-                    for ci in range(1, num_c):
-                        rx, ry, rw, rh, _area = (int(v) for v in stats[ci])
-                        x1 = max(0, rx - pad_roi)
-                        y1 = max(0, ry - pad_roi)
-                        x2 = min(w, rx + rw + pad_roi)
-                        y2 = min(h, ry + rh + pad_roi)
-                        if cv2.countNonZero(mask[y1:y2, x1:x2]) < 12:
-                            continue
-                        rois.append((x1, y1, x2, y2))
-                        total_roi_area += (x2 - x1) * (y2 - y1)
+                from src.core.inpaint import (
+                    engine_display_label,
+                    get_inpaint_manager,
+                    resolve_inpaint_engine_id,
+                )
 
-                    if rois and total_roi_area < 0.60 * (w * h):
+                engine_id = resolve_inpaint_engine_id(self.settings)
+                engine_label = engine_display_label(engine_id, short=True)
+                timeout = max(int(self.settings.get('inpaint_server_timeout') or 0), 600)
+                server_url = str(self.settings.get('inpaint_server_url') or 'http://127.0.0.1:8080')
+                device = str(self.settings.get('inpaint_device', 'auto') or 'auto')
+                auto_dl = bool(self.settings.get('auto_download_inpaint', True))
+                mgr = get_inpaint_manager()
+
+                def _emit_inpaint_progress(pct: int, msg: str) -> None:
+                    try:
+                        self.progress.emit(min(92, max(65, 65 + int(pct * 0.25))), msg)
+                    except Exception:
+                        pass
+
+                _emit_inpaint_progress(5, f"Menjalankan inpaint full-page ({engine_label})...")
+
+                h, w = work_bgr.shape[:2]
+                # Kelompokkan piksel mask berdekatan secara ringkas agar model AI hanya
+                # memproses area bubble yang relevan dan tidak melebar menjadi 1 halaman penuh.
+                grp_k = cv2.getStructuringElement(cv2.MORPH_RECT, (33, 33))
+                grouped = cv2.dilate(mask, grp_k)
+                num_c, _lbl, stats, _ = cv2.connectedComponentsWithStats(grouped, connectivity=8)
+                rois = []
+                pad_roi = 64 if engine_id == 'migan' else 48
+                total_roi_area = 0
+                for ci in range(1, num_c):
+                    rx, ry, rw, rh, _area = (int(v) for v in stats[ci])
+                    x1 = max(0, rx - pad_roi)
+                    y1 = max(0, ry - pad_roi)
+                    x2 = min(w, rx + rw + pad_roi)
+                    y2 = min(h, ry + rh + pad_roi)
+                    if cv2.countNonZero(mask[y1:y2, x1:x2]) < 12:
+                        continue
+                    rois.append((x1, y1, x2, y2))
+                    total_roi_area += (x2 - x1) * (y2 - y1)
+
+                try:
+                    if rois and total_roi_area < 0.72 * (w * h):
                         roi_ok = True
                         for x1, y1, x2, y2 in rois:
                             if self._is_cancelled:
+                                roi_ok = False
                                 break
                             crop_rgb = cv2.cvtColor(work_bgr[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
                             crop_mask = mask[y1:y2, x1:x2]
-                            res_pil = run_iopaint_inpaint(
+                            res_pil = mgr.inpaint(
                                 Image.fromarray(crop_rgb),
                                 Image.fromarray(crop_mask).convert("L"),
-                                server_url,
-                                timeout,
+                                engine_id=engine_id,
+                                device=device,
+                                server_url=server_url,
+                                server_timeout=timeout,
+                                auto_download=auto_dl,
+                                progress_cb=_emit_inpaint_progress,
+                                check_cancel=lambda: bool(self._is_cancelled),
                             )
-                            if res_pil is None:
-                                roi_ok = False
-                                break
                             res_bgr = cv2.cvtColor(np.array(res_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
                             if res_bgr.shape[:2] != (y2 - y1, x2 - x1):
                                 res_bgr = cv2.resize(res_bgr, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
@@ -9115,14 +9166,30 @@ Input:
                         if roi_ok:
                             cleaned = Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGB))
                     else:
-                        cleaned = run_iopaint_inpaint(
+                        cleaned = mgr.inpaint(
                             Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGB)),
                             Image.fromarray(mask).convert("L"),
-                            server_url,
-                            timeout,
+                            engine_id=engine_id,
+                            device=device,
+                            server_url=server_url,
+                            server_timeout=timeout,
+                            auto_download=auto_dl,
+                            progress_cb=_emit_inpaint_progress,
+                            check_cancel=lambda: bool(self._is_cancelled),
                         )
-                    if cleaned is None:
-                        print("IOPaint server gagal/tidak tersedia — memakai pembersihan interior balon langsung.")
+                except Exception as eng_err:
+                    print(f"Inpaint full-page ({engine_label}) gagal — memakai fallback aman: {eng_err}")
+                    cleaned = None
+                    if not self._is_cancelled and direct_bgr is not None and engine_id not in ('opencv_ns', 'opencv_telea'):
+                        try:
+                            from src.core.inpaint import run_opencv_inpaint
+                            cleaned = run_opencv_inpaint(
+                                Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGB)),
+                                Image.fromarray(mask).convert("L"),
+                                method="opencv_ns",
+                            )
+                        except Exception:
+                            cleaned = None
             if cleaned is None and direct_bgr is not None:
                 cleaned = Image.fromarray(cv2.cvtColor(direct_bgr, cv2.COLOR_BGR2RGB))
             self.cleaned_image_pil = cleaned
