@@ -364,6 +364,12 @@ class ProjectioMixin:
             pass
         self.update_file_list()
         self.save_project(is_auto=True)
+        try:
+            if getattr(self, 'autosave_enabled', True) and getattr(self, 'autosave_timer', None) is not None:
+                if not self.autosave_timer.isActive():
+                    self.autosave_timer.start()
+        except Exception:
+            pass
         if status_message is None:
             status_message = ActionText.NEW_PROJECT_AUTOSAVED
         self.setWindowTitle(app_title(os.path.basename(self.current_project_path)))
@@ -583,6 +589,7 @@ class ProjectioMixin:
 
             self.image_save_worker = image_worker
             self.image_save_thread = image_thread
+            self._pending_image_save_key = self.get_current_data_key() if getattr(self, 'current_image_path', None) else None
             image_thread.started.connect(image_worker.run)
             image_thread.start()
 
@@ -595,7 +602,15 @@ class ProjectioMixin:
                 pass
             self.image_save_thread = None
         self.image_save_worker = None
+        saved_key = getattr(self, '_pending_image_save_key', None)
+        self._pending_image_save_key = None
         if success:
+            if saved_key and isinstance(getattr(self, 'all_typeset_data', None), dict):
+                rec = self.all_typeset_data.get(saved_key)
+                if isinstance(rec, dict):
+                    rec['exported_saved'] = True
+            if hasattr(self, '_refresh_file_list_statuses'):
+                self._refresh_file_list_statuses()
             self.show_toast("Image saved", message, kind="success")
         else:
             self.show_banner("image-save-error", "Image save failed", message, kind="error")
@@ -1062,11 +1077,19 @@ class ProjectioMixin:
         self.show_banner("project-save-error", "Project save failed", msg, kind="error")
 
     def auto_save_project(self):
+        if not getattr(self, 'autosave_enabled', True):
+            return
         if QApplication.activeModalWidget() is not None:
-            return 
-    
+            return
+
+        if not getattr(self, 'current_project_path', None) and getattr(self, 'project_dir', None):
+            try:
+                self.current_project_path, _ = self._make_project_file_path()
+            except Exception:
+                pass
+
         if self.current_project_path and os.path.exists(os.path.dirname(self.current_project_path)):
-            if self.save_project(is_auto=True): 
+            if self.save_project(is_auto=True):
                 self.statusBar().showMessage(f"Project auto-saved at {time.strftime('%H:%M:%S')}", 3000)
 
     def load_project(self):

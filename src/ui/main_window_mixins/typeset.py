@@ -1016,6 +1016,8 @@ class TypesetMixin:
             self.paint_mutex.unlock()
         if refresh_layers and hasattr(self, '_refresh_layers_list'):
             self._refresh_layers_list()
+        if refresh_layers and not getattr(self, 'is_transform_preview', False) and hasattr(self, '_refresh_file_list_statuses'):
+            self._refresh_file_list_statuses()
         self.update_display()
 
     def schedule_typeset_redraw(self, delay_ms=30):
@@ -1056,7 +1058,6 @@ class TypesetMixin:
             if self.selected_typeset_area is area_to_delete:
                 self.clear_selected_area()
             self.redo_stack.clear()
-            self.redo_stack.append(area_to_delete)
             restored = False
             if hasattr(self, '_restore_area_inpaint_pixels'):
                 try:

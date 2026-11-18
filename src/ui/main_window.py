@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.3
+# Manga OCR & Typeset Tool v14.9.9.8
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -95,11 +95,11 @@ from src.core.fonts import *
 from src.core.app_info import APP_VERSION, app_title
 from src.ui.dialogs import *
 from src.ui.canvas import *
-from src.ui.icons import app_icon, clear_icon_cache
+from src.ui.icons import app_icon, clear_icon_cache, status_dot_icon
 from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
-from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, about_html, welcome_subtitle_html
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, LayersText, about_html, welcome_subtitle_html
 from src.ui.main_window_mixins import FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin, HistoryMixin, DetectMixin, TranslateMixin, OcrMixin, TypesetMixin, ProjectioMixin, UibuildMixin, WorkersMonitorMixin
 from src.utils.helpers import *
 from src.utils.geometry import *
@@ -125,6 +125,12 @@ from src.core.project_archive import (
     write_project_archive,
 )
 from src.core.rfdetr_detector import detect_layout_regions
+from src.core.prompts import (
+    build_batch_page_translate_prompt,
+    build_prompt_enhancements as core_build_prompt_enhancements,
+    clean_ai_text_output,
+    normalize_manga_ocr_text,
+)
 
 
 def OpenAI(*args, **kwargs):
@@ -677,7 +683,17 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         self.autosave_timer.setInterval(autosave_interval)
         self.autosave_timer.timeout.connect(self.auto_save_project)
         # Whether autosave is allowed to run (user preference). Persisted in settings.json.
-        self.autosave_enabled = bool(autosave_cfg.get('enabled', False))
+        self.autosave_enabled = bool(autosave_cfg.get('enabled', True))
+        if self.autosave_enabled:
+            try:
+                self.autosave_timer.start()
+            except Exception:
+                pass
+        if hasattr(self, '_purge_stale_temp_dirs'):
+            try:
+                self._purge_stale_temp_dirs()
+            except Exception:
+                pass
 
         # Watchdog tab Workers: registry aktivitas + deteksi macet + ETA
         self.setup_workers_monitor()
@@ -1063,6 +1079,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 widget.setStyleSheet(self._undo_timeline_qss())
         if getattr(self, 'layers_list_widget', None) is not None:
             self.layers_list_widget.setStyleSheet(self._layers_list_qss())
+            if hasattr(self, '_refresh_layers_list'):
+                self._refresh_layers_list()
         for attr in ('font_preview_label', 'typeset_preview_label'):
             widget = getattr(self, attr, None)
             if widget is not None:
@@ -2652,60 +2670,12 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             print(f"Failed to save lang orientation: {e}")
 
     def clean_and_join_text(self, raw_text):
-        return ' '.join(raw_text.split())
+        normalized = normalize_manga_ocr_text(raw_text or "")
+        return ' '.join(normalized.split())
 
     def _build_prompt_enhancements(self, settings):
         """Membangun string tambahan untuk prompt AI berdasarkan pengaturan."""
-        enhancements = ""
-
-        style_map = {
-            "Santai (Default)": (
-                "Your tone MUST be casual, relaxed, and colloquial, like everyday conversation between normal people. "
-                "Use natural phrasing, contractions, and avoid stiff or textbook-like wording. "
-                "Keep it light and friendly, suitable for general manga dialogue."
-            ),
-            "Formal (Ke Atasan)": (
-                "Your tone MUST be formal, polite, and respectful, as if addressing a superior, elder, or teacher. "
-                "Avoid slang or overly casual phrasing. "
-                "Honorifics, polite endings, and respectful language should be preserved where appropriate."
-            ),
-            "Akrab (Ke Teman/Pacar)": (
-                "Your tone MUST be intimate, playful, and very casual, suitable for close friends or romantic partners. "
-                "Use warm, affectionate, or teasing expressions where natural. "
-                "Convey emotional closeness, and allow a bit of informality, slang, or cuteness if it fits the context."
-            ),
-            "Vulgar/Dewasa (Adegan Seks)": (
-                "Your tone MUST be explicit, vulgar, and direct, suitable for an adult or sexual scene. "
-                "Do not soften or censor unless absolutely required by the target language. "
-                "Use raw, straightforward words for sexual acts or body parts, while keeping the flow natural. "
-                "The style should feel raw and intense, not clinical or overly polite."
-            ),
-            "Sesuai Konteks Manga": (
-                "Analyze the text carefully and adjust your tone to best match the likely context of the manga scene. "
-                "- For comedy: be witty, light, and playful. "
-                "- For drama: be serious, emotional, and impactful. "
-                "- For action: be sharp, concise, and energetic. "
-                "- For horror: be tense, eerie, and unsettling. "
-                "Always aim for immersion: the translation should feel like it belongs naturally in the scene."
-            )
-        }
-
-        style = settings.get('translation_style', 'Santai (Default)')
-        style_instruction = style_map.get(style, style_map["Santai (Default)"])
-        enhancements += f"\n- Translation Style: {style_instruction}"
-
-        # Injeksi Glossary jika ada
-        glossary = SETTINGS.get('glossary', {})
-        if isinstance(glossary, dict) and glossary:
-            glossary_lines = [f'  - "{src}" → "{tgt}"' for src, tgt in glossary.items() if src]
-            if glossary_lines:
-                glossary_str = '\n'.join(glossary_lines)
-                enhancements += (
-                    f"\n- Character/Term Glossary (ALWAYS use these translations consistently):\n"
-                    f"{glossary_str}"
-                )
-
-        return enhancements
+        return core_build_prompt_enhancements(settings, SETTINGS.get('glossary', {}))
     
     def apply_safe_mode(self, text: str) -> str:
         """Applies the Safe Mode filter to the translated text."""
@@ -3220,6 +3190,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if notify:
                 self._sync_cleanup_controls_from_selection()
                 self._sync_typeset_controls_from_selection()
+            if hasattr(self, '_sync_layer_inspector_from_selection'):
+                self._sync_layer_inspector_from_selection()
             return
 
         # Backup settings if we are about to overwrite the panel with a selection
@@ -3742,6 +3714,117 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             self.load_item(self.image_files[0])
         else:
             self.clear_view()
+        self._refresh_file_list_statuses()
+
+    def _get_page_qc_status(self, file_path: str) -> dict:
+        """Compute translation, typeset, and export save QC status for one chapter page."""
+        basename = os.path.basename(file_path) if file_path else ""
+        key = self.get_current_data_key(path=file_path) if file_path else None
+        all_data = getattr(self, "all_typeset_data", {}) or {}
+        rec = all_data.get(key) if key else {}
+        if not isinstance(rec, dict):
+            rec = {}
+
+        is_active = False
+        cur_path = getattr(self, "current_image_path", None)
+        if file_path and cur_path:
+            try:
+                is_active = os.path.normcase(os.path.abspath(file_path)) == os.path.normcase(os.path.abspath(cur_path))
+            except Exception:
+                is_active = (file_path == cur_path)
+
+        areas = list(getattr(self, "typeset_areas", []) or []) if is_active else list(rec.get("areas", []) or [])
+        total_areas = len(areas)
+        translated_areas = 0
+        for area in areas:
+            txt = (area.get("text", "") if isinstance(area, dict) else getattr(area, "text", "")) or ""
+            if txt.strip():
+                translated_areas += 1
+
+        has_inpaint = bool(record_has_cleaned_image(rec)) if rec else False
+        explicit_saved = rec.get("exported_saved", None)
+        is_saved = bool(explicit_saved) if explicit_saved is not None else False
+        if explicit_saved is None and file_path:
+            stem, _ = os.path.splitext(file_path)
+            if not stem.lower().endswith("_typeset"):
+                for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                    if os.path.isfile(f"{stem}_typeset{ext}"):
+                        is_saved = True
+                        break
+
+        if is_saved and (translated_areas > 0 or has_inpaint):
+            status = "saved"
+            dot_color = theme.COLORS["success"]
+            badge_text = f"[Saved · {translated_areas}]" if translated_areas else "[Saved]"
+            label_desc = "Saved"
+        elif translated_areas > 0 and translated_areas == total_areas:
+            status = "typeset"
+            dot_color = theme.COLORS["accent"]
+            badge_text = f"[{translated_areas} OK]"
+            label_desc = "Typeset (Unsaved)"
+        elif translated_areas > 0 or total_areas > 0 or has_inpaint:
+            status = "partial"
+            dot_color = theme.COLORS["warning"]
+            badge_text = f"[{translated_areas}/{total_areas}]" if total_areas > 0 else "[Cleaned]"
+            label_desc = "Needs Review"
+        else:
+            status = "untranslated"
+            dot_color = theme.COLORS["muted"]
+            badge_text = ""
+            label_desc = "Untranslated"
+
+        tooltip = (
+            f"{basename}\n"
+            f"Status: {label_desc}\n"
+            f"Bubbles: {translated_areas}/{total_areas} translated"
+        )
+        return {
+            "status": status,
+            "dot_color": dot_color,
+            "badge_text": badge_text,
+            "total_areas": total_areas,
+            "translated_areas": translated_areas,
+            "tooltip": tooltip,
+        }
+
+    def _refresh_file_list_statuses(self):
+        """Refresh status dots, badges, and chapter progress summary in the left panel."""
+        lst = getattr(self, "file_list_widget", None)
+        if lst is None:
+            return
+        files = list(getattr(self, "image_files", []) or [])
+        saved_pages = 0
+        typeset_pages = 0
+        total_bubbles = 0
+
+        with QSignalBlocker(lst):
+            count = min(lst.count(), len(files))
+            for row in range(count):
+                fpath = files[row]
+                st = self._get_page_qc_status(fpath)
+                item = lst.item(row)
+                if item is None:
+                    continue
+                base = os.path.basename(fpath)
+                display_text = f"{base}  {st['badge_text']}" if st["badge_text"] else base
+                item.setText(display_text)
+                item.setIcon(status_dot_icon(st["dot_color"], size=9))
+                item.setData(Qt.UserRole, fpath)
+                item.setToolTip(st["tooltip"])
+
+                total_bubbles += st["total_areas"]
+                if st["status"] == "saved":
+                    saved_pages += 1
+                    typeset_pages += 1
+                elif st["status"] == "typeset":
+                    typeset_pages += 1
+
+        lbl = getattr(self, "chapter_progress_label", None)
+        if lbl is not None:
+            if not files:
+                lbl.setText("No folder loaded" if not getattr(self, "project_dir", None) else "0 image files in folder")
+            else:
+                lbl.setText(f"{typeset_pages}/{len(files)} Typeset · {saved_pages} Saved · {total_bubbles} Bubbles")
 
     def on_file_selected(self, current_item, previous_item):
         if not current_item:
@@ -5405,8 +5488,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if use_auto and hasattr(area, '_auto_text_color') and isinstance(area._auto_text_color, QColor)
             else None
         )
+        is_upright = (getattr(area, 'orientation', 'horizontal') == 'vertical_upright')
         for segment in area.get_segments():
             text_value = segment.get('text', '') or ''
+            if not is_upright:
+                text_value = format_heart_emoticon_lines(text_value)
             seg_font = area.segment_to_qfont(segment)
             seg_color = auto_color if auto_color is not None else area.segment_to_color(segment)
             for ch in text_value:
@@ -5414,7 +5500,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                     lines.append(current_line)
                     current_line = []
                     continue
-                glyph_font = QFont(seg_font)
+                glyph_font = (
+                    scaled_emoticon_qfont(seg_font)
+                    if ch in HEART_EMOTICON_CHARS
+                    else QFont(seg_font)
+                )
                 glyph_font.setLetterSpacing(QFont.PercentageSpacing, area.get_char_spacing())
                 current_line.append({'char': ch, 'font': glyph_font, 'color': QColor(seg_color)})
         if current_line:
@@ -5622,11 +5712,14 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         cursor.setBlockFormat(block_format)
 
         char_spacing = area.get_char_spacing()
+        is_upright = (getattr(area, 'orientation', 'horizontal') == 'vertical_upright')
         first_segment = True
         for segment in area.get_segments():
             text_value = segment.get('text', '')
             if not text_value:
                 continue
+            if not is_upright:
+                text_value = format_heart_emoticon_lines(text_value)
             fmt = QTextCharFormat()
             seg_font = area.segment_to_qfont(segment)
             seg_font.setLetterSpacing(QFont.PercentageSpacing, char_spacing)
@@ -5641,11 +5734,21 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if segment.get('underline', False):
                 fmt.setFontUnderline(True)
 
+            heart_fmt = QTextCharFormat(fmt)
+            heart_fmt.setFont(scaled_emoticon_qfont(seg_font))
+
             parts = text_value.split('\n')
             for idx, part in enumerate(parts):
                 if not first_segment:
                     cursor.mergeBlockFormat(block_format)
-                cursor.insertText(part, fmt)
+                if part:
+                    for chunk in HEART_EMOTICON_SPLIT_RE.split(part):
+                        if not chunk:
+                            continue
+                        use_fmt = heart_fmt if chunk[0] in HEART_EMOTICON_CHARS else fmt
+                        cursor.insertText(chunk, use_fmt)
+                else:
+                    cursor.insertText('', fmt)
                 first_segment = False
                 if idx < len(parts) - 1:
                     cursor.insertBlock(block_format)
@@ -5787,10 +5890,13 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
     def _flatten_segments_to_lines(self, area):
         lines = []
         current_line = []
+        is_upright = (getattr(area, 'orientation', 'horizontal') == 'vertical_upright')
         for segment in area.get_segments():
             text = segment.get('text', '')
             if text is None:
                 continue
+            if not is_upright:
+                text = format_heart_emoticon_lines(text)
             base_font = area.segment_to_qfont(segment)
             base_color = area.segment_to_color(segment)
             underline = segment.get('underline', base_font.underline())
@@ -5799,7 +5905,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                     lines.append(current_line)
                     current_line = []
                     continue
-                glyph_font = QFont(base_font)
+                glyph_font = (
+                    scaled_emoticon_qfont(base_font)
+                    if char in HEART_EMOTICON_CHARS
+                    else QFont(base_font)
+                )
                 glyph_font.setUnderline(underline)
                 glyph_font.setLetterSpacing(QFont.PercentageSpacing, area.get_char_spacing())
                 current_line.append({'char': char, 'font': glyph_font, 'color': QColor(base_color)})
@@ -6394,95 +6504,11 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
     def _restore_snapshot(self, idx):
         """Restore typeset_areas dari snapshot ke-idx di _undo_history."""
         try:
-            from src.ui.canvas import TypesetArea
             if idx < 0 or idx >= len(self._undo_history):
                 return
             entry = self._undo_history[idx]
             self._undo_history_idx = idx
-
-            snapshot = entry['snapshot']
-            payloads = snapshot.get('areas', []) if isinstance(snapshot, dict) else snapshot
-            image_png = snapshot.get('image_png') if isinstance(snapshot, dict) else None
-            had_cleaned_image = bool(snapshot.get('had_cleaned_image')) if isinstance(snapshot, dict) else False
-            image_state = snapshot.get('image_state') if isinstance(snapshot, dict) else None
-            base_image_pil = snapshot.get('base_image_pil') if isinstance(snapshot, dict) else None
-            pre_inpaint_png = snapshot.get('pre_inpaint_image_png') if isinstance(snapshot, dict) else None
-            self.typeset_areas.clear()
-            for payload in payloads:
-                if isinstance(payload, dict):
-                    try:
-                        area = TypesetArea.from_payload(payload)
-                        self.typeset_areas.append(area)
-                    except Exception as e:
-                        print(f"[UndoTimeline] Restore area failed: {e}")
-
-            key = self.get_current_data_key() if getattr(self, 'current_image_path', None) else None
-            if isinstance(image_state, dict):
-                try:
-                    pre_state = {k: image_state[k] for k in PRE_INPAINT_STATE_KEYS if image_state.get(k)}
-                    if had_cleaned_image:
-                        cleaned_only = {k: image_state[k] for k in CLEANED_STATE_KEYS if image_state.get(k)}
-                        restored_image = self._decode_cleaned_image(image_state, orig_pil=base_image_pil, key=key)
-                        if restored_image is not None:
-                            self._apply_base_image(restored_image)
-                        self._update_typeset_record(
-                            key,
-                            areas=list(self.typeset_areas),
-                            redo=list(self.redo_stack),
-                            cleaned_state=cleaned_only,
-                            pre_inpaint_state=pre_state,
-                            remove_pre_inpaint_image=not bool(pre_state),
-                        )
-                    else:
-                        current_rec = self.all_typeset_data.get(key, {}) if key else {}
-                        restored_image = base_image_pil.copy() if base_image_pil is not None else None
-                        if restored_image is None and record_has_cleaned_image(current_rec):
-                            restored_image = self._resolve_pre_inpaint_image(key, image_state)
-                        if restored_image is not None:
-                            self._apply_base_image(restored_image)
-                        self._update_typeset_record(
-                            key,
-                            areas=list(self.typeset_areas),
-                            redo=list(self.redo_stack),
-                            remove_cleaned_image=True,
-                            pre_inpaint_state=pre_state,
-                            remove_pre_inpaint_image=not bool(pre_state),
-                        )
-                except Exception as exc:
-                    print(f"[UndoTimeline] Restore image failed: {exc}")
-            elif image_png:
-                try:
-                    restored_image = Image.open(io.BytesIO(base64.b64decode(image_png))).convert('RGB')
-                    self._apply_base_image(restored_image)
-                    if had_cleaned_image:
-                        self._update_typeset_record(
-                            key,
-                            areas=list(self.typeset_areas),
-                            redo=list(self.redo_stack),
-                            cleaned_image_png=image_png,
-                            pre_inpaint_image_png=pre_inpaint_png,
-                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
-                        )
-                    else:
-                        self._update_typeset_record(
-                            key,
-                            areas=list(self.typeset_areas),
-                            redo=list(self.redo_stack),
-                            remove_cleaned_image=True,
-                            pre_inpaint_image_png=pre_inpaint_png,
-                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
-                        )
-                except Exception as exc:
-                    print(f"[UndoTimeline] Restore image failed: {exc}")
-
-            self.clear_selected_area()
-            self.redraw_all_typeset_areas()
-            self.update_undo_redo_buttons_state()
-            self._refresh_undo_timeline()
-            if hasattr(self, 'image_label'):
-                self.image_label.clear_selection()
-            self._refresh_inpaint_result_controls()
-            self._refresh_layers_list()
+            self._restore_snapshot_payload(entry['snapshot'])
         except Exception as e:
             print(f"[UndoTimeline] Restore snapshot failed: {e}")
 
@@ -7260,6 +7286,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if general.get('default_ai_model') != text:
                 general['default_ai_model'] = text
                 save_settings(SETTINGS)
+        if hasattr(self, '_update_full_tab_hints'):
+            self._update_full_tab_hints()
 
     # [DIUBAH] Mengambil nama model dan provider dari combo box
     def get_selected_model_name(self):
@@ -7454,19 +7482,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         # Temp file cleanup (merged from second closeEvent)
         try:
-            if SETTINGS.get('cleanup', {}).get('remove_ai_temp_files', False):
-                temp_paths = [os.path.join(os.getcwd(), 'temp'), os.path.join(os.getcwd(), 'src', 'ui', 'temp')]
-                for tpath in temp_paths:
-                    if os.path.exists(tpath):
-                        for item in os.listdir(tpath):
-                            item_path = os.path.join(tpath, item)
-                            try:
-                                if os.path.isfile(item_path) or os.path.islink(item_path):
-                                    os.remove(item_path)
-                                elif os.path.isdir(item_path):
-                                    shutil.rmtree(item_path)
-                            except Exception:
-                                pass
+            if hasattr(self, '_purge_stale_temp_dirs'):
+                self._purge_stale_temp_dirs()
         except Exception as e:
             print(f"Error during temp cleanup: {e}")
 
@@ -8242,10 +8259,11 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                 if not response_text:
                     raise Exception("AI Vision tidak mengembalikan respon.")
 
-                # Save response for debugging
+                # Save response for debugging under .cache/ai_temp
                 try:
-                    os.makedirs("temp", exist_ok=True)
-                    with open("temp/full_page_response.txt", "w", encoding="utf-8") as f:
+                    ai_temp_dir = os.path.join(ROOT_DIR, ".cache", "ai_temp")
+                    os.makedirs(ai_temp_dir, exist_ok=True)
+                    with open(os.path.join(ai_temp_dir, "full_page_response.txt"), "w", encoding="utf-8") as f:
                         f.write(response_text)
                 except Exception:
                     pass
@@ -8494,14 +8512,15 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                 self.finished.emit(created_areas, "Success")
             else:
                 self.last_created_areas = []
-                self.finished.emit([], "Tidak ditemukan balon teks/koordinat yang valid. Silakan cek file temp/full_page_response.txt untuk melihat respon AI.")
+                self.finished.emit([], "Tidak ditemukan balon teks/koordinat yang valid. Silakan cek file .cache/ai_temp/full_page_response.txt untuk melihat respon AI.")
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
             print(error_detail)
             try:
-                os.makedirs("temp", exist_ok=True)
-                with open("temp/full_page_error.txt", "w", encoding="utf-8") as f:
+                ai_temp_dir = os.path.join(ROOT_DIR, ".cache", "ai_temp")
+                os.makedirs(ai_temp_dir, exist_ok=True)
+                with open(os.path.join(ai_temp_dir, "full_page_error.txt"), "w", encoding="utf-8") as f:
                     f.write(error_detail)
             except Exception:
                 pass
@@ -8971,28 +8990,12 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
 
     def _translate_batch_api(self, texts, provider, model_name, target_lang):
         """Kirim semua teks balon sebagai satu permintaan JSON ke provider AI."""
-        try:
-            enhancements = self.main_app._build_prompt_enhancements(self.settings)
-        except Exception:
-            enhancements = ""
-
-        payload = json.dumps(
-            [{"id": i + 1, "text": t} for i, t in enumerate(texts)],
-            ensure_ascii=False
+        prompt = build_batch_page_translate_prompt(
+            texts,
+            target_lang,
+            self.settings,
+            SETTINGS.get('glossary', {}),
         )
-        # Gunakan struktur root JSON Object {"items": [...]} agar 100% kompatibel
-        # dengan response_format={"type": "json_object"} di OpenAI/OpenRouter/Gemini.
-        prompt = f"""You are an expert manga translator. Below is a JSON array of dialogue texts extracted from ONE manga page, in reading order.
-For each item:
-1. Detect the language and silently correct obvious OCR mistakes.
-2. Translate the text into natural, colloquial {target_lang}. If it is already in {target_lang}, keep it as-is.
-{enhancements}
-Return ONLY a valid JSON object (no markdown, no explanation) with key "items" containing an array of exactly {len(texts)} elements in the same order:
-{{"items": [{{"id": 1, "translation": "<translated text>"}}, ...]}}
-
-Input:
-{payload}
-"""
 
         response_text = ""
         provider_key = get_translate_provider_key(provider) if provider else ''
@@ -9057,7 +9060,9 @@ Input:
                     max_tokens=4096,
                     temperature=0.3
                 )
-            response_text = resp.choices[0].message.content
+            choices = getattr(resp, 'choices', None) or []
+            msg = getattr(choices[0], 'message', None) if choices else None
+            response_text = (getattr(msg, 'content', None) or '') if msg is not None else ''
             if resp and hasattr(resp, 'usage') and resp.usage:
                 if hasattr(self.main_app, "api_cost_signal"):
                     self.main_app.api_cost_signal.emit(
@@ -9069,9 +9074,10 @@ Input:
             raise Exception("Provider tidak mengembalikan respon batch.")
 
         # Bersihkan tag <think>...</think> (DeepSeek/Qwen reasoning) & blok kode markdown
-        cleaned_text = re.sub(r"<think>[\s\S]*?</think>", "", response_text, flags=re.IGNORECASE).strip()
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_text)
-        cleaned_json = json_match.group(1).strip() if json_match else cleaned_text
+        cleaned_json = clean_ai_text_output(response_text)
+        fenced_inner = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_json)
+        if fenced_inner:
+            cleaned_json = fenced_inner.group(1).strip()
 
         try:
             data = json.loads(cleaned_json)

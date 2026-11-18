@@ -7,6 +7,8 @@ memindahkannya membuat fakta itu terlihat sekaligus bisa diuji sendiri.
 
 import cv2
 
+from src.core.prompts import clean_ai_text_output, normalize_manga_ocr_text
+
 
 def preprocess_for_ocr(cv_image, orientation_hint="Auto-Detect"):
     """Luruskan lalu binerisasi gambar untuk engine OCR.
@@ -65,13 +67,14 @@ def extract_ai_ocr_text(response_json):
     if not isinstance(response_json, dict):
         return ""
 
+    raw = ""
     choices = response_json.get('choices')
     if isinstance(choices, list) and choices:
         message = choices[0].get('message', {}) if isinstance(choices[0], dict) else {}
         content = message.get('content') if isinstance(message, dict) else None
         if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
+            raw = content
+        elif isinstance(content, list):
             parts = []
             for chunk in content:
                 if isinstance(chunk, dict):
@@ -79,23 +82,27 @@ def extract_ai_ocr_text(response_json):
                     if isinstance(text_val, str) and text_val.strip():
                         parts.append(text_val.strip())
             if parts:
-                return '\n'.join(parts).strip()
+                raw = '\n'.join(parts)
 
-    message = response_json.get('message')
-    if isinstance(message, str):
-        return message.strip()
+    if not raw:
+        message = response_json.get('message')
+        if isinstance(message, str):
+            raw = message
+        elif isinstance(message, dict):
+            content = message.get('content')
+            if isinstance(content, str):
+                raw = content
 
-    if isinstance(message, dict):
-        content = message.get('content')
-        if isinstance(content, str):
-            return content.strip()
+    if not raw:
+        for key in ('text', 'output_text'):
+            val = response_json.get(key)
+            if isinstance(val, str):
+                raw = val
+                break
+            if isinstance(val, list):
+                parts = [v.strip() for v in val if isinstance(v, str)]
+                if parts:
+                    raw = '\n'.join(parts)
+                    break
 
-    for key in ('text', 'output_text'):
-        val = response_json.get(key)
-        if isinstance(val, str):
-            return val.strip()
-        if isinstance(val, list):
-            parts = [v.strip() for v in val if isinstance(v, str)]
-            if parts:
-                return '\n'.join(parts)
-    return ""
+    return normalize_manga_ocr_text(clean_ai_text_output(raw)) if raw else ""

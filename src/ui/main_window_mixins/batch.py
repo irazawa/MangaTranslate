@@ -303,6 +303,13 @@ class BatchMixin:
 
     def on_batch_file_saved(self, file_path):
         self._batch_save_saved_count += 1
+        try:
+            key = self.get_current_data_key(path=file_path)
+            rec = self.all_typeset_data.get(key) if key else None
+            if isinstance(rec, dict):
+                rec['exported_saved'] = True
+        except Exception:
+            pass
 
     def on_batch_save_error(self, error_msg):
         self._batch_save_errors.append(error_msg)
@@ -317,6 +324,8 @@ class BatchMixin:
             self.statusBar().showMessage("Batch save complete.", 5000)
         self.overall_progress_bar.setVisible(False)
         self.batch_save_thread.quit(); self.batch_save_thread.wait()
+        if hasattr(self, '_refresh_file_list_statuses'):
+            self._refresh_file_list_statuses()
         if errors:
             shown_errors = "\n".join(errors[:8])
             more = "" if len(errors) <= 8 else f"\n...and {len(errors) - 8} more error(s)."

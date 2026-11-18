@@ -1010,8 +1010,8 @@ class SettingsCenterDialog(QDialog):
             self.constrain_text_checkbox))
 
         self.remove_ai_temp_checkbox = QCheckBox()
-        self.remove_ai_temp_checkbox.setToolTip("Delete temp/ debug files after each successful AI OCR/MOFRL run.")
-        self.remove_ai_temp_checkbox.setChecked(bool(cleanup_cfg.get('remove_ai_temp_files', False)))
+        self.remove_ai_temp_checkbox.setToolTip("Delete temporary AI OCR/MOFRL debug files automatically after each run.")
+        self.remove_ai_temp_checkbox.setChecked(bool(cleanup_cfg.get('remove_ai_temp_files', True)))
         card_vbox.addWidget(self._make_option_row(
             "Remove AI temp files",
             "Delete temporary debug files after AI OCR & MOFRL runs.",
@@ -1829,7 +1829,7 @@ class SettingsCenterDialog(QDialog):
             try:
                 cleanup_cfg['remove_ai_temp_files'] = bool(self.remove_ai_temp_checkbox.isChecked())
             except Exception:
-                cleanup_cfg['remove_ai_temp_files'] = bool(cleanup_cfg.get('remove_ai_temp_files', False))
+                cleanup_cfg['remove_ai_temp_files'] = bool(cleanup_cfg.get('remove_ai_temp_files', True))
 
         shortcut_settings = None
         shortcuts_changed = False

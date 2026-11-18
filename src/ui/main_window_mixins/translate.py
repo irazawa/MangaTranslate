@@ -8,6 +8,11 @@ atribut yang dibuat di MangaOCRApp.__init__.
 import logging
 
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
+from src.core.prompts import (
+    build_openrouter_translate_messages,
+    clean_ai_text_output,
+    extract_chat_completion_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +123,9 @@ class TranslateMixin:
             self.translate_combo.setCurrentText("Indonesian")
         self.translate_combo.currentTextChanged.connect(
             lambda val: (
-                SETTINGS.setdefault('general', {}).update({'default_target_lang': val})
-                or save_settings(SETTINGS)
+                SETTINGS.setdefault('general', {}).update({'default_target_lang': val}),
+                save_settings(SETTINGS),
+                self._update_full_tab_hints() if hasattr(self, '_update_full_tab_hints') else None,
             )
         )
         target_row.addWidget(self.translate_combo, 1)
@@ -159,6 +165,8 @@ class TranslateMixin:
                 info.setText("Active: AI OCR (auto language & orientation)")
             elif getattr(self, 'ocr_lang_combo', None) is not None:
                 self.on_ocr_lang_changed(self.ocr_lang_combo.currentIndex())
+        if hasattr(self, '_update_full_tab_hints'):
+            self._update_full_tab_hints()
 
     def _update_full_tab_hints(self):
         hint_lbl = getattr(self, 'full_mode_hint_label', None)
@@ -166,20 +174,38 @@ class TranslateMixin:
         cleanup_cfg = SETTINGS.get('cleanup', {}) if isinstance(SETTINGS.get('cleanup'), dict) else {}
         inpaint_eid = resolve_inpaint_engine_id(cleanup_cfg)
         inpaint_short = engine_display_label(inpaint_eid, short=True)
+
+        def _combo_text(combo):
+            fn = getattr(combo, 'currentText', None)
+            return str(fn()).strip() if callable(fn) else ""
+
+        ocr_raw = _combo_text(getattr(self, 'ocr_lang_combo', None))
+        if ocr_raw.startswith("AI OCR (") and ocr_raw.endswith(")"):
+            ocr_short = ocr_raw[8:-1]
+        else:
+            ocr_short = ocr_raw or "AI OCR"
+
+        tr_short = _combo_text(getattr(self, 'ai_model_combo', None)) or "AI Translate"
+
         if hint_lbl is not None and getattr(self, 'full_mode_combo', None) is not None:
             use_vision = bool(self.full_mode_combo.currentData())
             trans_mode = self.full_translator_combo.currentData() if getattr(self, 'full_translator_combo', None) else 'ai_translate'
             if use_vision and trans_mode == 'ai_ocr':
                 hint_lbl.setText("Single VLM call extracts regions & translates directly — fastest and most token-efficient.")
             elif use_vision:
-                hint_lbl.setText("AI Vision detects dialogue boxes first, then translates using your active AI Translate model & custom style.")
+                hint_lbl.setText(f"AI Vision detects dialogue boxes first, then translates via {tr_short} + Glossary/Style.")
             elif trans_mode == 'ai_ocr':
-                hint_lbl.setText("Local region detection + AI OCR translates each bubble in one vision pass.")
+                hint_lbl.setText("Local RF-DETR detection + AI OCR translates each bubble in one vision pass.")
             else:
-                hint_lbl.setText(f"Deteksi area + AI OCR + {inpaint_short} cleanup + model AI Translate.")
+                hint_lbl.setText(
+                    f"Deteksi RF-DETR lokal -> OCR ({ocr_short}) -> inpaint {inpaint_short} -> terjemah batch ({tr_short}) + Glossary/Style."
+                )
         if summary_lbl is not None:
-            target_lang = self.translate_combo.currentText() if getattr(self, 'translate_combo', None) else "Indonesian"
-            summary_lbl.setText(f"Target: {target_lang}  ·  Inpaint: {inpaint_short}")
+            target_lang = _combo_text(getattr(self, 'translate_combo', None)) or "Indonesian"
+            summary_lbl.setText(
+                f"Target: {target_lang}  ·  Inpaint: {inpaint_short}\n"
+                f"OCR: {ocr_short}  ·  Translate: {tr_short}"
+            )
 
     def _create_full_translate_tab(self):
         """Tab khusus 'Full': one-click full-page auto translation dengan UI modern."""
@@ -254,13 +280,13 @@ class TranslateMixin:
         full_layout.addWidget(mode_lbl)
         self.full_mode_combo = QComboBox()
         # itemData = nilai use_ai_vision yang dibaca worker
-        self.full_mode_combo.addItem("Lokal per-region (morfologi)", False)
+        self.full_mode_combo.addItem("Lokal per-region (RF-DETR)", False)
         self.full_mode_combo.addItem("AI Vision full-page (1 API call)", True)
         self.full_mode_combo.setCurrentIndex(0)
         self._fit_workspace_combo(self.full_mode_combo, 12)
         self.full_mode_combo.setToolTip(
-            "Per-region: local region detection + AI OCR per block.\n"
-            "AI Vision: send full page to VLM and receive structured boxes + translations."
+            "Lokal per-region (RF-DETR): deteksi layout RF-DETR lokal + OCR per balon + terjemah batch.\n"
+            "AI Vision: kirim full page ke VLM untuk deteksi kotak + OCR sekaligus."
         )
         full_layout.addWidget(self.full_mode_combo)
 
@@ -498,7 +524,7 @@ class TranslateMixin:
                 if response.parts:
                     if hasattr(self, "api_cost_signal"):
                         self.api_cost_signal.emit(len(prompt), len(response.text), 'Gemini', model_name)
-                    return response.text.strip()
+                    return clean_ai_text_output(response.text)
                 return "[GEMINI ERROR] Empty response"
 
             if provider == 'OpenAI':
@@ -521,6 +547,8 @@ class TranslateMixin:
                 provider_display = provider_meta.get('display', provider or 'OpenRouter')
                 provider_cfg = get_translate_provider_settings(provider_key)
                 api_key = provider_cfg.get('api_key', '').strip()
+                if not api_key and provider_key == 'openrouter':
+                    api_key = SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip() or get_openrouter_api_key()
                 if not api_key and not provider_meta.get('api_key_optional'):
                     return f"[{provider_display.upper()} API KEY NOT CONFIGURED]"
                 url = provider_cfg.get('url', '').strip() or provider_meta.get('url', "https://openrouter.ai/api/v1/chat/completions")
@@ -531,30 +559,22 @@ class TranslateMixin:
                 payload = {
                     "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": float(model_info.get('temperature', 0.7)) if model_info else 0.7,
+                    "temperature": float(model_info.get('temperature', 0.3)) if model_info else 0.3,
                     "max_tokens": int(model_info.get('max_tokens', 2048)) if model_info else 2048,
                 }
                 pr_timeout = int(provider_cfg.get('timeout', 60) or 60)
                 response = robust_post(url, headers=headers, json_payload=payload,
                                        timeout=pr_timeout, max_retries=3, backoff_factor=1.5)
                 data = response.json()
-                choices = data.get('choices')
-                output_text = ""
-                if isinstance(choices, list) and choices:
-                    msg = choices[0].get('message', {})
-                    content = msg.get('content')
-                    if isinstance(content, list):
-                        output_text = "".join(part.get('text', '') for part in content if isinstance(part, dict))
-                    elif isinstance(content, str):
-                        output_text = content
+                output_text = clean_ai_text_output(extract_chat_completion_text(data))
                 if not output_text:
-                    if 'error' in data:
+                    if isinstance(data, dict) and 'error' in data:
                         return f"[{provider_display.upper()} ERROR: {data['error'].get('message', 'Unknown error')}]"
                     return f"[{provider_display.upper()} ERROR: Empty response]"
-                usage = data.get('usage') or {}
+                usage = (data.get('usage') or {}) if isinstance(data, dict) else {}
                 if hasattr(self, "api_cost_signal"):
                     self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), provider_display, model_name)
-                return output_text.strip()
+                return output_text
 
             return f"[ERROR: Unknown AI provider '{provider}']"
         except Exception as exc:
@@ -646,7 +666,7 @@ class TranslateMixin:
                 if hasattr(self, "snippet_translated_signal"):
                     self.snippet_translated_signal.emit()
 
-                return response.text.strip()
+                return clean_ai_text_output(response.text)
             return "[GEMINI FAILED]"
         except Exception as e:
             print(f"Error calling Gemini API for full translation: {e}")
@@ -667,17 +687,6 @@ class TranslateMixin:
         - Gunakan caching untuk system prompt (biar hemat).
         - OCR text user tidak dicache karena selalu berbeda.
         """
-
-        # ---------- Helper: sanitizer output ----------
-        def _sanitize_output(s: str) -> str:
-            if not s:
-                return s
-            s = s.strip()
-            import re
-            fence_match = re.fullmatch(r"```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```", s)
-            if fence_match:
-                s = fence_match.group(1).strip()
-            return s
 
         # ---------- Guard ----------
         if not text_to_translate or not text_to_translate.strip():
@@ -760,8 +769,7 @@ class TranslateMixin:
                 client = openai_client
 
             response = client.chat.completions.create(**req_kwargs)
-            output_text = (response.choices[0].message.content or "").strip()
-            output_text = _sanitize_output(output_text)
+            output_text = clean_ai_text_output(response.choices[0].message.content or "")
 
             # --- Hitung biaya dengan token usage dari API ---
             if hasattr(response, "usage"):
@@ -808,6 +816,8 @@ class TranslateMixin:
 
         provider_cfg = get_translate_provider_settings(provider_key)
         api_key = provider_cfg.get('api_key', '').strip()
+        if not api_key and provider_key == 'openrouter':
+            api_key = SETTINGS.get('ocr', {}).get('openrouter', {}).get('api_key', '').strip() or get_openrouter_api_key()
         if not api_key and not provider_meta.get('api_key_optional'):
             return f"[{error_prefix} API KEY NOT CONFIGURED]"
 
@@ -815,50 +825,14 @@ class TranslateMixin:
         if provider_key == 'openrouter' and url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
             url = "https://" + url[7:]
 
-        # --- Dynamic prompt ---
-        mode = settings.get('mode') if settings else None
-        if mode == 'info':
-            system_prompt = (
-                f"You are an expert manga translator. Translate the user's text into clear, natural {target_lang} for narration or informational text. "
-                f"Keep it smooth, neutral, and suitable for manga narration boxes.\n"
-                f"IMPORTANT RULES:\n"
-                f"- If a Japanese text includes a kanji followed by parentheses like 漢字(かんじ) or word(note), treat the text inside parentheses as a reading or small note — do NOT translate it literally.\n"
-                f"- Translate only based on the main kanji meaning, not the content in parentheses.\n"
-                f"- Example: 勇者(ゆうしゃ) → translate as 'Hero', not 'Yuusha'.\n"
-                f"- Preserve parentheses if they indicate pronunciation notes or clarifications that exist in the original dialogue.\n"
-                f"- Avoid slang or overly casual tone.\n"
-                f"- Only output the final translation in {target_lang}.\n"
-                f"- No markdown, notes, or extra explanation.\n"
-                f"- Preserve line breaks.\n"
-            )
-        else:
-            system_prompt = (
-                f"You are an expert manga translator. Translate the user's text into natural, fluent {target_lang} suitable for published manga dialogue. "
-                f"Keep the meaning, tone, and nuances from the original text.\n"
-                f"IMPORTANT RULES:\n"
-                f"- If the Japanese text contains kanji with parentheses — e.g. 漢字(かんじ) or name(note) — treat the content inside parentheses as furigana or reading aid, not as part of the dialogue.\n"
-                f"- Translate the main kanji normally, but ignore or omit the reading inside parentheses in the final translation.\n"
-                f"- Example: 神様(かみさま) → 'God', not 'Kamisama'.\n"
-                f"- If parentheses contain explanatory notes (not reading), keep them translated in parentheses in {target_lang}.\n"
-                f"- Use natural and neutral tone — not overly formal, but avoid slang or street language like 'lo', 'gue', or 'nih'.\n"
-                f"- Output ONLY the final translation in {target_lang}.\n"
-                f"- No quotes, markdown, or explanations.\n"
-                f"- Preserve line breaks.\n"
-            )
-
-        if settings and settings.get('translation_style'):
-            system_prompt += f" Use the style: {settings['translation_style']}."
-
-        messages = [{"role": "system", "content": system_prompt}]
-        user_content = ""
-        if is_enhanced and isinstance(ocr_results, dict):
-            user_content = "\n\n".join(filter(None, [
-                ocr_results.get('manga_ocr', ''),
-                ocr_results.get('tesseract', '')
-            ])).strip() or text_to_translate
-        else:
-            user_content = text_to_translate
-        messages.append({"role": "user", "content": user_content})
+        messages = build_openrouter_translate_messages(
+            text_to_translate,
+            target_lang,
+            settings,
+            is_enhanced=is_enhanced,
+            ocr_results=ocr_results,
+            glossary=SETTINGS.get('glossary', {}),
+        )
 
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -866,8 +840,8 @@ class TranslateMixin:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": float(model_info.get('temperature', 0.7)) if model_info else 0.7,
-            "max_tokens": int(model_info.get('max_tokens', 1024)) if model_info else 1024,
+            "temperature": float(model_info.get('temperature', 0.3)) if model_info else 0.3,
+            "max_tokens": int(model_info.get('max_tokens', 2048)) if model_info else 2048,
         }
 
         pr_timeout = int(provider_cfg.get('timeout', 60) or 60)
@@ -877,30 +851,27 @@ class TranslateMixin:
         try:
             response = robust_post(url, headers=headers, json_payload=payload,
                                 timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
+            status_code = int(getattr(response, 'status_code', 200) or 200)
             data = response.json()
         except Exception as exc:
             return f"[{error_prefix} REQUEST ERROR: {exc}]"
 
-        choices = data.get('choices')
-        output_text = ""
-        if isinstance(choices, list) and choices:
-            msg = choices[0].get('message', {})
-            content = msg.get('content')
-            if isinstance(content, list):
-                output_text = "".join(part.get('text', '') for part in content if isinstance(part, dict))
-            elif isinstance(content, str):
-                output_text = content
+        if isinstance(data, dict) and 'error' in data:
+            err_obj = data.get('error')
+            err_msg = err_obj.get('message', 'Unknown error') if isinstance(err_obj, dict) else str(err_obj)
+            return f"[{error_prefix} ERROR: {err_msg}]"
+        if status_code >= 400:
+            return f"[{error_prefix} ERROR: HTTP {status_code}]"
 
-        if not output_text:
-            if 'error' in data:
-                return f"[{error_prefix} ERROR: {data['error'].get('message', 'Unknown error')}]"
+        cleaned_output = clean_ai_text_output(extract_chat_completion_text(data))
+        if not cleaned_output:
             logger.warning(f"{provider_display} returned empty response: {response.text}")
             return f"[{error_prefix} ERROR: Empty response]"
 
-        usage = data.get('usage') or {}
+        usage = (data.get('usage') or {}) if isinstance(data, dict) else {}
         if hasattr(self, "api_cost_signal"):
             self.api_cost_signal.emit(usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), provider_display, model_id)
-        return output_text.strip()
+        return cleaned_output
 
     def get_translation_styles(self):
         return list(self.translation_styles)

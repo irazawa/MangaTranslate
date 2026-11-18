@@ -147,9 +147,9 @@ def default_settings() -> dict:
             "apply_mode": "selected",
             "text_color_threshold": 128,
             "auto_text_color": True,   # <— BARU: bisa dimatikan dari Settings
-            # When true, debug/temp files created by AI OCR and MOFRL (under ./temp/) will be removed after a run
+            # When true, debug/temp files created by AI OCR and MOFRL will be removed automatically
             "constrain_text": True,
-            "remove_ai_temp_files": False,
+            "remove_ai_temp_files": True,
         },
         "typeset": {
             "outline_enabled": True,
@@ -213,7 +213,7 @@ def default_settings() -> dict:
             }
         },
         "autosave": {
-            "enabled": False,
+            "enabled": True,
             "interval_ms": 300000
         },
         "appearance": {
@@ -411,7 +411,7 @@ def load_or_create_settings(path: str = SETTINGS_PATH) -> dict:
                 model['active'] = bool(model.get('active', True))
         autosave_defaults = base.get('autosave', {})
         autosave_settings = merged.setdefault('autosave', {})
-        autosave_settings['enabled'] = bool(autosave_settings.get('enabled', autosave_defaults.get('enabled', False)))
+        autosave_settings['enabled'] = bool(autosave_settings.get('enabled', autosave_defaults.get('enabled', True)))
         try:
             interval = int(autosave_settings.get('interval_ms', autosave_defaults.get('interval_ms', 300000)))
         except Exception:

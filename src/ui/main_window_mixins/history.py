@@ -158,6 +158,27 @@ class HistoryMixin:
     def show_history_modal(self):
         self._show_result_modal('history', 'History (All Entries)')
 
+    def open_chapter_proofread_dialog(self, modal: bool = True):
+        """Open sequential chapter proofread & QC table for all pages and bubbles."""
+        if getattr(self, 'current_image_path', None):
+            key = self.get_current_data_key()
+            if key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+
+        if not getattr(self, 'image_files', None) and not getattr(self, 'all_typeset_data', None):
+            if hasattr(self, 'show_toast'):
+                self.show_toast("No Project Data", "Load a folder or translate at least one page before proofreading.", kind="info")
+            return None
+
+        from src.ui.proofread_dialog import ChapterProofreadDialog
+        dlg = ChapterProofreadDialog(self, parent=self)
+        self._active_proofread_dialog = dlg
+        if modal:
+            dlg.exec_()
+        else:
+            dlg.show()
+        return dlg
+
     def generate_history_id(self):
         self.history_counter += 1
         return f"H{self.history_counter:05d}"
@@ -336,48 +357,63 @@ class HistoryMixin:
 
     def undo_last_action(self):
         """Navigasi mundur satu langkah di undo history timeline."""
-        if self._undo_history_idx >= 0:
-            restore_idx = self._undo_history_idx
-            self._restore_snapshot(restore_idx)
-            self._undo_history_idx = restore_idx - 1
+        if self._undo_history:
+            if self._undo_history_idx >= 0:
+                restore_idx = self._undo_history_idx
+                entry = self._undo_history[restore_idx]
+                try:
+                    entry['after_snapshot'] = self._capture_snapshot_payload()
+                except Exception as e:
+                    print(f"[UndoTimeline] Capture post-state failed: {e}")
+                self._undo_history_idx = restore_idx - 1
+                self._restore_snapshot_payload(entry['snapshot'])
+            return
+
+        # Fallback legacy: pop satu area hanya jika snapshot history kosong
+        if self.typeset_areas:
+            undone_area = self.typeset_areas.pop()
+            self.redo_stack.append(undone_area)
+            if self.selected_typeset_area is undone_area:
+                self.clear_selected_area()
+            if getattr(self, 'current_image_path', None):
+                key = self.get_current_data_key()
+                if key:
+                    self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+            self.redraw_all_typeset_areas()
             self.update_undo_redo_buttons_state()
-            self._refresh_undo_timeline()
             if hasattr(self, 'image_label'):
                 self.image_label.clear_selection()
-        else:
-            # Fallback legacy: pop satu area
-            if self.typeset_areas:
-                undone_area = self.typeset_areas.pop()
-                self.redo_stack.append(undone_area)
-                if self.selected_typeset_area is undone_area:
-                    self.clear_selected_area()
-                if getattr(self, 'current_image_path', None):
-                    key = self.get_current_data_key()
-                    if key:
-                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
-                self.redraw_all_typeset_areas()
-                self.update_undo_redo_buttons_state()
-                if hasattr(self, 'image_label'):
-                    self.image_label.clear_selection()
 
     def redo_last_action(self):
         """Navigasi maju satu langkah di undo history timeline."""
-        if self._undo_history and self._undo_history_idx < len(self._undo_history) - 1:
-            self._restore_snapshot(self._undo_history_idx + 1)
-        else:
-            # Fallback legacy redo
-            if self.redo_stack:
-                redone_area = self.redo_stack.pop()
-                self.typeset_areas.append(redone_area)
-                if getattr(self, 'current_image_path', None):
-                    key = self.get_current_data_key()
-                    if key:
-                        self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
-                self.set_selected_area(redone_area)
-                self.redraw_all_typeset_areas()
-                self.update_undo_redo_buttons_state()
-                if hasattr(self, 'image_label'):
-                    self.image_label.clear_selection()
+        if self._undo_history:
+            if self._undo_history_idx < len(self._undo_history) - 1:
+                next_idx = self._undo_history_idx + 1
+                entry = self._undo_history[next_idx]
+                target_snap = entry.get('after_snapshot')
+                if target_snap is None:
+                    if next_idx + 1 < len(self._undo_history):
+                        target_snap = self._undo_history[next_idx + 1].get('snapshot')
+                    else:
+                        target_snap = entry.get('snapshot')
+                self._undo_history_idx = next_idx
+                if target_snap is not None:
+                    self._restore_snapshot_payload(target_snap)
+            return
+
+        # Fallback legacy redo hanya jika snapshot history kosong
+        if self.redo_stack:
+            redone_area = self.redo_stack.pop()
+            self.typeset_areas.append(redone_area)
+            if getattr(self, 'current_image_path', None):
+                key = self.get_current_data_key()
+                if key:
+                    self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+            self.set_selected_area(redone_area)
+            self.redraw_all_typeset_areas()
+            self.update_undo_redo_buttons_state()
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_selection()
 
     def update_undo_redo_buttons_state(self):
         """Update enabled state tombol Undo dan Redo berdasarkan snapshot history."""
@@ -386,45 +422,149 @@ class HistoryMixin:
         self.undo_button.setEnabled(can_undo)
         self.redo_button.setEnabled(can_redo)
 
+    def _capture_snapshot_payload(self):
+        """Ambil deep-copy snapshot area dan state gambar saat ini tanpa mengubah _undo_history."""
+        import copy as _copy
+        snapshot = []
+        for area in self.typeset_areas:
+            if hasattr(area, 'to_payload'):
+                snapshot.append(area.to_payload())
+            else:
+                snapshot.append(_copy.deepcopy(area))
+        current_key = self.get_current_data_key() if getattr(self, 'current_image_path', None) else None
+        current_record = self.all_typeset_data.get(current_key, {}) if current_key else {}
+        image_state = copy_image_state_fields(current_record)
+        had_cleaned_image = record_has_cleaned_image(current_record)
+        base_image_pil = None
+        if (
+            not had_cleaned_image
+            and getattr(self, 'current_image_pil', None) is not None
+            and (
+                getattr(self, 'active_curves_points', None) is not None
+                or not can_resolve_source_for_key(current_key, pdf_document=getattr(self, 'pdf_document', None))
+            )
+        ):
+            base_image_pil = self.current_image_pil.copy()
+        return {
+            'areas': snapshot,
+            'had_cleaned_image': had_cleaned_image,
+            'image_state': image_state,
+            'base_image_pil': base_image_pil,
+        }
+
+    def _restore_snapshot_payload(self, snapshot):
+        """Pulihkan canvas, area typeset, dan gambar dasar dari payload snapshot."""
+        try:
+            payloads = snapshot.get('areas', []) if isinstance(snapshot, dict) else (snapshot or [])
+            image_png = snapshot.get('image_png') if isinstance(snapshot, dict) else None
+            had_cleaned_image = bool(snapshot.get('had_cleaned_image')) if isinstance(snapshot, dict) else False
+            image_state = snapshot.get('image_state') if isinstance(snapshot, dict) else None
+            base_image_pil = snapshot.get('base_image_pil') if isinstance(snapshot, dict) else None
+            pre_inpaint_png = snapshot.get('pre_inpaint_image_png') if isinstance(snapshot, dict) else None
+
+            self.typeset_areas.clear()
+            for payload in payloads:
+                if isinstance(payload, dict):
+                    try:
+                        area = TypesetArea.from_payload(payload)
+                        self.typeset_areas.append(area)
+                    except Exception as e:
+                        print(f"[UndoTimeline] Restore area failed: {e}")
+
+            key = self.get_current_data_key() if getattr(self, 'current_image_path', None) else None
+            if isinstance(image_state, dict):
+                try:
+                    pre_state = {k: image_state[k] for k in PRE_INPAINT_STATE_KEYS if image_state.get(k)}
+                    if had_cleaned_image:
+                        cleaned_only = {k: image_state[k] for k in CLEANED_STATE_KEYS if image_state.get(k)}
+                        restored_image = self._decode_cleaned_image(image_state, orig_pil=base_image_pil, key=key)
+                        if restored_image is not None:
+                            self._apply_base_image(restored_image)
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            cleaned_state=cleaned_only,
+                            pre_inpaint_state=pre_state,
+                            remove_pre_inpaint_image=not bool(pre_state),
+                        )
+                    else:
+                        current_rec = self.all_typeset_data.get(key, {}) if key else {}
+                        restored_image = base_image_pil.copy() if base_image_pil is not None else None
+                        if restored_image is None and record_has_cleaned_image(current_rec):
+                            restored_image = self._resolve_pre_inpaint_image(key, image_state)
+                        if restored_image is not None:
+                            self._apply_base_image(restored_image)
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            remove_cleaned_image=True,
+                            pre_inpaint_state=pre_state,
+                            remove_pre_inpaint_image=not bool(pre_state),
+                        )
+                except Exception as exc:
+                    print(f"[UndoTimeline] Restore image failed: {exc}")
+            elif image_png:
+                try:
+                    restored_image = Image.open(io.BytesIO(base64.b64decode(image_png))).convert('RGB')
+                    self._apply_base_image(restored_image)
+                    if had_cleaned_image:
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            cleaned_image_png=image_png,
+                            pre_inpaint_image_png=pre_inpaint_png,
+                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
+                        )
+                    else:
+                        self._update_typeset_record(
+                            key,
+                            areas=list(self.typeset_areas),
+                            redo=list(self.redo_stack),
+                            remove_cleaned_image=True,
+                            pre_inpaint_image_png=pre_inpaint_png,
+                            remove_pre_inpaint_image=not bool(pre_inpaint_png),
+                        )
+                except Exception as exc:
+                    print(f"[UndoTimeline] Restore image failed: {exc}")
+            elif key:
+                self._update_typeset_record(key, areas=list(self.typeset_areas), redo=list(self.redo_stack))
+
+            self.clear_selected_area()
+            self.redraw_all_typeset_areas()
+            self.update_undo_redo_buttons_state()
+            self._refresh_undo_timeline()
+            if hasattr(self, 'image_label'):
+                self.image_label.clear_selection()
+            if hasattr(self, '_refresh_inpaint_result_controls'):
+                self._refresh_inpaint_result_controls()
+            if hasattr(self, '_refresh_layers_list'):
+                self._refresh_layers_list()
+        except Exception as e:
+            print(f"[UndoTimeline] Restore snapshot failed: {e}")
+
     def _push_undo_snapshot(self, label="Action"):
         """
         Ambil snapshot deep-copy dari typeset_areas sebelum perubahan.
         Push ke _undo_history dan potong redo branch.
         """
-        import copy as _copy
         try:
-            snapshot = []
-            for area in self.typeset_areas:
-                if hasattr(area, 'to_payload'):
-                    snapshot.append(area.to_payload())
-                else:
-                    snapshot.append(_copy.deepcopy(area))
-            current_key = self.get_current_data_key() if self.current_image_path else None
-            current_record = self.all_typeset_data.get(current_key, {}) if current_key else {}
-            image_state = copy_image_state_fields(current_record)
-            had_cleaned_image = record_has_cleaned_image(current_record)
-            base_image_pil = None
-            if (
-                not had_cleaned_image
-                and getattr(self, 'current_image_pil', None) is not None
-                and (
-                    getattr(self, 'active_curves_points', None) is not None
-                    or not can_resolve_source_for_key(current_key, pdf_document=getattr(self, 'pdf_document', None))
-                )
-            ):
-                base_image_pil = self.current_image_pil.copy()
-            snapshot_payload = {
-                'areas': snapshot,
-                'had_cleaned_image': had_cleaned_image,
-                'image_state': image_state,
-                'base_image_pil': base_image_pil,
-            }
+            snapshot_payload = self._capture_snapshot_payload()
 
             # Potong redo branch (state setelah posisi aktif)
             if self._undo_history_idx < len(self._undo_history) - 1:
                 self._undo_history = self._undo_history[:self._undo_history_idx + 1]
 
-            self._undo_history.append({'label': label, 'snapshot': snapshot_payload})
+            if self._undo_history:
+                self._undo_history[-1]['after_snapshot'] = snapshot_payload
+
+            self._undo_history.append({
+                'label': label,
+                'snapshot': snapshot_payload,
+                'after_snapshot': None,
+            })
 
             # Cap ke max history
             if len(self._undo_history) > self._MAX_UNDO_HISTORY:
@@ -432,6 +572,11 @@ class HistoryMixin:
 
             self._undo_history_idx = len(self._undo_history) - 1
             self._refresh_undo_timeline()
+            if getattr(self, 'current_image_path', None):
+                key = self.get_current_data_key()
+                rec = self.all_typeset_data.get(key) if key else None
+                if isinstance(rec, dict) and rec.get('exported_saved') is True:
+                    rec['exported_saved'] = False
         except Exception as e:
             print(f"[UndoTimeline] Push snapshot failed: {e}")
 

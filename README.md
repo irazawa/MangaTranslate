@@ -4,7 +4,7 @@
 
 Aplikasi ini mendukung input **gambar satuan, folder chapter, file proyek `.manga_proj`, dan dokumen PDF**, dengan seluruh proses berat berjalan di latar belakang agar tampilan aplikasi tetap responsif.
 
-> **Versi saat ini:** `14.9.9.4`
+> **Versi saat ini:** `14.9.9.8`
 
 ![Tampilan Utama Workspace MangaTranslate](docs/images/app_workspace_overview.png)
 

@@ -5,12 +5,14 @@ Mixin ini hanya berguna sebagai bagian dari MangaOCRApp -- ia mengandalkan
 atribut yang dibuat di MangaOCRApp.__init__.
 """
 
+import threading
+
 from src.ui.main_window_mixins._imports import *  # noqa: F401,F403
 
-# Logika murni sudah pindah ke src.core.ocr; nama diberi awalan core_
-# agar tidak bentrok dengan method pembungkus di bawah.
+# Logika murni sudah pindah ke src.core.ocr & src.core.prompts.
 from src.core.ocr import extract_ai_ocr_text as core_extract_ai_ocr_text
 from src.core.ocr import preprocess_for_ocr as core_preprocess_for_ocr
+from src.core.prompts import build_ocr_prompt, clean_ai_text_output
 
 
 class OcrMixin:
@@ -130,6 +132,8 @@ class OcrMixin:
                     enable_jp = False
                 en_combo.setEnabled(enable_en)
                 jp_combo.setEnabled(enable_jp)
+        if hasattr(self, '_update_full_tab_hints'):
+            self._update_full_tab_hints()
 
     def preprocess_for_ocr(self, cv_image, orientation_hint="Auto-Detect"):
         """Delegasi ke src.core.ocr; lihat di sana untuk logikanya."""
@@ -298,71 +302,65 @@ class OcrMixin:
         return raw_text
 
     def _get_ai_ocr_prompt(self, lang):
-        if lang == "Japanese":
-            return (
-                "Task: Optical Character Recognition (OCR) for Japanese text.\n"
-                "Input: an image.\n"
-                "Output: ONLY the recognized text in natural reading order.\n\n"
-                "Rules:\n"
-                "- Do NOT explain or add any commentary.\n"
-                "- Do NOT output markdown or formatting symbols.\n"
-                "- Keep line breaks if they appear in the original image.\n"
-                "- Preserve punctuation (。, 、, …, !, ? etc.).\n"
-                "- When a small note or furigana is written next to a kanji, output it in parentheses after the kanji.\n"
-                "  Example: 漢字 + note → 漢字(note)\n"
-                "- If the note appears *before* the kanji (vertically aligned text), treat it the same way: 漢字(note).\n"
-                "- If the note is unrelated annotation or translation note, also wrap it in parentheses.\n"
-                "- Do NOT merge notes and kanji into a single block like [note][kanji].\n"
-                "- Do NOT drop ellipses (…)\n"
-                "- Just return the plain text with correct kanji-note pairing."
-            )
-        elif lang == "English":
-            return (
-                "Task: Optical Character Recognition (OCR) for English text.\n"
-                "Input: an image.\n"
-                "Output: ONLY the recognized text in natural reading order.\n\n"
-                "Rules:\n"
-                "- Do NOT explain or add any commentary.\n"
-                "- Do NOT output markdown or formatting symbols.\n"
-                "- Maintain original line breaks.\n"
-                "- Preserve punctuation.\n"
-                "- Return ONLY the plain text."
-            )
-        elif lang == "Korean":
-            return (
-                "Task: Optical Character Recognition (OCR) for Korean text (Hangul).\n"
-                "Input: an image.\n"
-                "Output: ONLY the recognized text in natural reading order.\n\n"
-                "Rules:\n"
-                "- Do NOT explain or add any commentary.\n"
-                "- Do NOT output markdown or formatting symbols.\n"
-                "- Maintain original line breaks.\n"
-                "- Preserve punctuation.\n"
-                "- Return ONLY the plain text."
-            )
-        elif lang == "Chinese":
-            return (
-                "Task: Optical Character Recognition (OCR) for Chinese text.\n"
-                "Input: an image.\n"
-                "Output: ONLY the recognized text in natural reading order.\n\n"
-                "Rules:\n"
-                "- Do NOT explain or add any commentary.\n"
-                "- Do NOT output markdown or formatting symbols.\n"
-                "- Maintain original line breaks.\n"
-                "- Preserve punctuation.\n"
-                "- Return ONLY the plain text."
-            )
-        else:
-             return (
-                "Task: Optical Character Recognition (OCR).\n"
-                "Input: an image.\n"
-                "Output: ONLY the recognized text in natural reading order.\n\n"
-                "Rules:\n"
-                "- Do NOT explain or add any commentary.\n"
-                "- Output the text exactly as seen in the image.\n"
-                "- Preserve punctuation and line breaks.\n"
-                "- Return ONLY the plain text."
-            )
+        """Bangun prompt AI OCR terpusat dari src.core.prompts."""
+        return build_ocr_prompt(lang)
+
+    def _get_ai_temp_dir(self):
+        """Direktori debug AI temp di .cache/ai_temp (bukan di dalam folder src/)."""
+        cache_root = getattr(self, 'cache_dir', None) or os.path.join(ROOT_DIR, '.cache')
+        return os.path.join(cache_root, 'ai_temp')
+
+    def _cleanup_ai_temp_files(self, file_paths, temp_dir):
+        """Remove tracked AI debug temp files when cleanup.remove_ai_temp_files is enabled (default True)."""
+        if not temp_dir or not file_paths:
+            return
+        cleanup_cfg = SETTINGS.get('cleanup', {})
+        if isinstance(cleanup_cfg, dict) and not cleanup_cfg.get('remove_ai_temp_files', True):
+            return
+        abs_temp = os.path.abspath(temp_dir)
+        for p in file_paths:
+            if not p:
+                continue
+            try:
+                abs_p = os.path.abspath(p)
+                if os.path.exists(abs_p) and os.path.commonpath([abs_p, abs_temp]) == abs_temp:
+                    os.remove(abs_p)
+            except Exception:
+                pass
+
+    def _purge_stale_temp_dirs(self):
+        """Purge leftover AI debug temp files in .cache/ai_temp and legacy src/ temp folders."""
+        cleanup_cfg = SETTINGS.get('cleanup', {})
+        if isinstance(cleanup_cfg, dict) and not cleanup_cfg.get('remove_ai_temp_files', True):
+            return
+        temp_dirs = [
+            self._get_ai_temp_dir(),
+            os.path.join(ROOT_DIR, '.cache', 'ai_temp'),
+            os.path.join(ROOT_DIR, 'src', 'ui', 'temp'),
+            os.path.join(ROOT_DIR, 'src', 'ui', 'main_window_mixins', 'temp'),
+        ]
+        for tpath in temp_dirs:
+            if not tpath or not os.path.isdir(tpath):
+                continue
+            for item in os.listdir(tpath):
+                item_path = os.path.join(tpath, item)
+                try:
+                    if os.path.isfile(item_path) or os.path.islink(item_path):
+                        os.remove(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                except Exception:
+                    pass
+        root_temp = os.path.join(ROOT_DIR, 'temp')
+        if os.path.isdir(root_temp):
+            for fname in os.listdir(root_temp):
+                if fname == 'full_page_response.txt' or fname.startswith(('aiocr_', 'mofrl_')):
+                    try:
+                        fpath = os.path.join(root_temp, fname)
+                        if os.path.isfile(fpath):
+                            os.remove(fpath)
+                    except Exception:
+                        pass
 
     def _ai_ocr_provider_label(self, provider_key):
         normalized = str(provider_key or '').strip().lower()
@@ -407,10 +405,15 @@ class OcrMixin:
             return "[AI OCR ERROR: No active model configured]"
 
         provider_cfg = SETTINGS.get('ocr', {}).get(provider_key, {})
+        norm_provider = str(provider_key or '').strip().lower()
         url = (provider_cfg.get('url') or '').strip()
+        if not url and norm_provider == 'openrouter':
+            url = "https://openrouter.ai/api/v1/chat/completions"
         if url and url.startswith("http://") and not ('localhost' in url or '127.0.0.1' in url):
             url = "https://" + url[7:]
         api_key = (provider_cfg.get('api_key') or '').strip()
+        if not api_key and norm_provider == 'openrouter':
+            api_key = get_openrouter_api_key()
 
         if not url:
             return "[AI OCR ERROR: API URL missing]"
@@ -487,118 +490,133 @@ class OcrMixin:
             "Content-Type": "application/json"
         }
 
-        # Ensure temp debug folder
-        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+        # Debug folder isolated in .cache/ai_temp with thread-unique names for parallel safety
+        temp_dir = self._get_ai_temp_dir()
         try:
             os.makedirs(temp_dir, exist_ok=True)
         except Exception:
             temp_dir = None
 
-        # Save crop image for debugging
+        uid = f"{int(time.time() * 1000)}_{threading.get_ident()}"
+        created_temp_files = []
         if temp_dir:
             try:
-                # Put debug images under temp/img/aiocr/
                 img_dir = os.path.join(temp_dir, 'img', 'aiocr')
                 os.makedirs(img_dir, exist_ok=True)
-                timestamp = int(time.time())
-                crop_path = os.path.join(img_dir, f'aiocr_crop_{timestamp}.png')
+                crop_path = os.path.join(img_dir, f'aiocr_crop_{uid}.png')
                 with open(crop_path, 'wb') as f:
                     f.write(buffer.tobytes())
+                created_temp_files.append(crop_path)
             except Exception:
                 crop_path = None
         else:
             crop_path = None
 
         last_exception = None
+        last_error_msg = None
         variant_index = 0
-        for payload in payload_variants:
-            variant_index += 1
-            ppath = None
-            rpath = None
-            rjson_path = None
-            errpath = None
-            if temp_dir:
-                try:
-                    ppath = os.path.join(temp_dir, f'aiocr_payload_v{variant_index}.json')
-                    with open(ppath, 'w', encoding='utf-8') as pf:
-                        json.dump(payload, pf, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
-
-            try:
-                provider_label = self._ai_ocr_provider_label(provider_key)
-                if hasattr(self, 'check_and_increment_usage') and not self.check_and_increment_usage(provider_label, model_id):
-                    return f"[AI OCR ERROR: Rate limit reached for {model_id}]"
-                # provider-specific overrides
-                pr_timeout = int(provider_cfg.get('timeout', 45) or 45)
-                pr_retries = int(provider_cfg.get('retries', 2) or 2)
-                pr_backoff = float(provider_cfg.get('backoff', 1.5) or 1.5)
-                response = robust_post(url, headers=headers, json_payload=payload,
-                                       timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
-            except requests.RequestException as exc:
-                last_exception = exc
-                # save response text if any
+        try:
+            for payload in payload_variants:
+                variant_index += 1
+                ppath = None
+                rpath = None
+                rjson_path = None
+                errpath = None
                 if temp_dir:
                     try:
-                        errpath = os.path.join(temp_dir, f'aiocr_response_v{variant_index}_error.txt')
-                        with open(errpath, 'w', encoding='utf-8') as ef:
-                            ef.write(str(exc))
+                        ppath = os.path.join(temp_dir, f'aiocr_payload_{uid}_v{variant_index}.json')
+                        with open(ppath, 'w', encoding='utf-8') as pf:
+                            json.dump(payload, pf, ensure_ascii=False, indent=2)
+                        created_temp_files.append(ppath)
                     except Exception:
                         pass
-                # try next variant
-                continue
 
-            try:
-                data = response.json()
-            except ValueError:
-                # Save raw response for diagnostics
+                try:
+                    provider_label = self._ai_ocr_provider_label(provider_key)
+                    if hasattr(self, 'check_and_increment_usage') and not self.check_and_increment_usage(provider_label, model_id):
+                        return f"[AI OCR ERROR: Rate limit reached for {model_id}]"
+                    # provider-specific overrides
+                    pr_timeout = int(provider_cfg.get('timeout', 45) or 45)
+                    pr_retries = int(provider_cfg.get('retries', 2) or 2)
+                    pr_backoff = float(provider_cfg.get('backoff', 1.5) or 1.5)
+                    response = robust_post(url, headers=headers, json_payload=payload,
+                                           timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
+                except requests.RequestException as exc:
+                    last_exception = exc
+                    # save response text if any
+                    if temp_dir:
+                        try:
+                            errpath = os.path.join(temp_dir, f'aiocr_response_{uid}_v{variant_index}_error.txt')
+                            with open(errpath, 'w', encoding='utf-8') as ef:
+                                ef.write(str(exc))
+                            created_temp_files.append(errpath)
+                        except Exception:
+                            pass
+                    # try next variant
+                    continue
+
+                status_code = int(getattr(response, 'status_code', 200) or 200)
+                try:
+                    data = response.json()
+                except ValueError:
+                    # Save raw response for diagnostics
+                    if temp_dir:
+                        try:
+                            rpath = os.path.join(temp_dir, f'aiocr_response_{uid}_v{variant_index}_raw.txt')
+                            with open(rpath, 'w', encoding='utf-8') as rf:
+                                rf.write(response.text)
+                            created_temp_files.append(rpath)
+                        except Exception:
+                            pass
+                    if status_code in (401, 402, 403, 404, 429) or status_code >= 500:
+                        return f"[AI OCR ERROR (HTTP {status_code})]"
+                    if status_code >= 400:
+                        last_error_msg = f"HTTP {status_code}"
+                    # try next variant
+                    continue
+
+                # Save provider response for debugging
                 if temp_dir:
                     try:
-                        rpath = os.path.join(temp_dir, f'aiocr_response_v{variant_index}_raw.txt')
-                        with open(rpath, 'w', encoding='utf-8') as rf:
-                            rf.write(response.text)
+                        rjson_path = os.path.join(temp_dir, f'aiocr_response_{uid}_v{variant_index}.json')
+                        with open(rjson_path, 'w', encoding='utf-8') as rf:
+                            json.dump(data, rf, ensure_ascii=False, indent=2)
+                        created_temp_files.append(rjson_path)
                     except Exception:
                         pass
-                # try next variant
-                continue
 
-            # Save provider response for debugging
-            if temp_dir:
-                try:
-                    rjson_path = os.path.join(temp_dir, f'aiocr_response_v{variant_index}.json')
-                    with open(rjson_path, 'w', encoding='utf-8') as rf:
-                        json.dump(data, rf, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+                if isinstance(data, dict) and 'error' in data:
+                    err_obj = data.get('error')
+                    err_detail = err_obj.get('message', str(err_obj)) if isinstance(err_obj, dict) else str(err_obj)
+                    # Non-schema HTTP errors should fail fast instead of retrying invalid Variant B/C payloads.
+                    if status_code in (401, 402, 403, 404, 429) or status_code >= 500:
+                        return f"[AI OCR ERROR (HTTP {status_code}): {err_detail}]"
+                    last_error_msg = f"HTTP {status_code}: {err_detail}" if status_code >= 400 else err_detail
+                    continue
 
-            extracted = self._extract_ai_ocr_text(data)
-            # if the model explicitly says there's no image, keep trying other variants
-            if extracted and 'i cannot see any image' not in extracted.lower():
-                self._record_ai_ocr_cost_usage(data, provider_key, model_id, prompt_text, extracted, image_b64)
-                # [CACHE SAVE]
-                try:
-                    with open(cache_file, 'w', encoding='utf-8') as f:
-                        json.dump({'text': extracted, 'model': model_id, 'timestamp': time.time()}, f)
-                except Exception:
-                    pass
+                if status_code in (401, 402, 403, 404, 429) or status_code >= 500:
+                    return f"[AI OCR ERROR (HTTP {status_code})]"
 
-                # Optionally remove debug files for this run
-                try:
-                    if SETTINGS.get('cleanup', {}).get('remove_ai_temp_files') and temp_dir:
-                        for p in (crop_path, ppath, rpath, rjson_path, errpath):
-                            try:
-                                if p and os.path.exists(p) and os.path.commonpath([os.path.abspath(p), os.path.abspath(temp_dir)]) == os.path.abspath(temp_dir):
-                                    os.remove(p)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-                return extracted
+                extracted = self._extract_ai_ocr_text(data)
+                # if the model explicitly says there's no image, keep trying other variants
+                if extracted and 'i cannot see any image' not in extracted.lower():
+                    self._record_ai_ocr_cost_usage(data, provider_key, model_id, prompt_text, extracted, image_b64)
+                    # [CACHE SAVE]
+                    try:
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            json.dump({'text': extracted, 'model': model_id, 'timestamp': time.time()}, f)
+                    except Exception:
+                        pass
+                    return extracted
 
-        # If we reach here, all variants failed
-        if last_exception:
-            return f"[AI OCR REQUEST ERROR: {last_exception}]"
-        return "[AI OCR ERROR: Empty or unrecognized response from provider]"
+            # If we reach here, all variants failed
+            if last_error_msg:
+                return f"[AI OCR ERROR: {last_error_msg}]"
+            if last_exception:
+                return f"[AI OCR REQUEST ERROR: {last_exception}]"
+            return "[AI OCR ERROR: Empty or unrecognized response from provider]"
+        finally:
+            self._cleanup_ai_temp_files(created_temp_files, temp_dir)
 
     def _call_mofrl_ocr(self, image_bgr, settings):
         """
@@ -650,237 +668,202 @@ class OcrMixin:
 
             ai_lang = SETTINGS.get('ai_ocr_lang', 'General/Multi-Language')
             prompt = self._get_ai_ocr_prompt(ai_lang)
-            # Prepare temp debug folder
-            temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+            # Prepare temp debug folder in .cache/ai_temp
+            temp_dir = self._get_ai_temp_dir()
             try:
                 os.makedirs(temp_dir, exist_ok=True)
             except Exception:
                 temp_dir = None
 
-            if temp_dir:
-                try:
-                    # Put debug images under temp/img/mofrl/
-                    img_dir = os.path.join(temp_dir, 'img', 'mofrl')
-                    os.makedirs(img_dir, exist_ok=True)
-                    ts = int(time.time())
-                    crop_path = os.path.join(img_dir, f'mofrl_crop_{ts}.png')
-                    with open(crop_path, 'wb') as cf:
-                        cf.write(buffer.tobytes())
-                except Exception:
-                    pass
+            created_temp_files = []
+            try:
+                if temp_dir:
+                    try:
+                        img_dir = os.path.join(temp_dir, 'img', 'mofrl')
+                        os.makedirs(img_dir, exist_ok=True)
+                        ts = f"{int(time.time() * 1000)}_{threading.get_ident()}"
+                        crop_path = os.path.join(img_dir, f'mofrl_crop_{ts}.png')
+                        with open(crop_path, 'wb') as cf:
+                            cf.write(buffer.tobytes())
+                        created_temp_files.append(crop_path)
+                    except Exception:
+                        pass
 
-            headers = {"Content-Type": "application/json"}
-            last_exception = None
+                headers = {"Content-Type": "application/json"}
+                last_exception = None
 
-            # For OpenAI/OpenRouter try several payload variants (data_uri, input_image, inline text)
-            if provider.startswith('openai') or provider.startswith('openrouter'):
-                headers["Authorization"] = f"Bearer {api_key}"
-                token_field = "max_tokens"
-                if model.startswith("gpt-5"):
-                    token_field = "max_completion_tokens"
+                # For OpenAI/OpenRouter try several payload variants (data_uri, input_image, inline text)
+                if provider.startswith('openai') or provider.startswith('openrouter'):
+                    headers["Authorization"] = f"Bearer {api_key}"
+                    token_field = "max_tokens"
+                    if model.startswith("gpt-5"):
+                        token_field = "max_completion_tokens"
 
-                payload_variants = []
-                # Variant A: image_url with data URI
-                payload_variants.append({
-                    "model": model,
-                    "messages": [
+                    payload_variants = [
                         {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
-                            ]
-                        }
-                    ],
-                    token_field: 2048
-                })
-
-                # Variant B: input_image with image_data
-                payload_variants.append({
-                    "model": model,
-                    "messages": [
+                            "model": model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
+                                    ]
+                                }
+                            ],
+                            token_field: 2048
+                        },
                         {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "input_image", "image_data": f"data:image/png;base64,{image_b64}"}
-                            ]
-                        }
-                    ],
-                    token_field: 2048
-                })
-
-                # Variant C: prompt + data URI in single content
-                payload_variants.append({
-                    "model": model,
-                    "messages": [
+                            "model": model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        {"type": "input_image", "image_data": f"data:image/png;base64,{image_b64}"}
+                                    ]
+                                }
+                            ],
+                            token_field: 2048
+                        },
                         {
-                            "role": "user",
-                            "content": prompt + "\n\nImage: " + f"data:image/png;base64,{image_b64}"
-                        }
-                    ],
-                    token_field: 2048
-                })
+                            "model": model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": prompt + "\n\nImage: " + f"data:image/png;base64,{image_b64}"
+                                }
+                            ],
+                            token_field: 2048
+                        },
+                    ]
 
-                variant_index = 0
-                for payload in payload_variants:
-                    variant_index += 1
-                    # save payload
+                    for variant_index, payload in enumerate(payload_variants, start=1):
+                        if temp_dir:
+                            try:
+                                ppath = os.path.join(temp_dir, f'mofrl_payload_v{variant_index}.json')
+                                with open(ppath, 'w', encoding='utf-8') as pf:
+                                    json.dump(payload, pf, ensure_ascii=False, indent=2)
+                                created_temp_files.append(ppath)
+                            except Exception:
+                                pass
+
+                        try:
+                            apis_provider_cfg = apis_cfg.get(provider, {}) or {}
+                            pr_timeout = int(apis_provider_cfg.get('timeout', 90) or 90)
+                            pr_retries = int(apis_provider_cfg.get('retries', 2) or 2)
+                            pr_backoff = float(apis_provider_cfg.get('backoff', 1.5) or 1.5)
+                            response = robust_post(api_url, headers=headers, json_payload=payload,
+                                                   timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
+                        except requests.RequestException as exc:
+                            last_exception = exc
+                            if temp_dir:
+                                try:
+                                    errpath = os.path.join(temp_dir, f'mofrl_response_v{variant_index}_error.txt')
+                                    with open(errpath, 'w', encoding='utf-8') as ef:
+                                        ef.write(str(exc))
+                                    created_temp_files.append(errpath)
+                                except Exception:
+                                    pass
+                            continue
+
+                        try:
+                            resp_json = response.json()
+                        except Exception:
+                            if temp_dir:
+                                try:
+                                    rpath = os.path.join(temp_dir, f'mofrl_response_v{variant_index}_raw.txt')
+                                    with open(rpath, 'w', encoding='utf-8') as rf:
+                                        rf.write(response.text)
+                                    created_temp_files.append(rpath)
+                                except Exception:
+                                    pass
+                            continue
+
+                        if temp_dir:
+                            try:
+                                rjson_path = os.path.join(temp_dir, f'mofrl_response_v{variant_index}.json')
+                                with open(rjson_path, 'w', encoding='utf-8') as rf:
+                                    json.dump(resp_json, rf, ensure_ascii=False, indent=2)
+                                created_temp_files.append(rjson_path)
+                            except Exception:
+                                pass
+
+                        extracted = self._extract_ai_ocr_text(resp_json)
+                        if extracted and 'i cannot see any image' not in extracted.lower():
+                            return extracted
+
+                    if last_exception:
+                        return f"[MOFRL ERROR: {last_exception}]"
+                    return "[MOFRL ERROR: Empty or unrecognized response from provider]"
+
+                elif provider.startswith('gemini'):
+                    api_url_with_key = api_url + f"?key={api_key}"
+                    payload = {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {"text": prompt},
+                                    {"inline_data": {"mime_type": "image/png", "data": image_b64}}
+                                ]
+                            }
+                        ]
+                    }
+
                     if temp_dir:
                         try:
-                            ppath = os.path.join(temp_dir, f'mofrl_payload_v{variant_index}.json')
+                            ppath = os.path.join(temp_dir, 'mofrl_payload_gemini.json')
                             with open(ppath, 'w', encoding='utf-8') as pf:
                                 json.dump(payload, pf, ensure_ascii=False, indent=2)
+                            created_temp_files.append(ppath)
                         except Exception:
                             pass
 
                     try:
-                        # Use apis settings if available for timeout/retries/backoff
-                        apis_provider_cfg = apis_cfg.get(provider, {}) or {}
-                        pr_timeout = int(apis_provider_cfg.get('timeout', 90) or 90)
-                        pr_retries = int(apis_provider_cfg.get('retries', 2) or 2)
-                        pr_backoff = float(apis_provider_cfg.get('backoff', 1.5) or 1.5)
-                        response = robust_post(api_url, headers=headers, json_payload=payload,
-                                               timeout=pr_timeout, max_retries=pr_retries, backoff_factor=pr_backoff)
+                        response = requests.post(api_url_with_key, headers=headers, data=json.dumps(payload), timeout=90)
+                        response.raise_for_status()
                     except requests.RequestException as exc:
-                        last_exception = exc
-                        if temp_dir:
-                            try:
-                                errpath = os.path.join(temp_dir, f'mofrl_response_v{variant_index}_error.txt')
-                                with open(errpath, 'w', encoding='utf-8') as ef:
-                                    ef.write(str(exc))
-                            except Exception:
-                                pass
-                        continue
+                        return f"[MOFRL ERROR: {exc}]"
 
                     try:
                         resp_json = response.json()
                     except Exception:
                         if temp_dir:
                             try:
-                                rpath = os.path.join(temp_dir, f'mofrl_response_v{variant_index}_raw.txt')
+                                rpath = os.path.join(temp_dir, 'mofrl_response_gemini_raw.txt')
                                 with open(rpath, 'w', encoding='utf-8') as rf:
                                     rf.write(response.text)
+                                created_temp_files.append(rpath)
                             except Exception:
                                 pass
-                        continue
+                        return "[MOFRL ERROR: Invalid JSON from Gemini]"
 
                     if temp_dir:
                         try:
-                            rjson_path = os.path.join(temp_dir, f'mofrl_response_v{variant_index}.json')
+                            rjson_path = os.path.join(temp_dir, 'mofrl_response_gemini.json')
                             with open(rjson_path, 'w', encoding='utf-8') as rf:
                                 json.dump(resp_json, rf, ensure_ascii=False, indent=2)
+                            created_temp_files.append(rjson_path)
                         except Exception:
                             pass
 
-                    # extract text like AI OCR helper
-                    extracted = self._extract_ai_ocr_text(resp_json)
-                    if extracted and 'i cannot see any image' not in extracted.lower():
-                        # Optionally remove debug files for this run
-                        try:
-                            if SETTINGS.get('cleanup', {}).get('remove_ai_temp_files') and temp_dir:
-                                for p in (crop_path, ppath, rpath, rjson_path, errpath):
-                                    try:
-                                        if p and os.path.exists(p) and os.path.commonpath([os.path.abspath(p), os.path.abspath(temp_dir)]) == os.path.abspath(temp_dir):
-                                            os.remove(p)
-                                    except Exception:
-                                        pass
-                        except Exception:
-                            pass
-                        return extracted
+                    result = ""
+                    candidates = resp_json.get('candidates') or []
+                    if candidates and isinstance(candidates[0], dict) and 'content' in candidates[0]:
+                        parts = candidates[0]['content'].get('parts', [])
+                        if parts:
+                            result = '\n'.join(p.get('text', '') for p in parts if isinstance(p, dict)).strip()
 
-                if last_exception:
-                    return f"[MOFRL ERROR: {last_exception}]"
-                return "[MOFRL ERROR: Empty or unrecognized response from provider]"
-
-            elif provider.startswith('gemini'):
-                # Gemini expects inline_data and uses API key in query param
-                api_url_with_key = api_url + f"?key={api_key}"
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {"text": prompt},
-                                {"inline_data": {"mime_type": "image/png", "data": image_b64}}
-                            ]
-                        }
-                    ]
-                }
-
-                if temp_dir:
-                    try:
-                        ppath = os.path.join(temp_dir, 'mofrl_payload_gemini.json')
-                        with open(ppath, 'w', encoding='utf-8') as pf:
-                            json.dump(payload, pf, ensure_ascii=False, indent=2)
-                    except Exception:
-                        pass
-
-                try:
-                    response = requests.post(api_url_with_key, headers=headers, data=json.dumps(payload), timeout=90)
-                    response.raise_for_status()
-                except requests.RequestException as exc:
-                    return f"[MOFRL ERROR: {exc}]"
-
-                try:
-                    resp_json = response.json()
-                except Exception:
-                    if temp_dir:
-                        try:
-                            rpath = os.path.join(temp_dir, 'mofrl_response_gemini_raw.txt')
-                            with open(rpath, 'w', encoding='utf-8') as rf:
-                                rf.write(response.text)
-                        except Exception:
-                            pass
-                    return "[MOFRL ERROR: Invalid JSON from Gemini]"
-
-                if temp_dir:
-                    try:
-                        rjson_path = os.path.join(temp_dir, 'mofrl_response_gemini.json')
-                        with open(rjson_path, 'w', encoding='utf-8') as rf:
-                            json.dump(resp_json, rf, ensure_ascii=False, indent=2)
-                    except Exception:
-                        pass
-
-                # Try to extract content similar to existing code
-                result = ""
-                # check candidates/content structure
-                candidates = resp_json.get('candidates') or []
-                if candidates and isinstance(candidates[0], dict) and 'content' in candidates[0]:
-                    parts = candidates[0]['content'].get('parts', [])
-                    if parts:
-                        result = '\n'.join(p.get('text', '') for p in parts if isinstance(p, dict)).strip()
-
-                # fallback
-                if not result:
-                    result = resp_json.get('output_text') or resp_json.get('text') or ''
-                    if isinstance(result, list):
-                        result = '\n'.join([r for r in result if isinstance(r, str)])
-                    result = (result or '').strip()
-
-                if not result:
-                    # Optionally remove debug files
-                    try:
-                        if SETTINGS.get('cleanup', {}).get('remove_ai_temp_files') and temp_dir:
-                            for p in (crop_path, ppath, rpath, rjson_path):
-                                try:
-                                    if p and os.path.exists(p) and os.path.commonpath([os.path.abspath(p), os.path.abspath(temp_dir)]) == os.path.abspath(temp_dir):
-                                        os.remove(p)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-                    return "[MOFRL ERROR: hasil kosong]"
-                try:
-                    if SETTINGS.get('cleanup', {}).get('remove_ai_temp_files') and temp_dir:
-                        for p in (crop_path, ppath, rpath, rjson_path):
-                            try:
-                                if p and os.path.exists(p) and os.path.commonpath([os.path.abspath(p), os.path.abspath(temp_dir)]) == os.path.abspath(temp_dir):
-                                    os.remove(p)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-                return result
+                    if not result:
+                        result = resp_json.get('output_text') or resp_json.get('text') or ''
+                        if isinstance(result, list):
+                            result = '\n'.join([r for r in result if isinstance(r, str)])
+                    result = clean_ai_text_output(result or '')
+                    if not result:
+                        return "[MOFRL ERROR: hasil kosong]"
+                    return result
+            finally:
+                self._cleanup_ai_temp_files(created_temp_files, temp_dir)
 
         except Exception as e:
             traceback.print_exc()

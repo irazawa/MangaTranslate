@@ -33,6 +33,26 @@ from src.core.config import *
 from src.utils.geometry import *
 from src.ui.dialogs import *
 from src.core.fonts import *
+from src.core.prompts import format_heart_emoticon_lines
+
+
+HEART_EMOTICON_CHARS = frozenset("♡♥❤❥❣💕💖💗💘💙💚💛💜🖤🤍")
+HEART_EMOTICON_SPLIT_RE = re.compile(r"([♡♥❤❥❣💕💖💗💘💙💚💛💜🖤🤍]+)")
+HEART_EMOTICON_SCALE = 1.70
+
+
+def scaled_emoticon_qfont(base_font: QFont, scale: float = HEART_EMOTICON_SCALE) -> QFont:
+    """Return a copy of *base_font* scaled up and bolded so heart emoticons stand out clearly."""
+    f = QFont(base_font)
+    pt_f = f.pointSizeF()
+    if pt_f > 0:
+        f.setPointSizeF(max(1.0, pt_f * scale))
+    else:
+        pt = f.pointSize()
+        if pt > 0:
+            f.setPointSize(max(1, int(round(pt * scale))))
+    f.setBold(True)
+    return f
 
 
 def _measure_wrapped_segments(
@@ -70,25 +90,42 @@ def _measure_wrapped_segments(
     for seg_font, seg_text in segments:
         if not seg_text:
             continue
+        seg_text = format_heart_emoticon_lines(seg_text)
         test_font = QFont(seg_font)
         base_pt = test_font.pointSizeF() if test_font.pointSizeF() > 0 else float(max(1, test_font.pointSize() or 14))
         test_font.setPointSizeF(max(1.0, base_pt * scale))
         test_font.setLetterSpacing(QFont.PercentageSpacing, cs)
 
         fm = QFontMetrics(test_font)
+        heart_font = scaled_emoticon_qfont(test_font)
+        heart_fm = QFontMetrics(heart_font)
         for token in re.split(r'\s+', seg_text):
             if token:
-                w_tok = float(fm.horizontalAdvance(token))
+                w_tok = 0.0
+                for chunk in HEART_EMOTICON_SPLIT_RE.split(token):
+                    if not chunk:
+                        continue
+                    cfm = heart_fm if chunk[0] in HEART_EMOTICON_CHARS else fm
+                    w_tok += float(cfm.horizontalAdvance(chunk))
                 if w_tok > max_word_w:
                     max_word_w = w_tok
 
         fmt = QTextCharFormat()
         fmt.setFont(test_font)
+        heart_fmt = QTextCharFormat(fmt)
+        heart_fmt.setFont(heart_font)
         parts = seg_text.split('\n')
         for idx, part in enumerate(parts):
             if not first_segment:
                 cursor.mergeBlockFormat(block_format)
-            cursor.insertText(part, fmt)
+            if part:
+                for chunk in HEART_EMOTICON_SPLIT_RE.split(part):
+                    if not chunk:
+                        continue
+                    use_fmt = heart_fmt if chunk[0] in HEART_EMOTICON_CHARS else fmt
+                    cursor.insertText(chunk, use_fmt)
+            else:
+                cursor.insertText('', fmt)
             first_segment = False
             if idx < len(parts) - 1:
                 cursor.insertBlock(block_format)
@@ -157,6 +194,8 @@ def layout_vertical_upright_columns(
         glyph_font.setLetterSpacing(QFont.PercentageSpacing, cs)
 
         fm = QFontMetricsF(glyph_font)
+        heart_font = scaled_emoticon_qfont(glyph_font)
+        heart_fm = QFontMetricsF(heart_font)
         ref_cap = max(float(fm.capHeight()), float(fm.tightBoundingRect('A').height()), float(fm.ascent()) * 0.72, 6.0)
         space_h = max(4.0, ref_cap * 0.58 * ls_ratio)
         space_w = max(2.0, ref_cap * 0.55)
@@ -173,9 +212,12 @@ def layout_vertical_upright_columns(
                 units.append({'kind': 'space', 'slot_h': space_h, 'col_w': space_w})
                 continue
 
-            tb = fm.tightBoundingRect(ch)
-            adv = max(1.0, float(fm.horizontalAdvance(ch)))
-            ink_h = float(tb.height()) if tb.isValid() and tb.height() > 0.5 else ref_cap * 0.75
+            is_heart = ch in HEART_EMOTICON_CHARS
+            char_font = heart_font if is_heart else glyph_font
+            char_fm = heart_fm if is_heart else fm
+            tb = char_fm.tightBoundingRect(ch)
+            adv = max(1.0, float(char_fm.horizontalAdvance(ch)))
+            ink_h = float(tb.height()) if tb.isValid() and tb.height() > 0.5 else ref_cap * (1.1 if is_heart else 0.75)
             ink_w = float(tb.width()) if tb.isValid() and tb.width() > 0.3 else adv
             is_small_mark = ch in ".,'`~-_:" and ink_h < ref_cap * 0.45
             if is_small_mark:
@@ -193,7 +235,7 @@ def layout_vertical_upright_columns(
             cur_word.append({
                 'kind': 'glyph',
                 'char': ch,
-                'font': glyph_font,
+                'font': char_font,
                 'color': seg_color,
                 'underline': seg_underline,
                 'slot_h': slot_h,
@@ -557,7 +599,8 @@ class TypesetArea:
         except Exception:
             self.cleanup_rect = to_qrect(rect)
         self.rotation = float(rotation) if rotation is not None else 0.0
-        self.text = text or ""
+        raw_text = text or ""
+        self.text = format_heart_emoticon_lines(raw_text) if orientation != 'vertical_upright' else raw_text
         self.font_info = self.font_to_dict(font)
         self.color_info = color.name()
         self.polygon = polygon
@@ -1152,7 +1195,12 @@ class TypesetArea:
     def update_plain_text(self, text):
         font = self.get_font()
         color = self.get_color()
-        self.text = text or ''
+        raw_text = text or ''
+        self.text = (
+            format_heart_emoticon_lines(raw_text)
+            if getattr(self, 'orientation', 'horizontal') != 'vertical_upright'
+            else raw_text
+        )
         self.text_segments = self._build_segments_from_plain(self.text, font, color)
 
     def apply_point_size(self, point_size):
@@ -1737,15 +1785,26 @@ class SelectableImageLabel(QLabel):
 
     def _build_local_transforms(self, area):
         rotation = area.get_rotation() if hasattr(area, 'get_rotation') else float(getattr(area, 'rotation', 0.0))
-        center = QPointF(area.rect.center())
-        to_local = QTransform()
-        to_local.translate(-center.x(), -center.y())
-        to_local.rotate(-rotation)
-        from_local, invertible = to_local.inverted()
+        center = QPointF(QRectF(area.rect).center())
+        from_local = QTransform()
+        from_local.translate(center.x(), center.y())
+        from_local.rotate(rotation)
+        to_local, invertible = from_local.inverted()
         if not invertible:
-            from_local = QTransform()
-            from_local.translate(center.x(), center.y())
+            to_local = QTransform()
+            to_local.rotate(-rotation)
+            to_local.translate(-center.x(), -center.y())
         return to_local, from_local, center, rotation
+
+    def _ensure_transform_undo_snapshot(self, info, label="Transform Area"):
+        if not isinstance(info, dict) or info.get('undo_pushed'):
+            return
+        info['undo_pushed'] = True
+        if self.main_window and hasattr(self.main_window, '_push_undo_snapshot'):
+            try:
+                self.main_window._push_undo_snapshot(label)
+            except Exception:
+                pass
 
     def _refresh_transform_handles(self):
         self.transform_handles.clear()
@@ -1854,6 +1913,7 @@ class SelectableImageLabel(QLabel):
                 'base_rotation': base_rotation,
                 'start_angle': start_angle,
                 'orig_polygon': [QPointF(pt) for pt in selected_area.polygon] if getattr(selected_area, 'polygon', None) else None,
+                'undo_pushed': False,
             }
             self._set_active_transform(transform)
             self.transform_hover_handle = None
@@ -1861,25 +1921,19 @@ class SelectableImageLabel(QLabel):
             event.accept()
             return True
         elif handle in ('nw', 'ne', 'se', 'sw'):
-            anchor_map = {
-                'nw': ('bottomRight', 'topLeft'),
-                'ne': ('bottomLeft', 'topRight'),
-                'se': ('topLeft', 'bottomRight'),
-                'sw': ('topRight', 'bottomLeft'),
-            }
-            anchor_attr, _ = anchor_map[handle]
             orig_rect = QRectF(selected_area.rect)
-            rotation = selected_area.get_rotation() if hasattr(selected_area, 'get_rotation') else float(getattr(selected_area, 'rotation', 0.0))
-            center = QPointF(orig_rect.center())
-            to_local = QTransform()
-            to_local.translate(-center.x(), -center.y())
-            to_local.rotate(-rotation)
-            from_local, invertible = to_local.inverted()
-            if not invertible:
-                from_local = QTransform()
-                from_local.rotate(rotation)
-                from_local.translate(center.x(), center.y())
-            anchor_point = QPointF(getattr(orig_rect, anchor_attr)())
+            to_local, from_local, _center, rotation = self._build_local_transforms(selected_area)
+            hw = orig_rect.width() / 2.0
+            hh = orig_rect.height() / 2.0
+            local_corner_map = {
+                'nw': (QPointF(hw, hh), QPointF(-hw, -hh)),
+                'ne': (QPointF(-hw, hh), QPointF(hw, -hh)),
+                'se': (QPointF(-hw, -hh), QPointF(hw, hh)),
+                'sw': (QPointF(hw, -hh), QPointF(-hw, hh)),
+            }
+            anchor_local_corner, moving_local_corner = local_corner_map[handle]
+            anchor_point = from_local.map(anchor_local_corner)
+            grab_offset_local = moving_local_corner - to_local.map(QPointF(image_point))
             x_dir = -1 if handle in ('nw', 'sw') else 1
             y_dir = -1 if handle in ('nw', 'ne') else 1
             transform = {
@@ -1888,6 +1942,7 @@ class SelectableImageLabel(QLabel):
                 'handle': handle,
                 'orig_rect': orig_rect,
                 'anchor_point': anchor_point,
+                'grab_offset_local': grab_offset_local,
                 'to_local': to_local,
                 'from_local': from_local,
                 'rotation': rotation,
@@ -1895,6 +1950,7 @@ class SelectableImageLabel(QLabel):
                 'y_dir': y_dir,
                 'min_size': 12.0,
                 'orig_polygon': [QPointF(pt) for pt in selected_area.polygon] if getattr(selected_area, 'polygon', None) else None,
+                'undo_pushed': False,
             }
             self._set_active_transform(transform)
             self.transform_hover_handle = None
@@ -1908,6 +1964,7 @@ class SelectableImageLabel(QLabel):
                 'start_mouse': QPointF(image_point),
                 'orig_rect': QRectF(selected_area.rect),
                 'orig_polygon': [QPointF(pt) for pt in selected_area.polygon] if getattr(selected_area, 'polygon', None) else None,
+                'undo_pushed': False,
             }
             self._set_active_transform(transform)
             self.transform_hover_handle = None
@@ -2019,6 +2076,7 @@ class SelectableImageLabel(QLabel):
             dy = new_rect.y() - int(round(orig_rect.y()))
 
             try:
+                self._ensure_transform_undo_snapshot(info, "Move Area")
                 area.rect = new_rect
             except Exception:
                 return
@@ -2057,6 +2115,7 @@ class SelectableImageLabel(QLabel):
                 return
             current_angle = math.degrees(math.atan2(vector.y(), vector.x()))
             new_rotation = (base_rotation + (current_angle - start_angle)) % 360.0
+            self._ensure_transform_undo_snapshot(info, "Rotate Area")
             if hasattr(area, 'set_rotation'):
                 area.set_rotation(new_rotation)
             else:
@@ -2092,7 +2151,8 @@ class SelectableImageLabel(QLabel):
             to_local = info['to_local']
             from_local = info['from_local']
             anchor_local = to_local.map(info['anchor_point'])
-            current_local = to_local.map(QPointF(image_point))
+            grab_offset = info.get('grab_offset_local', QPointF(0.0, 0.0))
+            current_local = to_local.map(QPointF(image_point)) + grab_offset
             min_size = float(info.get('min_size', 12.0))
             x_dir = info['x_dir']
             y_dir = info['y_dir']
@@ -2100,8 +2160,8 @@ class SelectableImageLabel(QLabel):
             raw_height = (anchor_local.y() - current_local.y()) if y_dir == -1 else (current_local.y() - anchor_local.y())
             width = max(min_size, raw_width)
             height = max(min_size, raw_height)
-            new_center_local = QPointF(anchor_local.x() - x_dir * width / 2.0,
-                                       anchor_local.y() - y_dir * height / 2.0)
+            new_center_local = QPointF(anchor_local.x() + x_dir * width / 2.0,
+                                       anchor_local.y() + y_dir * height / 2.0)
             new_center_global = from_local.map(new_center_local)
             new_rectf = QRectF(new_center_global.x() - width / 2.0,
                                new_center_global.y() - height / 2.0,
@@ -2115,6 +2175,7 @@ class SelectableImageLabel(QLabel):
                 max(1, int(round(clamped_rectf.height())))
             )
             try:
+                self._ensure_transform_undo_snapshot(info, "Resize Area")
                 area.rect = new_rect
             except Exception:
                 return

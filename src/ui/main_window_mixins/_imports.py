@@ -71,7 +71,7 @@ from src.ui.notifications import NotificationCenter, notify_banner, notify_toast
 from src.ui import theme
 from src.ui.icons import app_icon, app_pixmap, clear_icon_cache, icon_label, status_dot_icon, status_dot_pixmap
 from src.ui.theme import app_stylesheet, compact_primary_button_qss, set_active_appearance, toggle_button_qss
-from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, WorkersText, FullPageBatchText, TypesetText, InpaintText, about_html, welcome_subtitle_html
+from src.ui.texts import ActionText, DialogText, NavText, StartupText, WorkspaceText, WorkersText, FullPageBatchText, TypesetText, InpaintText, LayersText, about_html, welcome_subtitle_html
 from src.core.inpaint import (
     DEFAULT_BRUSH_INPAINT_ENGINE,
     DEFAULT_FULL_INPAINT_ENGINE,

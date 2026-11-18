@@ -68,6 +68,11 @@ class UibuildMixin:
         find_replace_action.triggered.connect(self.open_find_replace_dialog)
         edit_menu.addAction(find_replace_action)
 
+        chapter_proofread_action = QAction('Chapter Proofread && QC...', self)
+        chapter_proofread_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        chapter_proofread_action.triggered.connect(self.open_chapter_proofread_dialog)
+        edit_menu.addAction(chapter_proofread_action)
+
         detect_bubbles_action = QAction('Detect Bubbles on Page', self)
         detect_bubbles_action.setToolTip("Run interactive manual bubble detection on the current page")
         detect_bubbles_action.triggered.connect(self.start_interactive_batch_detection)
@@ -107,10 +112,19 @@ class UibuildMixin:
         self.left_panel_layout = QVBoxLayout(self.left_panel_widget)
         self.left_panel_layout.setContentsMargins(10, 10, 10, 10)
         self.left_panel_layout.addWidget(QLabel("<h3>Image Files</h3>", objectName="h3"))
+        self.chapter_progress_label = QLabel("No folder loaded")
+        self.chapter_progress_label.setObjectName("rp-tiny-label")
+        self.chapter_progress_label.setWordWrap(True)
+        self.left_panel_layout.addWidget(self.chapter_progress_label)
         self.file_list_widget = QListWidget()
         self.file_list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.file_list_widget.currentItemChanged.connect(self.on_file_selected)
         self.left_panel_layout.addWidget(self.file_list_widget)
+        self.chapter_qc_button = QPushButton("Proofread / QC Chapter")
+        self.chapter_qc_button.setIcon(app_icon("check", theme.COLORS["accent"], 14))
+        self.chapter_qc_button.setToolTip("Review and edit all OCR & translated bubbles across the entire chapter sequentially (Ctrl+Shift+P).")
+        self.chapter_qc_button.clicked.connect(self.open_chapter_proofread_dialog)
+        self.left_panel_layout.addWidget(self.chapter_qc_button)
         load_folder_button = QPushButton("Load Folder")
         load_folder_button.clicked.connect(self.load_folder)
         self.left_panel_layout.addWidget(load_folder_button)
@@ -498,7 +512,13 @@ class UibuildMixin:
         edit_row.addWidget(self.save_button, 1)
         bottom_v.addLayout(edit_row)
 
-        # ── Undo History Timeline (Feature #1) ──────────────────────────────────
+        # ── Undo History Timeline + Status metrics + Token rates (kept alive off-layout so bottom bar stays clean) ──
+        self._bottom_telemetry_container = QWidget(bottom_bar)
+        self._bottom_telemetry_container.setVisible(False)
+        telemetry_v = QVBoxLayout(self._bottom_telemetry_container)
+        telemetry_v.setContentsMargins(0, 0, 0, 0)
+        telemetry_v.setSpacing(4)
+
         timeline_header = QHBoxLayout()
         timeline_header.setContentsMargins(2, 4, 2, 0)
         timeline_header.setSpacing(4)
@@ -515,7 +535,7 @@ class UibuildMixin:
         self._timeline_clear_btn.setToolTip("Clear undo history")
         self._timeline_clear_btn.clicked.connect(self._clear_undo_history)
         timeline_header.addWidget(self._timeline_clear_btn)
-        bottom_v.addLayout(timeline_header)
+        telemetry_v.addLayout(timeline_header)
 
         self.undo_timeline_list = QListWidget()
         self.undo_timeline_list.setObjectName("undo-timeline")
@@ -524,9 +544,8 @@ class UibuildMixin:
         self.undo_timeline_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.undo_timeline_list.setStyleSheet(self._undo_timeline_qss())
         self.undo_timeline_list.itemClicked.connect(self._on_timeline_item_clicked)
-        bottom_v.addWidget(self.undo_timeline_list)
+        telemetry_v.addWidget(self.undo_timeline_list)
 
-        # ── Status metrics (compact grid that stays under 350px) ────────────────
         metrics_widget = QWidget()
         metrics_widget.setObjectName("rp-metrics")
         metrics_widget.setMinimumWidth(0)
@@ -581,9 +600,8 @@ class UibuildMixin:
         self.model_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         metrics_grid.addWidget(self.model_label, 2, 3, 1, 3)
 
-        bottom_v.addWidget(metrics_widget)
+        telemetry_v.addWidget(metrics_widget)
 
-        # ── Token rates (2x2 compact grid so values never clip horizontally) ───
         token_grid = QGridLayout()
         token_grid.setContentsMargins(2, 0, 2, 0)
         token_grid.setHorizontalSpacing(10)
@@ -605,7 +623,8 @@ class UibuildMixin:
         self.rate_label_output.setObjectName("rp-tiny-label")
         token_grid.addWidget(self.rate_label_output, 1, 1)
         token_grid.setColumnStretch(2, 1)
-        bottom_v.addLayout(token_grid)
+        telemetry_v.addLayout(token_grid)
+        self.metrics_widget = metrics_widget
 
         # ── Cooldown label ───────────────────────────────────────────────────────
         self.countdown_label = QLabel("Cooldown: 60s")

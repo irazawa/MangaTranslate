@@ -472,6 +472,37 @@ class InpaintText:
     UNLOAD_DONE = "Memori model AI inpainting telah dikosongkan."
 
 
+class LayersText:
+    HERO_TITLE = "Canvas Layers"
+    HERO_BADGE_SINGLE_FMT = "{count} LAYER"
+    HERO_BADGE_FMT = "{count} LAYERS"
+    HERO_SUBTITLE = (
+        "Pilih balon untuk melihat dan mengedit teks OCR asli maupun hasil terjemahan. "
+        "Klik 2× item untuk membuka Advanced Editor."
+    )
+    SEARCH_PLACEHOLDER = "Cari teks OCR, terjemahan, atau nama layer..."
+    LIST_GROUP_TITLE = "Daftar Layer Balon"
+    INSPECTOR_TITLE = "Inspector Layer Terpilih"
+    INSPECTOR_EMPTY_HINT = (
+        "Pilih salah satu layer di atas atau klik balon di kanvas untuk mengedit teks OCR dan terjemahannya."
+    )
+    LABEL_OPACITY = "Opacity:"
+    LABEL_OCR_TEXT = "Teks Asli (OCR):"
+    PLACEHOLDER_OCR_TEXT = "Teks asli hasil OCR (bisa dikoreksi manual sebelum diterjemahkan ulang)..."
+    LABEL_TRANSLATED_TEXT = "Hasil Terjemahan (Balon):"
+    PLACEHOLDER_TRANSLATED_TEXT = "Teks terjemahan yang ditampilkan di kanvas..."
+    BTN_APPLY_TEXT = "Terapkan"
+    TIP_APPLY_TEXT = "Simpan perubahan teks OCR dan terjemahan ke balon terpilih (Ctrl+Enter)"
+    BTN_RETRANSLATE = "Terjemahkan OCR"
+    BTN_RETRANSLATING = "Menerjemahkan..."
+    TIP_RETRANSLATE = "Terjemahkan ulang Teks Asli (OCR) memakai model AI Translate aktif"
+    BTN_ADVANCED_EDIT = "Editor Lanjut"
+    TIP_ADVANCED_EDIT = "Buka Advanced Text Editor (Font, Gradient, Outline, Curve/Warp)"
+    BTN_ADD_LAYER = "+ Layer Manual"
+    BTN_DUPLICATE_LAYER = "Duplikat"
+    BTN_CLEAR_ALL = "Hapus Semua"
+
+
 def welcome_subtitle_html() -> str:
     return f"{escape(APP_NAME)} &mdash; v{APP_VERSION}"
 
