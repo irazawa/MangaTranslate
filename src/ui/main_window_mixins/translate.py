@@ -1073,6 +1073,27 @@ class TranslateMixin:
             except Exception:
                 pass
 
+    def _build_full_page_area(self, area_payload, page_cleaned=False):
+        """Construct a TypesetArea from a full-page payload, anchoring cleanup_rect to original polygon."""
+        polygon = area_payload.get('polygon')
+        area = self._create_typeset_area(
+            rect=area_payload['rect'],
+            text=area_payload['text'],
+            settings=area_payload['settings'],
+            polygon=polygon,
+            original_text=area_payload.get('original_text', ''),
+            # Full-page membersihkan latar di worker — matikan live cv2.inpaint per area
+            manual_inpaint=False,
+            is_manual=False,
+        )
+        if polygon is not None and hasattr(polygon, 'isEmpty') and not polygon.isEmpty():
+            area.set_cleanup_rect(polygon.boundingRect())
+        area.set_override('use_inpaint', False)
+        if page_cleaned:
+            # Latar sudah bersih — kotak background hanya menutupi artwork
+            area.set_override('use_background_box', False)
+        return area
+
     def on_full_page_translation_finished(self, created_areas, msg):
         worker = getattr(self, '_full_page_worker', None)
         cleaned_pil = getattr(worker, 'cleaned_image_pil', None) if worker is not None else None
@@ -1124,19 +1145,7 @@ class TranslateMixin:
             new_areas = []
             for area_payload in created_areas:
                 try:
-                    area = self._create_typeset_area(
-                        rect=area_payload['rect'],
-                        text=area_payload['text'],
-                        settings=area_payload['settings'],
-                        polygon=area_payload['polygon'],
-                        original_text=area_payload['original_text'],
-                        manual_inpaint=False,
-                        is_manual=False
-                    )
-                    area.set_override('use_inpaint', False)
-                    if page_cleaned:
-                        area.set_override('use_background_box', False)
-                    new_areas.append(area)
+                    new_areas.append(self._build_full_page_area(area_payload, page_cleaned=page_cleaned))
                 except Exception as e:
                     print(f"Gagal membuat area typeset ({target_key}): {e}")
             update_kwargs = {'areas': new_areas, 'redo': []}
@@ -1178,20 +1187,7 @@ class TranslateMixin:
         applied = 0
         for area_payload in created_areas:
             try:
-                area = self._create_typeset_area(
-                    rect=area_payload['rect'],
-                    text=area_payload['text'],
-                    settings=area_payload['settings'],
-                    polygon=area_payload['polygon'],
-                    original_text=area_payload['original_text'],
-                    # Full-page membersihkan latar di worker — matikan live cv2.inpaint per area
-                    manual_inpaint=False,
-                    is_manual=False
-                )
-                area.set_override('use_inpaint', False)
-                if page_cleaned:
-                    # Latar sudah bersih — kotak background hanya menutupi artwork
-                    area.set_override('use_background_box', False)
+                area = self._build_full_page_area(area_payload, page_cleaned=page_cleaned)
                 self.typeset_areas.append(area)
                 applied += 1
             except Exception as e:
@@ -1513,20 +1509,7 @@ class TranslateMixin:
         new_areas = []
         for payload in created_areas:
             try:
-                area = self._create_typeset_area(
-                    rect=payload['rect'],
-                    text=payload['text'],
-                    settings=payload['settings'],
-                    polygon=payload['polygon'],
-                    original_text=payload['original_text'],
-                    # Full-page membersihkan latar di worker — matikan live cv2.inpaint per area
-                    manual_inpaint=False,
-                    is_manual=False
-                )
-                area.set_override('use_inpaint', False)
-                if page_cleaned:
-                    area.set_override('use_background_box', False)
-                new_areas.append(area)
+                new_areas.append(self._build_full_page_area(payload, page_cleaned=page_cleaned))
             except Exception as e:
                 print(f"Gagal membuat area typeset ({os.path.basename(path)}): {e}")
         update_kwargs = {'areas': new_areas, 'redo': []}

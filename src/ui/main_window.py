@@ -1,4 +1,4 @@
-# Manga OCR & Typeset Tool v14.9.9.8
+# Manga OCR & Typeset Tool v14.9.9.9
 # ==============================
 # ?? Import modul bawaan Python
 # ==============================
@@ -4665,6 +4665,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         try:
             base_pixmap = self.original_pixmap.copy()
             painter = QPainter(base_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
             settings = self.get_current_settings()
             try:
                 for area in list(self.typeset_areas):
@@ -4880,6 +4883,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         if not area or not getattr(area, 'visible', True):
             return
         try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
             old_opacity = painter.opacity()
             opacity = getattr(area, 'opacity', 1.0)
             painter.setOpacity(old_opacity * opacity)
@@ -5142,6 +5148,9 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
         painter.restore()
 
     def _draw_preview_area(self, painter, area, use_box, settings=None):
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         rotation = area.get_rotation() if hasattr(area, 'get_rotation') else float(getattr(area, 'rotation', 0.0))
         text_rect = area.get_text_rect()
         cleanup_rect = area.get_cleanup_rect()
@@ -5352,7 +5361,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                             painter.strokePath(path, glow_pen)
                     else:
                         outline_pen = QPen(outline_color)
-                        outline_pen.setWidthF(width)
+                        outline_pen.setWidthF(width * 2.0)
                         outline_pen.setJoinStyle(Qt.RoundJoin)
                         outline_pen.setCapStyle(Qt.RoundCap)
                         painter.strokePath(path, outline_pen)
@@ -5675,9 +5684,14 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if orientation in ('vertical', 'vertical_upright') and effect != 'none':
                 effect = 'none'
 
+            rotation = area.get_rotation() if hasattr(area, 'get_rotation') else float(getattr(area, 'rotation', 0.0))
+            norm_rot = rotation % 360.0
+            is_rotated = (norm_rot > 0.01 and (360.0 - norm_rot) > 0.01)
+
             if effect == 'none':
                 if (
-                    getattr(area, 'gradient_enabled', False)
+                    is_rotated
+                    or getattr(area, 'gradient_enabled', False)
                     or getattr(area, 'pattern_fill_enabled', False)
                     or bool(getattr(area, 'outline_layers', None))
                 ):
@@ -5758,6 +5772,7 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
     def _draw_rich_text_document(self, painter, rect, area, orientation):
         target_center = rect.center()
+        ss = 1.0
         if orientation == 'vertical_upright':
             layout = layout_vertical_upright_columns(
                 self._build_upright_segment_specs(area),
@@ -5800,11 +5815,15 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             if doc_size.isEmpty():
                 return
 
-            image_width = max(1, int(math.ceil(doc_size.width())))
-            image_height = max(1, int(math.ceil(doc_size.height())))
+            ss = 2.0
+            image_width = max(1, int(math.ceil(doc_size.width() * ss)))
+            image_height = max(1, int(math.ceil(doc_size.height() * ss)))
             image = QImage(image_width, image_height, QImage.Format_ARGB32_Premultiplied)
             image.fill(Qt.transparent)
             doc_painter = QPainter(image)
+            doc_painter.setRenderHint(QPainter.Antialiasing, True)
+            doc_painter.setRenderHint(QPainter.TextAntialiasing, True)
+            doc_painter.scale(ss, ss)
             doc.drawContents(doc_painter)
             doc_painter.end()
 
@@ -5834,7 +5853,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
                 outline_color = area_outline_color
                 if not outline_color.isValid():
                     outline_color = self._outline_for_text_color(doc_color)
-            radius = max(1, int(math.ceil(area.get_text_outline_width() if hasattr(area, 'get_text_outline_width') else 2.0)))
+            base_radius = max(1, int(math.ceil(area.get_text_outline_width() if hasattr(area, 'get_text_outline_width') else 2.0)))
+            radius = base_radius * ss
             try:
                 style = area.get_text_outline_style()
             except Exception:
@@ -5846,6 +5866,8 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
 
         pixmap = QPixmap.fromImage(image)
         painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.translate(target_center)
         if orientation == 'vertical':
             transform = QTransform()
@@ -5870,20 +5892,30 @@ class MangaOCRApp(FontMixin, BatchMixin, LayerMixin, InpaintMixin, SettingsMixin
             comp.end()
             
             if s_blur > 0.0:
-                sh_mask = self._expand_with_outline(sh_mask, s_color, radius=s_blur, opacity=s_opacity)
+                sh_mask = self._expand_with_outline(sh_mask, s_color, radius=s_blur * ss, opacity=s_opacity)
             
             sh_pixmap = QPixmap.fromImage(sh_mask)
             if orientation == 'vertical':
                 sh_pixmap = sh_pixmap.transformed(transform, Qt.SmoothTransformation)
                 
+            sh_w = sh_pixmap.width() / ss
+            sh_h = sh_pixmap.height() / ss
             painter.save()
             painter.translate(s_dx, s_dy)
-            painter.translate(-sh_pixmap.width() / 2, -sh_pixmap.height() / 2)
-            painter.drawPixmap(0, 0, sh_pixmap)
+            painter.drawPixmap(
+                QRectF(-sh_w / 2.0, -sh_h / 2.0, sh_w, sh_h),
+                sh_pixmap,
+                QRectF(0.0, 0.0, sh_pixmap.width(), sh_pixmap.height()),
+            )
             painter.restore()
 
-        painter.translate(-pixmap.width() / 2, -pixmap.height() / 2)
-        painter.drawPixmap(0, 0, pixmap)
+        pw = pixmap.width() / ss
+        ph = pixmap.height() / ss
+        painter.drawPixmap(
+            QRectF(-pw / 2.0, -ph / 2.0, pw, ph),
+            pixmap,
+            QRectF(0.0, 0.0, pixmap.width(), pixmap.height()),
+        )
         painter.restore()
 
 
@@ -8452,6 +8484,14 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     translations = fut_tr.result()
                     expanded_rects = fut_li.result()
 
+                expanded_rects = self._adapt_rects_to_text_density(
+                    cv_image,
+                    expanded_rects,
+                    polygons_only,
+                    translations,
+                    panel_rects=rfdetr_panels,
+                )
+
                 for idx, ((polygon, processed_text), translated_text) in enumerate(zip(ocr_items, translations)):
                     if self._is_cancelled:
                         break
@@ -8501,6 +8541,17 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                             area_payload['text'] = translated
                     if fut_inp is not None:
                         fut_inp.result()
+
+                if not self._is_cancelled:
+                    adapted_rects = self._adapt_rects_to_text_density(
+                        cv_image,
+                        [p['rect'] for p in created_areas],
+                        [p['polygon'] for p in created_areas],
+                        [p.get('text', '') for p in created_areas],
+                        panel_rects=getattr(self, '_rfdetr_panels', []),
+                    )
+                    for area_payload, adapted_rect in zip(created_areas, adapted_rects):
+                        area_payload['rect'] = adapted_rect
 
             if self._is_cancelled:
                 self.last_created_areas = []
@@ -8697,6 +8748,10 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                 snapped.append(poly)
                 continue
 
+            border_touches = (
+                int(np.count_nonzero(zone[0, :])) + int(np.count_nonzero(zone[-1, :]))
+                + int(np.count_nonzero(zone[:, 0])) + int(np.count_nonzero(zone[:, -1]))
+            )
             zint = self._safe_bubble_interior(zone, close_k=close_k, erode_k=erode_k)
             dark = (((crop < 185) if is_bright else (crop > 70)) & (zint > 0)).astype(np.uint8)
             for j, ob in enumerate(rects):
@@ -8711,7 +8766,8 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
 
             nc, lc, sc, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
             keep = np.zeros_like(dark)
-            cw_lim, ch_lim = 0.65 * (x2 - x1), 0.65 * (y2 - y1)
+            cw_lim = min(0.65 * (x2 - x1), max(24, int((bx2 - bx1) * 1.15)))
+            ch_lim = min(0.65 * (y2 - y1), max(24, int((by2 - by1) * 1.15)))
             for ci in range(1, nc):
                 cbw, cbh, carea = int(sc[ci, 2]), int(sc[ci, 3]), int(sc[ci, 4])
                 if carea < 6 or cbw > cw_lim or cbh > ch_lim:
@@ -8723,21 +8779,37 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
 
             seed = np.zeros_like(keep)
             seed[max(0, by1 - y1):by2 - y1, max(0, bx1 - x1):bx2 - x1] = 255
-            linked = cv2.dilate(keep, link_k)
-            _nb, lb, _sb, _ = cv2.connectedComponentsWithStats((linked > 0).astype(np.uint8), connectivity=8)
-            hit_ids = np.unique(lb[(seed > 0) & (lb > 0)])
-            if len(hit_ids) == 0:
-                snapped.append(poly)
-                continue
-            keep[~np.isin(lb, hit_ids)] = 0
-            ys, xs = np.nonzero(keep)
-            if xs.size == 0:
-                snapped.append(poly)
-                continue
-            nx1 = max(0, min(bx1, int(xs.min() + x1) - 2))
-            ny1 = max(0, min(by1, int(ys.min() + y1) - 2))
-            nx2 = min(w, max(bx2, int(xs.max() + x1) + 3))
-            ny2 = min(h, max(by2, int(ys.max() + y1) + 3))
+            if border_touches <= 8:
+                linked = cv2.dilate(keep, link_k)
+                _nb, lb, _sb, _ = cv2.connectedComponentsWithStats((linked > 0).astype(np.uint8), connectivity=8)
+                hit_ids = np.unique(lb[(seed > 0) & (lb > 0)])
+                if len(hit_ids) == 0:
+                    snapped.append(poly)
+                    continue
+                keep[~np.isin(lb, hit_ids)] = 0
+                ys, xs = np.nonzero(keep)
+                if xs.size == 0:
+                    snapped.append(poly)
+                    continue
+                nx1 = max(0, min(bx1, int(xs.min() + x1) - 2))
+                ny1 = max(0, min(by1, int(ys.min() + y1) - 2))
+                nx2 = min(w, max(bx2, int(xs.max() + x1) + 3))
+                ny2 = min(h, max(by2, int(ys.max() + y1) + 3))
+            else:
+                # Open/borderless background: avoid snapping onto nearby artwork; cap to <= 4px edge clamp.
+                hit_ids = np.unique(lc[(seed > 0) & (lc > 0)])
+                if len(hit_ids) == 0:
+                    snapped.append(poly)
+                    continue
+                keep[~np.isin(lc, hit_ids)] = 0
+                ys, xs = np.nonzero(keep)
+                if xs.size == 0:
+                    snapped.append(poly)
+                    continue
+                nx1 = max(0, max(bx1 - 4, min(bx1, int(xs.min() + x1) - 2)))
+                ny1 = max(0, max(by1 - 4, min(by1, int(ys.min() + y1) - 2)))
+                nx2 = min(w, min(bx2 + 4, max(bx2, int(xs.max() + x1) + 3)))
+                ny2 = min(h, min(by2 + 4, max(by2, int(ys.max() + y1) + 3)))
             snapped.append(QPolygon(QRect(nx1, ny1, nx2 - nx1, ny2 - ny1)))
         return snapped
 
@@ -8878,8 +8950,8 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                 if gray is not None:
                     rect = self._clamp_expanded_rect_to_bubble_lobe(gray, instance, rect, img_w, img_h)
                 # Padding agar teks tidak menempel outline balon.
-                pad_x = max(3, rect.width() // 12)
-                pad_y = max(3, rect.height() // 12)
+                pad_x = max(3, min(9, rect.width() // 20))
+                pad_y = max(3, min(9, rect.height() // 20))
                 rect = rect.adjusted(pad_x, pad_y, -pad_x, -pad_y)
                 rect = rect.intersected(QRect(0, 0, img_w, img_h))
                 # Jangan mengecilkan ruang di bawah rect teks aslinya.
@@ -8887,6 +8959,58 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     rect = rect.united(instance)
             result.append(rect)
         return result
+
+    def _adapt_rects_to_text_density(self, cv_image, rects, polygons, translations, panel_rects=None):
+        """Expand cramped layout rects into obstacle-free space based on translation length."""
+        if not rects or cv_image is None:
+            return list(rects or [])
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        settings = self.settings if isinstance(getattr(self, 'settings', None), dict) else {}
+        base_font = settings.get('font')
+        orientation = settings.get('orientation_mode', 'horizontal')
+        line_spacing = settings.get('line_spacing', 1.1)
+        char_spacing = settings.get('char_spacing', 100.0)
+        margins = settings.get('margins', {'top': 0, 'right': 0, 'bottom': 0, 'left': 0})
+        alignment = settings.get('alignment', 'center')
+        panels = list(panel_rects or [])
+
+        adapted = [QRect(r) for r in rects]
+        for idx, cur_rect in enumerate(adapted):
+            if idx >= len(translations):
+                break
+            text = translations[idx]
+            if not text or not str(text).strip():
+                continue
+            cleanup_rect = (
+                polygons[idx].boundingRect()
+                if idx < len(polygons) and polygons[idx] is not None and not polygons[idx].isEmpty()
+                else cur_rect
+            )
+            panel_rect = None
+            center = cur_rect.center()
+            best_parea = None
+            for p in panels:
+                if p.contains(center):
+                    pa = p.width() * p.height()
+                    if best_parea is None or pa < best_parea:
+                        panel_rect = p
+                        best_parea = pa
+            others = [adapted[j] for j in range(len(adapted)) if j != idx]
+            adapted[idx] = adapt_rect_for_text_density(
+                cur_rect,
+                cleanup_rect,
+                text,
+                base_font,
+                gray,
+                other_rects=others,
+                panel_rect=panel_rect,
+                orientation=orientation,
+                line_spacing=line_spacing,
+                char_spacing=char_spacing,
+                margins=margins,
+                alignment=alignment,
+            )
+        return adapted
 
     def _clamp_expanded_rect_to_bubble_lobe(self, gray, instance, expanded_rect, img_w, img_h):
         """Batasi rect ekspansi ke lebar/tinggi aktual lobus balon pada posisi teks."""
@@ -9260,23 +9384,15 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
 
     @staticmethod
     def _safe_bubble_interior(zone, close_k=None, erode_k=None):
-        """Fill enclosed holes inside bubble zone (e.g. bold kanji) before eroding the outer wall."""
-        if close_k is None:
-            close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+        """Fill enclosed interior holes inside bubble zone (e.g. bold kanji) without bridging across exterior line art."""
         if erode_k is None:
             erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        close_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         zpad = np.pad((zone > 0).astype(np.uint8) * 255, 16, mode='constant', constant_values=0)
-        z_sealed = cv2.morphologyEx(zpad, cv2.MORPH_CLOSE, close_small)
-        inv = np.where(z_sealed > 0, 0, 255).astype(np.uint8)
-        ff1 = np.zeros((inv.shape[0] + 2, inv.shape[1] + 2), dtype=np.uint8)
-        cv2.floodFill(inv, ff1, (0, 0), 0)
-        z_filled = cv2.bitwise_or(z_sealed, inv)
-        z_closed = cv2.morphologyEx(z_filled, cv2.MORPH_CLOSE, close_k)
-        inv2 = np.where(z_closed > 0, 0, 255).astype(np.uint8)
-        ff2 = np.zeros((inv2.shape[0] + 2, inv2.shape[1] + 2), dtype=np.uint8)
-        cv2.floodFill(inv2, ff2, (0, 0), 0)
-        z_solid = cv2.bitwise_or(z_closed, inv2)
+        inv0 = np.where(zpad > 0, 0, 255).astype(np.uint8)
+        ff0 = np.zeros((inv0.shape[0] + 2, inv0.shape[1] + 2), dtype=np.uint8)
+        cv2.floodFill(inv0, ff0, (0, 0), 128)
+        # Only dark pixels NOT connected to the exterior (inv0 != 128) are interior text holes
+        z_solid = np.where(inv0 == 128, 0, 255).astype(np.uint8)
         return cv2.erode(z_solid, erode_k)[16:-16, 16:-16]
 
     def _build_text_pixel_mask(self, cv_image, polygons, expanded_rects=None):
@@ -9286,8 +9402,8 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
           teks dibatasi ketat ke interior yang sudah diisi lubangnya lalu di-erode
           (`zint`) agar kanji tebal tidak berlubang sekaligus outline balon dan
           artwork luar tidak pernah tersentuh mask.
-        - Memanfaatkan `expanded_rects` serta whole-component + proximity linking
-          di dalam balon yang sama agar tepi kanji/furigana tidak terpotong garis lurus.
+        - Seed pencarian piksel dibatasi ketat pada kotak teks asli (`bx1..bx2, by1..by2`)
+          agar perluasan rect layout tidak pernah menarik artwork/wajah ke dalam mask.
         """
         h, w = cv_image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -9296,7 +9412,7 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad, pad))
         close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
         erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        link_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        link_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
 
         direct_bgr = cv_image.copy()
         direct_any = False
@@ -9375,19 +9491,26 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                     continue
 
                 poly_win = np.zeros_like(zint)
-                px1 = max(0, ex1 - x1 - 6)
-                py1 = max(0, ey1 - y1 - 6)
-                px2 = min(x2 - x1, ex2 - x1 + 6)
-                py2 = min(y2 - y1, ey2 - y1 + 6)
+                px1 = max(0, bx1 - x1 - 4)
+                py1 = max(0, by1 - y1 - 4)
+                px2 = min(x2 - x1, bx2 - x1 + 4)
+                py2 = min(y2 - y1, by2 - y1 + 4)
                 poly_win[py1:py2, px1:px2] = 1
 
                 seed_ids = {int(c) for c in np.unique(lbl_s[(poly_win > 0) & (lbl_s > 0)]) if c > 0}
                 selected_ids = set(seed_ids)
 
-                # Perluas ke komponen sejenis yang berdekatan (furigana / ujung kanji terpotong) di dalam interior balon yang sama
-                if selected_ids:
+                ch, cw = zone.shape[:2]
+                zint_area = int(np.count_nonzero(zint))
+                border_touches = (
+                    int(np.count_nonzero(zone[0, :])) + int(np.count_nonzero(zone[-1, :]))
+                    + int(np.count_nonzero(zone[:, 0])) + int(np.count_nonzero(zone[:, -1]))
+                )
+
+                # Perluas ke komponen sejenis yang berdekatan hanya bila berada di dalam balon tertutup
+                if selected_ids and border_touches <= 8:
                     seed_mask = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
-                    for _hop in range(2):
+                    for _hop in range(1):
                         frontier = cv2.dilate(seed_mask, link_k)
                         frontier[zint == 0] = 0
                         new_ids = {int(c) for c in np.unique(lbl_s[(frontier > 0) & (lbl_s > 0)]) if c > 0} - selected_ids
@@ -9397,12 +9520,6 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                         seed_mask = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
 
                 # Bila balon benar-benar tertutup rapat di dalam crop, sapu semua karakter/furigana tersisa di interiornya
-                ch, cw = zone.shape[:2]
-                zint_area = int(np.count_nonzero(zint))
-                border_touches = (
-                    int(np.count_nonzero(zone[0, :])) + int(np.count_nonzero(zone[-1, :]))
-                    + int(np.count_nonzero(zone[:, 0])) + int(np.count_nonzero(zone[:, -1]))
-                )
                 win_area = max(1, (px2 - px1) * (py2 - py1))
                 if (
                     border_touches <= 2
@@ -9413,11 +9530,34 @@ Do NOT invent regions and do NOT return placeholder values. If the page has no t
                         if int(st_s[ci, cv2.CC_STAT_AREA]) < 0.45 * zint_area:
                             selected_ids.add(ci)
 
+                allowed_margin = max(8, pad * 2)
+                ax1 = max(0, bx1 - x1 - allowed_margin)
+                ay1 = max(0, by1 - y1 - allowed_margin)
+                ax2 = min(x2 - x1, bx2 - x1 + allowed_margin)
+                ay2 = min(y2 - y1, by2 - y1 + allowed_margin)
+                filtered_ids = set()
+                for ci in selected_ids:
+                    cx, cy, cbw, cbh, _carea = (int(v) for v in st_s[ci])
+                    ix1, iy1 = max(cx, ax1), max(cy, ay1)
+                    ix2, iy2 = min(cx + cbw, ax2), min(cy + cbh, ay2)
+                    if ix2 <= ix1 or iy2 <= iy1:
+                        continue
+                    if (ix2 - ix1) * (iy2 - iy1) >= 0.50 * max(1, cbw * cbh):
+                        filtered_ids.add(ci)
+                selected_ids = filtered_ids
+
                 if not selected_ids:
                     continue
                 strokes = np.isin(lbl_s, list(selected_ids)).astype(np.uint8) * 255
                 dil = cv2.dilate(strokes, kernel, iterations=2)
                 dil[zint == 0] = 0
+                clamp_mask = np.zeros_like(dil)
+                cx1_c = max(0, ax1 - pad)
+                cy1_c = max(0, ay1 - pad)
+                cx2_c = min(x2 - x1, ax2 + pad)
+                cy2_c = min(y2 - y1, ay2 + pad)
+                clamp_mask[cy1_c:cy2_c, cx1_c:cx2_c] = 255
+                dil[clamp_mask == 0] = 0
                 if not dil.any():
                     continue
 

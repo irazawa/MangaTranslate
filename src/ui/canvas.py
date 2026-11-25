@@ -373,8 +373,8 @@ def layout_vertical_upright_columns(
     }
 
 
-def _compute_usable_text_box(rect, margins=None, fill_ratio=0.84):
-    """Return usable (width, height) after subtracting margins and bubble inset."""
+def _compute_usable_text_box(rect, margins=None, fill_ratio=0.84, text_len=0):
+    """Return usable (width, height) after subtracting margins and density-aware inset."""
     qrect = QRectF(to_qrect(rect)) if not isinstance(rect, (QRect, QRectF)) else QRectF(rect)
     if margins and isinstance(margins, dict):
         qrect = qrect.adjusted(
@@ -385,9 +385,19 @@ def _compute_usable_text_box(rect, margins=None, fill_ratio=0.84):
         )
     rw = max(1.0, float(qrect.width()))
     rh = max(1.0, float(qrect.height()))
-    ratio = max(0.5, min(1.0, float(fill_ratio)))
-    avail_w = rw * ratio if rw >= 36.0 else max(4.0, rw - 4.0)
-    avail_h = rh * ratio if rh >= 36.0 else max(4.0, rh - 4.0)
+    if text_len > 0:
+        area_px = rw * rh
+        density = float(text_len) / max(1.0, area_px / 100.0)
+        base_ratio = max(float(fill_ratio), 0.88)
+        density_boost = min(0.08, max(0.0, (density - 0.18) * 0.12))
+        small_box_boost = 0.04 if min(rw, rh) < 90.0 else (0.02 if min(rw, rh) < 130.0 else 0.0)
+        ratio = max(0.5, min(0.96, base_ratio + density_boost + small_box_boost))
+        avail_w = min(max(4.0, rw - 3.0), rw * ratio) if rw >= 36.0 else max(4.0, rw - 3.0)
+        avail_h = min(max(4.0, rh - 3.0), rh * ratio) if rh >= 36.0 else max(4.0, rh - 3.0)
+    else:
+        ratio = max(0.5, min(1.0, float(fill_ratio)))
+        avail_w = rw * ratio if rw >= 36.0 else max(4.0, rw - 4.0)
+        avail_h = rh * ratio if rh >= 36.0 else max(4.0, rh - 4.0)
     return avail_w, avail_h
 
 
@@ -412,7 +422,10 @@ def compute_auto_font_size(
     if not clean_text or rect is None:
         return fallback_pt
 
-    avail_w, avail_h = _compute_usable_text_box(rect, margins=margins, fill_ratio=fill_ratio)
+    compact_len = len(re.sub(r'\s+', '', clean_text))
+    avail_w, avail_h = _compute_usable_text_box(
+        rect, margins=margins, fill_ratio=fill_ratio, text_len=compact_len
+    )
     if avail_w < 8.0 or avail_h < 8.0:
         return fallback_pt
 
@@ -422,13 +435,22 @@ def compute_auto_font_size(
     max_h = avail_w if is_vertical else avail_h
 
     # Short 1-2 word exclamations ("NO,", "TIDAK", "DRAIN!") shouldn't blow up to poster size inside big bubbles.
-    compact_len = len(re.sub(r'\s+', '', clean_text))
+    area_px = avail_w * avail_h
+    px_per_char = area_px / max(1, compact_len)
     minor_dim = min(avail_w, avail_h)
-    if compact_len <= 10:
-        eff_max = max(float(min_pt), min(float(max_pt), max(14.0, minor_dim * 0.20)))
+    major_dim = max(avail_w, avail_h)
+    if compact_len <= 6:
+        eff_max = max(float(min_pt), min(float(max_pt), max(14.0, minor_dim * 0.22)))
+    elif compact_len <= 12:
+        eff_max = max(float(min_pt), min(float(max_pt), max(15.5, minor_dim * 0.27)))
     else:
-        eff_max = max(float(min_pt), min(float(max_pt), max(18.0, minor_dim * 0.34)))
+        eff_max = max(float(min_pt), min(float(max_pt), max(18.0, major_dim * 0.34)))
     eff_min = min(float(min_pt), eff_max)
+
+    high_density = (compact_len >= 18 and px_per_char < 340.0)
+    word_tol = 1.05 if high_density else 1.02
+    width_tol = 1.05 if high_density else 1.03
+    height_tol = 1.03 if high_density else 1.00
 
     probe_font = QFont(base_font) if base_font is not None else QFont('Arial')
     probe_font.setPointSizeF(10.0)
@@ -451,8 +473,8 @@ def compute_auto_font_size(
             )
             fits = (
                 (not layout['had_forced_break'] or (mid * 10.0) <= eff_min + 0.5)
-                and layout['total_width'] <= avail_w * 1.03
-                and layout['total_height'] <= avail_h * 1.02
+                and layout['total_width'] <= avail_w * width_tol
+                and layout['total_height'] <= avail_h * max(1.02, height_tol)
             )
         else:
             mw, mh, max_word_w = _measure_wrapped_segments(
@@ -463,8 +485,8 @@ def compute_auto_font_size(
                 char_spacing=char_spacing,
                 alignment=alignment,
             )
-            word_ok = (max_word_w <= target_w * 1.02) or ((mid * 10.0) <= eff_min + 0.5)
-            fits = word_ok and mh <= max_h and mw <= target_w * 1.03
+            word_ok = (max_word_w <= target_w * word_tol) or ((mid * 10.0) <= eff_min + 0.5)
+            fits = word_ok and mh <= max_h * height_tol and mw <= target_w * width_tol
         if fits:
             best_scale = mid
             lo_scale = mid
@@ -472,6 +494,181 @@ def compute_auto_font_size(
             hi_scale = mid
 
     return round(max(eff_min, min(eff_max, best_scale * 10.0)), 1)
+
+
+def adapt_rect_for_text_density(
+    rect,
+    cleanup_rect,
+    text,
+    base_font,
+    gray,
+    other_rects=None,
+    panel_rect=None,
+    orientation='horizontal',
+    line_spacing=1.1,
+    char_spacing=100.0,
+    margins=None,
+    alignment='center',
+):
+    """Expand a cramped horizontal text box into clean obstacle-free surrounding space."""
+    qrect = QRect(to_qrect(rect)) if rect is not None else QRect()
+    crect = QRect(to_qrect(cleanup_rect)) if cleanup_rect is not None else QRect(qrect)
+    clean_text = str(text or '').strip()
+    if (
+        not clean_text
+        or gray is None
+        or qrect.isEmpty()
+        or str(orientation or 'horizontal').lower() != 'horizontal'
+    ):
+        return qrect
+
+    gray_2d = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY) if getattr(gray, 'ndim', 2) == 3 else gray
+    h, w = gray_2d.shape[:2]
+    if h < 12 or w < 12:
+        return qrect
+
+    compact_len = len(re.sub(r'\s+', '', clean_text))
+    words = clean_text.split()
+    max_word_len = max((len(wd) for wd in words), default=0)
+    if compact_len <= 18:
+        target_pt = 12.8
+    elif compact_len <= 36:
+        target_pt = 12.0
+    else:
+        target_pt = 11.5
+
+    cur_pt = compute_auto_font_size(
+        qrect,
+        clean_text,
+        base_font,
+        orientation=orientation,
+        line_spacing=line_spacing,
+        char_spacing=char_spacing,
+        margins=margins,
+        alignment=alignment,
+    )
+    if cur_pt >= target_pt:
+        return qrect
+
+    char_w = target_pt * 0.88
+    line_h = target_pt * 1.48
+    min_w_for_word = int(math.ceil(max_word_len * char_w + 10))
+    ideal_area = max(compact_len * char_w * line_h * 1.38, min_w_for_word * line_h * 1.7)
+
+    max_grow_x = 80
+    max_grow_y = 80
+    x1 = max(0, min(qrect.x(), w - 1))
+    y1 = max(0, min(qrect.y(), h - 1))
+    x2 = max(x1 + 1, min(qrect.x() + qrect.width(), w))
+    y2 = max(y1 + 1, min(qrect.y() + qrect.height(), h))
+    cx1 = max(0, min(crect.x(), w - 1))
+    cy1 = max(0, min(crect.y(), h - 1))
+    cx2 = max(cx1 + 1, min(crect.x() + crect.width(), w))
+    cy2 = max(cy1 + 1, min(crect.y() + crect.height(), h))
+
+    roi_x1 = max(0, x1 - max_grow_x - 8)
+    roi_y1 = max(0, y1 - max_grow_y - 8)
+    roi_x2 = min(w, x2 + max_grow_x + 8)
+    roi_y2 = min(h, y2 + max_grow_y + 8)
+    if panel_rect is not None and not panel_rect.isEmpty() and panel_rect.contains(qrect.center()):
+        roi_x1 = max(roi_x1, panel_rect.x() + 4)
+        roi_y1 = max(roi_y1, panel_rect.y() + 4)
+        roi_x2 = min(roi_x2, panel_rect.x() + panel_rect.width() - 4)
+        roi_y2 = min(roi_y2, panel_rect.y() + panel_rect.height() - 4)
+    if roi_x2 <= x2 or roi_y2 <= y2 or roi_x1 >= x1 or roi_y1 >= y1:
+        roi_x1 = min(roi_x1, x1)
+        roi_y1 = min(roi_y1, y1)
+        roi_x2 = max(roi_x2, x2)
+        roi_y2 = max(roi_y2, y2)
+
+    crop = gray_2d[roi_y1:roi_y2, roi_x1:roi_x2]
+    if crop.size == 0:
+        return qrect
+
+    inner_crop = gray_2d[max(0, cy1 - 4):min(h, cy2 + 4), max(0, cx1 - 4):min(w, cx2 + 4)]
+    is_bright = (np.percentile(inner_crop, 75) >= 180) if inner_crop.size else True
+    bg_binary = ((crop >= 195) if is_bright else (crop <= 60)).astype(np.uint8)
+    _n, lbl, _st, _ = cv2.connectedComponentsWithStats(bg_binary, connectivity=8)
+    inner_lbl = lbl[
+        max(0, cy1 - roi_y1):min(roi_y2 - roi_y1, cy2 - roi_y1),
+        max(0, cx1 - roi_x1):min(roi_x2 - roi_x1, cx2 - roi_x1),
+    ]
+    vals, counts = np.unique(inner_lbl[inner_lbl > 0], return_counts=True)
+    if len(vals):
+        best_lbl = int(vals[counts.argmax()])
+        zone = (lbl == best_lbl).astype(np.uint8)
+        zpad = np.pad(zone * 255, 8, mode='constant', constant_values=0)
+        inv0 = np.where(zpad > 0, 0, 255).astype(np.uint8)
+        ff0 = np.zeros((inv0.shape[0] + 2, inv0.shape[1] + 2), dtype=np.uint8)
+        cv2.floodFill(inv0, ff0, (0, 0), 128)
+        obstacle = (inv0[8:-8, 8:-8] == 128).astype(np.uint8)
+    else:
+        obstacle = ((crop < 195) if is_bright else (crop > 60)).astype(np.uint8)
+
+    ocx1 = max(0, min(x1, cx1) - roi_x1 - 2)
+    ocy1 = max(0, min(y1, cy1) - roi_y1 - 2)
+    ocx2 = min(roi_x2 - roi_x1, max(x2, cx2) - roi_x1 + 2)
+    ocy2 = min(roi_y2 - roi_y1, max(y2, cy2) - roi_y1 + 2)
+    obstacle[ocy1:ocy2, ocx1:ocx2] = 0
+    obstacle = cv2.dilate(obstacle, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    obstacle[ocy1:ocy2, ocx1:ocx2] = 0
+
+    other_mask = np.zeros_like(obstacle)
+    for orect in (other_rects or ()):
+        if orect is None or orect.isEmpty():
+            continue
+        ox1 = max(0, orect.x() - 4 - roi_x1)
+        oy1 = max(0, orect.y() - 4 - roi_y1)
+        ox2 = min(roi_x2 - roi_x1, orect.x() + orect.width() + 4 - roi_x1)
+        oy2 = min(roi_y2 - roi_y1, orect.y() + orect.height() + 4 - roi_y1)
+        if ox2 > ox1 and oy2 > oy1:
+            other_mask[oy1:oy2, ox1:ox2] = 1
+
+    def _strip_clear(sy1, sy2, sx1, sx2):
+        if sy2 <= sy1 or sx2 <= sx1:
+            return False
+        if other_mask[sy1:sy2, sx1:sx2].any():
+            return False
+        return float((obstacle[sy1:sy2, sx1:sx2] > 0).mean()) <= 0.08
+
+    gx1, gy1, gx2, gy2 = x1, y1, x2, y2
+    step = 2
+    for _ in range(42):
+        cur_w = gx2 - gx1
+        cur_h = gy2 - gy1
+        if cur_w >= min_w_for_word and (cur_w * cur_h) >= ideal_area:
+            break
+        dyn_need_w = max(min_w_for_word, int(math.ceil(ideal_area / max(24.0, cur_h * 0.85))))
+        dyn_need_h = int(math.ceil(ideal_area / max(24.0, cur_w * 0.85)))
+        grew = False
+        my = max(2, cur_h // 5)
+        mx = max(2, cur_w // 5)
+        if cur_w < dyn_need_w:
+            if (gx1 - step >= roi_x1) and _strip_clear(
+                gy1 - roi_y1 + my, gy2 - roi_y1 - my, gx1 - step - roi_x1, gx1 - roi_x1
+            ):
+                gx1 -= step
+                grew = True
+            if (gx2 - gx1) < dyn_need_w and (gx2 + step <= roi_x2) and _strip_clear(
+                gy1 - roi_y1 + my, gy2 - roi_y1 - my, gx2 - roi_x1, gx2 + step - roi_x1
+            ):
+                gx2 += step
+                grew = True
+        if (gy2 - gy1) < dyn_need_h:
+            if (gy1 - step >= roi_y1) and _strip_clear(
+                gy1 - step - roi_y1, gy1 - roi_y1, gx1 - roi_x1 + mx, gx2 - roi_x1 - mx
+            ):
+                gy1 -= step
+                grew = True
+            if (gy2 - gy1) < dyn_need_h and (gy2 + step <= roi_y2) and _strip_clear(
+                gy2 - roi_y1, gy2 + step - roi_y1, gx1 - roi_x1 + mx, gx2 - roi_x1 - mx
+            ):
+                gy2 += step
+                grew = True
+        if not grew:
+            break
+
+    return QRect(gx1, gy1, max(qrect.width(), gx2 - gx1), max(qrect.height(), gy2 - gy1))
 
 
 def compute_auto_font_scale(rect, area, min_scale=0.15, max_scale=4.0, fill_ratio=0.92):

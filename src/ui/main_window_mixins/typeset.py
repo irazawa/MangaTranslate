@@ -989,6 +989,9 @@ class TypesetMixin:
                 if base_pixmap is not None:
                     self.typeset_pixmap = base_pixmap.copy()
                     painter = QPainter(self.typeset_pixmap)
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    painter.setRenderHint(QPainter.TextAntialiasing, True)
+                    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                     try:
                         self.draw_single_area(painter, self.selected_typeset_area, self.current_image_pil, settings=settings)
                     finally:
@@ -1002,6 +1005,9 @@ class TypesetMixin:
             if not use_preview:
                 self.typeset_pixmap = self.original_pixmap.copy()
                 painter = QPainter(self.typeset_pixmap)
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setRenderHint(QPainter.TextAntialiasing, True)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                 try:
                     for area in list(self.typeset_areas):
                         if not getattr(area, 'visible', True):

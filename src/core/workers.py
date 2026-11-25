@@ -733,6 +733,9 @@ class BatchSaveWorker(QObject):
                 painter = QPainter()
                 try:
                     painter.begin(qimage)
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    painter.setRenderHint(QPainter.TextAntialiasing, True)
+                    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                     for area in areas:
                         # Panggil draw_single_area dengan flag for_saving=True untuk mencegah pembaruan UI
                         self.main_app.draw_single_area(painter, area, pil_image, for_saving=True, settings=self.settings)

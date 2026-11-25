@@ -424,8 +424,23 @@ class InpaintMixin:
         if pre_image is None or pre_image.size != self.current_image_pil.size:
             return False
 
+        # Jika seluruh area pada halaman sudah dihapus, pulihkan gambar asli seutuhnya.
+        if len(getattr(self, 'typeset_areas', [])) == 0:
+            restored_pil = pre_image.convert('RGB')
+            self._apply_base_image(restored_pil)
+            if commit_record:
+                self._update_typeset_record(
+                    key,
+                    areas=[],
+                    redo=list(self.redo_stack),
+                    remove_cleaned_image=True,
+                    remove_pre_inpaint_image=True,
+                )
+                self._refresh_inpaint_result_controls()
+            return True
+
         w, h = self.current_image_pil.size
-        pad = max(9, int(self.get_current_settings().get('inpaint_padding', 5)) * 2 + 5)
+        pad = max(24, int(self.get_current_settings().get('inpaint_padding', 5)) * 4 + 16)
         restore_mask = self._build_area_restore_mask(area, w, h, pad=pad)
         if not restore_mask.any():
             return False
@@ -434,11 +449,19 @@ class InpaintMixin:
         for other in getattr(self, 'typeset_areas', []):
             if other is area:
                 continue
+            other_mask = np.zeros((h, w), dtype=np.uint8)
             other_poly = getattr(other, 'cleanup_polygon', None) or getattr(other, 'polygon', None)
             if other_poly is not None and not other_poly.isEmpty():
-                other_mask = np.zeros((h, w), dtype=np.uint8)
                 pts = np.array([[p.x(), p.y()] for p in other_poly], dtype=np.int32)
                 cv2.fillPoly(other_mask, [pts], 255)
+            else:
+                other_rect = getattr(other, 'cleanup_rect', None) or getattr(other, 'rect', None)
+                if other_rect is not None and not other_rect.isEmpty():
+                    ox1, oy1 = max(0, other_rect.x()), max(0, other_rect.y())
+                    ox2, oy2 = min(w, other_rect.x() + other_rect.width()), min(h, other_rect.y() + other_rect.height())
+                    if ox2 > ox1 and oy2 > oy1:
+                        cv2.rectangle(other_mask, (ox1, oy1), (ox2, oy2), 255, -1)
+            if other_mask.any():
                 other_mask = cv2.dilate(other_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
                 restore_mask[other_mask > 0] = 0
 
